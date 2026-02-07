@@ -44,98 +44,93 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile "parts-arm64.zip"
           Expand-Archive -Path "parts-arm64.zip" -DestinationPath "bin-arm64"
 
-      - name: Create WiX source
+      - name: Create WiX source (amd64)
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
-
-          # Create WiX source for amd64
           @"
           <?xml version="1.0" encoding="UTF-8"?>
-          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-            <Product Id="*"
-                     Name="Source Parts CLI"
+          <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+               xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+            <Package Name="Source Parts CLI"
                      Language="1033"
                      Version="$version.0"
                      Manufacturer="Source Parts Inc."
-                     UpgradeCode="8B5E6C4A-9F3D-4E2A-B1C7-5D8F0A2E3B4C">
+                     UpgradeCode="8B5E6C4A-9F3D-4E2A-B1C7-5D8F0A2E3B4C"
+                     InstallerVersion="200"
+                     Compressed="yes"
+                     Scope="perMachine">
 
-              <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
               <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
               <MediaTemplate EmbedCab="yes" />
 
+              <StandardDirectory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLFOLDER" Name="SourceParts">
+                  <Directory Id="BINFOLDER" Name="bin">
+                    <Component Id="PartsExe" Guid="*">
+                      <File Id="PartsExeFile" Source="bin-amd64\parts.exe" KeyPath="yes" />
+                    </Component>
+                    <Component Id="PathComponent" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+                      <Environment Id="PATH" Name="PATH" Value="[BINFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
+                    </Component>
+                  </Directory>
+                </Directory>
+              </StandardDirectory>
+
               <Feature Id="ProductFeature" Title="Source Parts CLI" Level="1">
-                <ComponentGroupRef Id="ProductComponents" />
+                <ComponentRef Id="PartsExe" />
                 <ComponentRef Id="PathComponent" />
               </Feature>
 
-              <Directory Id="TARGETDIR" Name="SourceDir">
-                <Directory Id="ProgramFiles64Folder">
-                  <Directory Id="INSTALLFOLDER" Name="SourceParts">
-                    <Directory Id="BINFOLDER" Name="bin" />
-                  </Directory>
-                </Directory>
-              </Directory>
-
-              <ComponentGroup Id="ProductComponents" Directory="BINFOLDER">
-                <Component Id="PartsExe" Guid="*">
-                  <File Id="PartsExeFile" Source="bin-amd64\parts.exe" KeyPath="yes" />
-                </Component>
-              </ComponentGroup>
-
-              <Component Id="PathComponent" Directory="BINFOLDER" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
-                <Environment Id="PATH" Name="PATH" Value="[BINFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
-              </Component>
-
-              <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
-              <UIRef Id="WixUI_InstallDir" />
+              <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
               <WixVariable Id="WixUILicenseRtf" Value="LICENSE.rtf" />
-            </Product>
+            </Package>
           </Wix>
           "@ | Out-File -FilePath "parts-amd64.wxs" -Encoding UTF8
 
-          # Create WiX source for arm64
+      - name: Create WiX source (arm64)
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
           @"
           <?xml version="1.0" encoding="UTF-8"?>
-          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-            <Product Id="*"
-                     Name="Source Parts CLI (ARM64)"
+          <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+               xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+            <Package Name="Source Parts CLI (ARM64)"
                      Language="1033"
                      Version="$version.0"
                      Manufacturer="Source Parts Inc."
-                     UpgradeCode="9C6F7D5B-0A4E-5F3B-C2D8-6E9F1B3F4C5D">
+                     UpgradeCode="9C6F7D5B-0A4E-5F3B-C2D8-6E9F1B3F4C5D"
+                     InstallerVersion="200"
+                     Compressed="yes"
+                     Scope="perMachine">
 
-              <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Platform="arm64" />
               <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
               <MediaTemplate EmbedCab="yes" />
 
+              <StandardDirectory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLFOLDER" Name="SourceParts">
+                  <Directory Id="BINFOLDER" Name="bin">
+                    <Component Id="PartsExe" Guid="*">
+                      <File Id="PartsExeFile" Source="bin-arm64\parts.exe" KeyPath="yes" />
+                    </Component>
+                    <Component Id="PathComponent" Guid="B2C3D4E5-F6A7-8901-BCDE-F23456789012">
+                      <Environment Id="PATH" Name="PATH" Value="[BINFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
+                    </Component>
+                  </Directory>
+                </Directory>
+              </StandardDirectory>
+
               <Feature Id="ProductFeature" Title="Source Parts CLI" Level="1">
-                <ComponentGroupRef Id="ProductComponents" />
+                <ComponentRef Id="PartsExe" />
                 <ComponentRef Id="PathComponent" />
               </Feature>
 
-              <Directory Id="TARGETDIR" Name="SourceDir">
-                <Directory Id="ProgramFiles64Folder">
-                  <Directory Id="INSTALLFOLDER" Name="SourceParts">
-                    <Directory Id="BINFOLDER" Name="bin" />
-                  </Directory>
-                </Directory>
-              </Directory>
-
-              <ComponentGroup Id="ProductComponents" Directory="BINFOLDER">
-                <Component Id="PartsExe" Guid="*">
-                  <File Id="PartsExeFile" Source="bin-arm64\parts.exe" KeyPath="yes" />
-                </Component>
-              </ComponentGroup>
-
-              <Component Id="PathComponent" Directory="BINFOLDER" Guid="B2C3D4E5-F6A7-8901-BCDE-F23456789012">
-                <Environment Id="PATH" Name="PATH" Value="[BINFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
-              </Component>
-
-              <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
-              <UIRef Id="WixUI_InstallDir" />
+              <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
               <WixVariable Id="WixUILicenseRtf" Value="LICENSE.rtf" />
-            </Product>
+            </Package>
           </Wix>
           "@ | Out-File -FilePath "parts-arm64.wxs" -Encoding UTF8
 
