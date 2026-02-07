@@ -159,10 +159,11 @@ jobs:
           }
           "@ | Out-File -FilePath "LICENSE.rtf" -Encoding ASCII
 
-      - name: Install WiX
+      - name: Install WiX 4 and extensions
         shell: pwsh
         run: |
           dotnet tool install --global wix --version 4.0.5
+          wix extension add WixToolset.UI.wixext/4.0.5
 
       - name: Build MSI (amd64)
         shell: pwsh
