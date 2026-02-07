@@ -1,0 +1,51 @@
+version: 2
+
+builds:
+  - main: ./cmd/parts
+    binary: parts
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/SourceParts/parts-cli/internal/domain.Version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+brews:
+  - name: parts
+    repository:
+      owner: SourceParts
+      name: homebrew-tap
+    homepage: https://source.parts
+    description: CLI for Source Parts - Electronic Component Intelligence Platform
+    license: Polyform-Shield-1.0.0
+    install: |
+      bin.install "parts"
+    test: |
+      system "#{bin}/parts", "--version"
