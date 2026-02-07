@@ -1,0 +1,188 @@
+name: MSI Installer
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-msi:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          $version = $tag -replace '^v', ''
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Download release binary
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.TAG }}"
+          $version = "${{ steps.version.outputs.VERSION }}"
+
+          # Download amd64
+          $url = "https://github.com/SourceParts/parts-cli/releases/download/$tag/parts-cli_${version}_windows_amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile "parts-amd64.zip"
+          Expand-Archive -Path "parts-amd64.zip" -DestinationPath "bin-amd64"
+
+          # Download arm64
+          $url = "https://github.com/SourceParts/parts-cli/releases/download/$tag/parts-cli_${version}_windows_arm64.zip"
+          Invoke-WebRequest -Uri $url -OutFile "parts-arm64.zip"
+          Expand-Archive -Path "parts-arm64.zip" -DestinationPath "bin-arm64"
+
+      - name: Create WiX source
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+
+          # Create WiX source for amd64
+          @"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*"
+                     Name="Source Parts CLI"
+                     Language="1033"
+                     Version="$version.0"
+                     Manufacturer="Source Parts Inc."
+                     UpgradeCode="8B5E6C4A-9F3D-4E2A-B1C7-5D8F0A2E3B4C">
+
+              <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
+              <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+              <MediaTemplate EmbedCab="yes" />
+
+              <Feature Id="ProductFeature" Title="Source Parts CLI" Level="1">
+                <ComponentGroupRef Id="ProductComponents" />
+                <ComponentRef Id="PathComponent" />
+              </Feature>
+
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="SourceParts">
+                    <Directory Id="BINFOLDER" Name="bin" />
+                  </Directory>
+                </Directory>
+              </Directory>
+
+              <ComponentGroup Id="ProductComponents" Directory="BINFOLDER">
+                <Component Id="PartsExe" Guid="*">
+                  <File Id="PartsExeFile" Source="bin-amd64\parts.exe" KeyPath="yes" />
+                </Component>
+              </ComponentGroup>
+
+              <Component Id="PathComponent" Directory="BINFOLDER" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+                <Environment Id="PATH" Name="PATH" Value="[BINFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
+              </Component>
+
+              <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+              <UIRef Id="WixUI_InstallDir" />
+              <WixVariable Id="WixUILicenseRtf" Value="LICENSE.rtf" />
+            </Product>
+          </Wix>
+          "@ | Out-File -FilePath "parts-amd64.wxs" -Encoding UTF8
+
+          # Create WiX source for arm64
+          @"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*"
+                     Name="Source Parts CLI (ARM64)"
+                     Language="1033"
+                     Version="$version.0"
+                     Manufacturer="Source Parts Inc."
+                     UpgradeCode="9C6F7D5B-0A4E-5F3B-C2D8-6E9F1B3F4C5D">
+
+              <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Platform="arm64" />
+              <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+              <MediaTemplate EmbedCab="yes" />
+
+              <Feature Id="ProductFeature" Title="Source Parts CLI" Level="1">
+                <ComponentGroupRef Id="ProductComponents" />
+                <ComponentRef Id="PathComponent" />
+              </Feature>
+
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="SourceParts">
+                    <Directory Id="BINFOLDER" Name="bin" />
+                  </Directory>
+                </Directory>
+              </Directory>
+
+              <ComponentGroup Id="ProductComponents" Directory="BINFOLDER">
+                <Component Id="PartsExe" Guid="*">
+                  <File Id="PartsExeFile" Source="bin-arm64\parts.exe" KeyPath="yes" />
+                </Component>
+              </ComponentGroup>
+
+              <Component Id="PathComponent" Directory="BINFOLDER" Guid="B2C3D4E5-F6A7-8901-BCDE-F23456789012">
+                <Environment Id="PATH" Name="PATH" Value="[BINFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
+              </Component>
+
+              <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+              <UIRef Id="WixUI_InstallDir" />
+              <WixVariable Id="WixUILicenseRtf" Value="LICENSE.rtf" />
+            </Product>
+          </Wix>
+          "@ | Out-File -FilePath "parts-arm64.wxs" -Encoding UTF8
+
+      - name: Create LICENSE.rtf
+        shell: pwsh
+        run: |
+          @"
+          {\rtf1\ansi\deff0
+          {\fonttbl{\f0 Consolas;}}
+          \f0\fs20
+          Polyform Shield License 1.0.0\par
+          \par
+          https://polyformproject.org/licenses/shield/1.0.0\par
+          \par
+          Copyright 2026 Source Parts Inc. (https://source.parts)\par
+          \par
+          This license allows you to use, modify, and distribute the software\par
+          for any purpose EXCEPT competing with Source Parts' products and services.\par
+          \par
+          See LICENSE file for full terms.\par
+          }
+          "@ | Out-File -FilePath "LICENSE.rtf" -Encoding ASCII
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+
+      - name: Build MSI (amd64)
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          wix build parts-amd64.wxs -ext WixToolset.UI.wixext -o "parts-cli_${version}_windows_amd64.msi"
+
+      - name: Build MSI (arm64)
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          wix build parts-arm64.wxs -ext WixToolset.UI.wixext -arch arm64 -o "parts-cli_${version}_windows_arm64.msi"
+
+      - name: Upload to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.version.outputs.TAG }}"
+          $version = "${{ steps.version.outputs.VERSION }}"
+
+          gh release upload $tag "parts-cli_${version}_windows_amd64.msi" --clobber
+          gh release upload $tag "parts-cli_${version}_windows_arm64.msi" --clobber
