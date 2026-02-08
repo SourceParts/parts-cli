@@ -18,10 +18,10 @@ const V1Prefix = `https://` + API + `/v1`
 const Endpoint_Auth = V1Prefix + `/auth/login`
 
 // Endpoint_AuthValidate validates an API key
-const Endpoint_AuthValidate = V1Prefix + `/auth/validate`
+const Endpoint_AuthValidate = V1Prefix + `/auth/key/validate`
 
 // Endpoint_APIKeys manages API keys
-const Endpoint_APIKeys = V1Prefix + `/auth/api-keys`
+const Endpoint_APIKeys = V1Prefix + `/auth/keys`
 
 // =============================================================================
 // PART OPERATIONS
