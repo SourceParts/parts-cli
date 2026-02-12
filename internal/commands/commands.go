@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/SourceParts/parts-cli/internal/api"
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/spf13/cobra"
 )
@@ -91,7 +92,7 @@ var bomUpload = &cobra.Command{
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		projectID, _ := cmd.Flags().GetString("project")
-		opts := domain.BOMUploadOptions{
+		opts := api.BOMUploadOptions{
 			ProjectID:   projectID,
 			ExtractLCSC: true,
 		}

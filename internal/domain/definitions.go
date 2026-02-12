@@ -183,6 +183,22 @@ const Endpoint_Todo = V1Prefix + `/todos`
 const Endpoint_Report = V1Prefix + `/reports`
 
 // =============================================================================
+// QUARTERMASTER (Smart Query)
+// =============================================================================
+
+// Endpoint_Q is the main QuarterMaster endpoint (smart dispatch)
+const Endpoint_Q = V1Prefix + `/q`
+
+// Endpoint_QHistory manages search history
+const Endpoint_QHistory = V1Prefix + `/q/history`
+
+// Endpoint_QSMD converts SMD resistor codes
+const Endpoint_QSMD = V1Prefix + `/q/tools/smd`
+
+// Endpoint_QResistorColors calculates resistor color bands
+const Endpoint_QResistorColors = V1Prefix + `/q/tools/resistor/colors`
+
+// =============================================================================
 // MISCELLANEOUS
 // =============================================================================
 

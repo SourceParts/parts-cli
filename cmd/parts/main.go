@@ -66,6 +66,11 @@ func main() {
 		commands.AOI,
 		commands.QC,
 		commands.Publish,
+		// QuarterMaster (smart query)
+		commands.Q,
+		commands.History,
+		commands.SMD,
+		commands.Resistor,
 		// Inventory & Supply Chain
 		commands.Inventory,
 		commands.Cart,
