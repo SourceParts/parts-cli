@@ -216,3 +216,15 @@ const Endpoint_Test = V1Prefix + `/test`
 
 // Endpoint_Health checks API health
 const Endpoint_Health = V1Prefix + `/health`
+
+// =============================================================================
+// WEBHOOKS (source.parts, not api.source.parts)
+// =============================================================================
+
+const WebhookBase = `https://source.parts`
+
+// Endpoint_ReportNotify sends report notifications with PDF generation
+const Endpoint_ReportNotify = WebhookBase + `/api/webhooks/report-notify`
+
+// Endpoint_CommitNotify sends commit/push notifications
+const Endpoint_CommitNotify = WebhookBase + `/api/dfm-notify`

@@ -98,6 +98,8 @@ func main() {
 		// Documentation
 		commands.Guide,
 		commands.Docs,
+		// GitHub Actions integration
+		commands.Github,
 		// Version Control
 		commands.Pull,
 		commands.Push,
