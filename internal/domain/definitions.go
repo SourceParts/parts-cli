@@ -23,6 +23,12 @@ const Endpoint_AuthValidate = V1Prefix + `/auth/key/validate`
 // Endpoint_APIKeys manages API keys
 const Endpoint_APIKeys = V1Prefix + `/auth/keys`
 
+// Endpoint_AuthToken proxies the Auth0 authorization code exchange (code → tokens)
+const Endpoint_AuthToken = V1Prefix + `/auth/token`
+
+// Endpoint_AuthTokenRefresh proxies the Auth0 refresh token exchange
+const Endpoint_AuthTokenRefresh = V1Prefix + `/auth/token/refresh`
+
 // =============================================================================
 // PART OPERATIONS
 // =============================================================================

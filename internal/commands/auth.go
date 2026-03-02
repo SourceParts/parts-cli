@@ -1,12 +1,12 @@
 package commands
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
-	"strings"
+	"time"
 
+	"github.com/SourceParts/parts-cli/internal/auth"
 	"github.com/SourceParts/parts-cli/internal/client"
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/spf13/cobra"
@@ -16,82 +16,100 @@ import (
 var Auth = &cobra.Command{
 	Use:   "auth",
 	Short: "Authenticate with Source Parts API",
-	Long: `Authenticate with Source Parts API using an API key.
+	Long: `Authenticate with Source Parts API.
 
-The API key is stored securely in your system's keychain:
+By default, 'auth login' opens your browser for a secure OAuth login (no manual
+API key required). To use an API key instead, pass it via --api-key or as a
+positional argument.
+
+Credentials are stored securely in your system's keychain:
   - macOS: Keychain
   - Linux: Secret Service (GNOME Keyring, KWallet)
-  - Windows: Credential Manager
-
-To get an API key, visit: https://source.parts/settings/api-keys`,
+  - Windows: Credential Manager`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cmd.Help()
 	},
 	Example: domain.BinaryName + ` auth login
+` + domain.BinaryName + ` auth login --api-key sp_xxxx
 ` + domain.BinaryName + ` auth status
 ` + domain.BinaryName + ` auth logout`,
 }
 
+var loginAPIKeyFlag string
+
 var authLogin = &cobra.Command{
 	Use:   "login [api-key]",
-	Short: "Log in with an API key",
-	Long: `Store your API key for authenticated requests.
+	Short: "Log in to Source Parts",
+	Long: `Log in to Source Parts.
 
-You can provide the API key as an argument or enter it interactively.
-The key is stored securely in your system's keychain.`,
+Without arguments, opens your browser for an OAuth login (recommended).
+Pass an API key via --api-key or as a positional argument to use the
+legacy key-based login instead.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var apiKey string
-
-		if len(args) == 1 {
+		// Determine if user supplied an API key
+		apiKey := loginAPIKeyFlag
+		if len(args) > 0 {
 			apiKey = args[0]
-		} else {
-			fmt.Print("Enter your API key: ")
-			reader := bufio.NewReader(os.Stdin)
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				return fmt.Errorf("failed to read input: %w", err)
-			}
-			apiKey = strings.TrimSpace(input)
 		}
 
-		if apiKey == "" {
-			return fmt.Errorf("API key cannot be empty")
-		}
-
-		fmt.Println("Validating API key...")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		if err := Client.Auth(ctx, apiKey, os.Stdout); err != nil {
-			return fmt.Errorf("failed to validate API key: %w", err)
+		if apiKey != "" {
+			return handleAPIKeyLogin(ctx, apiKey)
 		}
 
-		if err := client.SaveAPIKey(apiKey); err != nil {
-			return err
+		// Browser-based OAuth flow
+		tokens, err := auth.Login(ctx, os.Stdout)
+		if err != nil {
+			return fmt.Errorf("browser login failed: %w", err)
 		}
 
-		Client.SetAPIKey(apiKey)
+		if err := client.SaveOAuthTokens(tokens); err != nil {
+			return fmt.Errorf("failed to save tokens: %w", err)
+		}
 
-		fmt.Println("\nAPI key saved to system keychain")
-		fmt.Println("You are now authenticated with Source Parts API")
+		Client.SetAPIKey(tokens.AccessToken)
+
+		fmt.Printf("\n✓ Logged in as %s\n", tokens.Email)
+		fmt.Println("OAuth tokens saved to system keychain")
 		return nil
 	},
-	Example: domain.BinaryName + ` auth login sk_live_xxxx`,
+	Example: domain.BinaryName + ` auth login
+` + domain.BinaryName + ` auth login --api-key sp_xxxx`,
+}
+
+func handleAPIKeyLogin(ctx context.Context, apiKey string) error {
+	fmt.Println("Validating API key...")
+	if err := Client.Auth(ctx, apiKey, os.Stdout); err != nil {
+		return fmt.Errorf("failed to validate API key: %w", err)
+	}
+
+	if err := client.SaveAPIKey(apiKey); err != nil {
+		return err
+	}
+
+	Client.SetAPIKey(apiKey)
+
+	fmt.Println("\n✓ API key saved to system keychain")
+	fmt.Println("You are now authenticated with Source Parts API")
+	return nil
 }
 
 var authLogout = &cobra.Command{
 	Use:   "logout",
-	Short: "Log out and remove stored API key",
-	Long:  `Remove the stored API key from your system's keychain.`,
+	Short: "Log out and remove stored credentials",
+	Long:  `Remove all stored credentials (OAuth tokens and API key) from your system's keychain.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := client.DeleteOAuthTokens(); err != nil {
+			return err
+		}
 		if err := client.DeleteAPIKey(); err != nil {
 			return err
 		}
-
 		Client.SetAPIKey("")
-
-		fmt.Println("API key removed from system keychain")
+		fmt.Println("Credentials removed from system keychain")
 		fmt.Println("You are now logged out")
 		return nil
 	},
@@ -100,18 +118,38 @@ var authLogout = &cobra.Command{
 var authStatus = &cobra.Command{
 	Use:   "status",
 	Short: "Check authentication status",
-	Long:  `Check if you are currently authenticated with the Source Parts API.`,
+	Long:  `Show which credentials are stored and whether the client is authenticated.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if client.HasAPIKey() {
-			fmt.Println("Authenticated")
-			fmt.Println("API key is stored in system keychain")
-			if Client.IsAuthenticated() {
-				fmt.Println("Client is configured with API key")
+		if client.HasOAuthTokens() {
+			tokens, err := client.LoadOAuthTokens()
+			if err != nil || tokens == nil {
+				fmt.Println("OAuth tokens found but could not be loaded")
+			} else {
+				remaining := time.Until(tokens.ExpiresAt)
+				if remaining < 0 {
+					fmt.Println("Auth method: OAuth (access token expired)")
+				} else {
+					fmt.Printf("Auth method: OAuth\n")
+				}
+				if tokens.Email != "" {
+					fmt.Printf("User:        %s\n", tokens.Email)
+				}
+				fmt.Printf("Expires in:  %s\n", remaining.Round(time.Second))
 			}
-		} else {
-			fmt.Println("Not authenticated")
-			fmt.Println("Run 'parts auth login' to authenticate")
+			return nil
 		}
+
+		if client.HasAPIKey() {
+			fmt.Println("Auth method: API Key")
+			fmt.Println("Key stored in system keychain")
+			if Client.IsAuthenticated() {
+				fmt.Println("Client is configured and ready")
+			}
+			return nil
+		}
+
+		fmt.Println("Not authenticated")
+		fmt.Printf("Run '%s auth login' to authenticate\n", domain.BinaryName)
 		return nil
 	},
 }
@@ -121,8 +159,18 @@ var authWhoami = &cobra.Command{
 	Short: "Show current authenticated user",
 	Long:  `Display information about the currently authenticated user.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Check OAuth tokens first
+		if client.HasOAuthTokens() {
+			tokens, err := client.LoadOAuthTokens()
+			if err == nil && tokens != nil {
+				fmt.Printf("User:  %s\n", tokens.Email)
+				fmt.Printf("Sub:   %s\n", tokens.Sub)
+				return nil
+			}
+		}
+
 		if !Client.IsAuthenticated() {
-			fmt.Println("Not authenticated. Run 'parts auth login' first.")
+			fmt.Printf("Not authenticated. Run '%s auth login' first.\n", domain.BinaryName)
 			return nil
 		}
 
@@ -142,4 +190,6 @@ func init() {
 	Auth.AddCommand(authLogout)
 	Auth.AddCommand(authStatus)
 	Auth.AddCommand(authWhoami)
+
+	authLogin.Flags().StringVar(&loginAPIKeyFlag, "api-key", "", "API key to use for authentication (skips browser login)")
 }

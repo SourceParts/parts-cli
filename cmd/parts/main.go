@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/SourceParts/parts-cli/internal/auth"
 	"github.com/SourceParts/parts-cli/internal/client"
 	"github.com/SourceParts/parts-cli/internal/commands"
 	"github.com/SourceParts/parts-cli/internal/domain"
@@ -108,16 +111,43 @@ func main() {
 		commands.Test,
 	)
 
-	// Load API key from system keychain
-	apiKey, err := client.LoadAPIKey()
-	if err != nil && Verbose {
-		logger.New(&Verbose).Printf("Warning: Failed to load API key from keychain: %v", err)
+	// Resolve credentials: OAuth tokens take priority over API keys.
+	var activeKey string
+	log := logger.New(&Verbose)
+
+	if client.HasOAuthTokens() {
+		tokens, err := client.LoadOAuthTokens()
+		if err == nil && tokens != nil {
+			// Proactively refresh if within 60 seconds of expiry.
+			if time.Until(tokens.ExpiresAt) < 60*time.Second && tokens.RefreshToken != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if refreshed, err := auth.Refresh(ctx, tokens.RefreshToken); err == nil {
+					_ = client.SaveOAuthTokens(refreshed)
+					tokens = refreshed
+				} else if Verbose {
+					log.Printf("Warning: token refresh failed: %v", err)
+				}
+				cancel()
+			}
+			activeKey = tokens.AccessToken
+		} else if Verbose {
+			log.Printf("Warning: failed to load OAuth tokens: %v", err)
+		}
+	}
+
+	// Fall back to stored API key if no OAuth tokens available.
+	if activeKey == "" {
+		apiKey, err := client.LoadAPIKey()
+		if err != nil && Verbose {
+			log.Printf("Warning: Failed to load API key from keychain: %v", err)
+		}
+		activeKey = apiKey
 	}
 
 	commands.Client = &client.Client{
 		API:    &API,
-		APIKey: apiKey,
-		Logger: logger.New(&Verbose),
+		APIKey: activeKey,
+		Logger: log,
 		Client: http.DefaultClient,
 
 		Endpoint_Add:       &Endpoint_Add,
