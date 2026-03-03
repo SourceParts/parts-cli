@@ -69,7 +69,6 @@ func main() {
 		commands.AOI,
 		commands.QC,
 		commands.Publish,
-		commands.Stackup,
 		// QuarterMaster (smart query)
 		commands.Q,
 		commands.History,
