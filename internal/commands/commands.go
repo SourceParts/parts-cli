@@ -175,6 +175,15 @@ var Fabricate = &cobra.Command{
 	},
 }
 
+var Stackup = &cobra.Command{
+	Use:   "stackup",
+	Short: "PCB stackup operations",
+	Long:  `Generate and manage PCB stackup documentation and diffs.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+	},
+}
+
 var AOI = &cobra.Command{
 	Use:     "aoi",
 	Short:   "Submit AOI (Automated Optical Inspection) request",
@@ -215,6 +224,7 @@ func init() {
 	DFM.Flags().StringP("project", "p", "", "Project ID")
 	Fabricate.Flags().StringP("project", "p", "", "Project ID")
 	Fabricate.Flags().IntP("quantity", "q", 5, "Quantity to order")
+	Fabricate.AddCommand(Stackup)
 	AOI.Flags().StringP("project", "p", "", "Project ID")
 	QC.Flags().StringP("project", "p", "", "Project ID")
 	Publish.Flags().StringP("project", "p", "", "Project ID")
