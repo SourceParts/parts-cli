@@ -26,6 +26,7 @@ var validReportTypes = map[string]bool{
 	"dvt":               true,
 	"dfm_review":        true,
 	"dvt_scan":          true,
+	"stackup_diff":      true,
 }
 
 // Github is the parent command for GitHub Actions integration
@@ -91,7 +92,7 @@ For single commits, use --message and --sha flags or rely on env vars.`,
 
 func init() {
 	// Report flags
-	githubReport.Flags().StringP("type", "t", "", "Report type: ecn, schematic_review, dfm, dvt, dfm_review, dvt_scan")
+	githubReport.Flags().StringP("type", "t", "", "Report type: ecn, schematic_review, dfm, dvt, dfm_review, dvt_scan, stackup_diff")
 	githubReport.Flags().StringP("file", "f", "", "Path to markdown report file")
 	githubReport.Flags().StringP("project", "p", "", "Project name")
 	githubReport.Flags().StringP("client", "c", "", "Client full name")
@@ -183,6 +184,11 @@ func extractIssuesCount(reportType, content string) int {
 		// Count ### SCH-NNN: headers
 		schRe := regexp.MustCompile(`(?m)^### SCH-\d+:`)
 		return len(schRe.FindAllString(content, -1))
+
+	case "stackup_diff":
+		// Count version sections (## V1 —, ## V2 —, etc.)
+		versionRe := regexp.MustCompile(`(?m)^## V\d+\s*[—\-]`)
+		return len(versionRe.FindAllString(content, -1))
 	}
 
 	return 0
