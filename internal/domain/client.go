@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/SourceParts/parts-cli/internal/api"
+	"github.com/SourceParts/parts-cli/internal/types"
 )
 
 // Client represents the CLI interface with Source Parts API
@@ -24,7 +24,7 @@ type Client interface {
 
 	// BOM operations
 	BOM(ctx context.Context, fileName string, w io.Writer) error
-	BOMUpload(ctx context.Context, fileName string, opts api.BOMUploadOptions, w io.Writer) error
+	BOMUpload(ctx context.Context, fileName string, opts types.BOMUploadOptions, w io.Writer) error
 	BOMStatus(ctx context.Context, jobID string, w io.Writer) error
 	PollBOMStatus(ctx context.Context, jobID string, w io.Writer) error
 
@@ -38,6 +38,8 @@ type Client interface {
 	AOI(ctx context.Context, input string, w io.Writer) error
 	QC(ctx context.Context, input string, w io.Writer) error
 	Publish(ctx context.Context, input string, w io.Writer) error
+	Stackup(ctx context.Context, gerberZip string, opts types.StackupOptions, w io.Writer) error
+	StackupDiff(ctx context.Context, gerberA, gerberB string, opts types.StackupDiffOptions, w io.Writer) error
 
 	// Inventory & Supply Chain
 	Inventory(ctx context.Context, partNumber string, w io.Writer) error

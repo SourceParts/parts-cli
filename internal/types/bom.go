@@ -1,4 +1,4 @@
-package api
+package types
 
 // BOMUploadOptions contains options for BOM upload
 type BOMUploadOptions struct {

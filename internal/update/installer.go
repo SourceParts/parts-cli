@@ -11,11 +11,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"github.com/schollz/progressbar/v3"
 )
 
 // DownloadAndInstall downloads and installs a new version of the CLI
-func DownloadAndInstall(ctx context.Context, asset *Asset, client *http.Client) error {
+func DownloadAndInstall(ctx context.Context, asset *Asset, currentVersion string, client *http.Client) error {
 	// Get current executable path
 	exePath, err := os.Executable()
 	if err != nil {
@@ -64,12 +67,12 @@ func DownloadAndInstall(ctx context.Context, asset *Asset, client *http.Client) 
 	}
 	defer os.Remove(binaryPath)
 
-	// Create backup of current binary
-	backupPath := realPath + ".backup"
+	// Create versioned backup
+	backupPath := realPath + ".backup." + currentVersion
 	if err := copyFile(realPath, backupPath); err != nil {
 		return fmt.Errorf("failed to create backup: %w", err)
 	}
-	defer os.Remove(backupPath)
+	// DON'T defer os.Remove(backupPath) - keep it for rollback
 
 	// Copy new binary to final location
 	if err := copyFile(binaryPath, realPath); err != nil {
@@ -84,6 +87,9 @@ func DownloadAndInstall(ctx context.Context, asset *Asset, client *http.Client) 
 	if err := os.Chmod(realPath, fileMode); err != nil {
 		return fmt.Errorf("failed to restore permissions: %w", err)
 	}
+
+	// After success, clean up old backups (keep last 3)
+	cleanupOldBackups(realPath, 3)
 
 	return nil
 }
@@ -105,7 +111,14 @@ func downloadAsset(ctx context.Context, asset *Asset, writer io.Writer, client *
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
 	}
 
-	_, err = io.Copy(writer, resp.Body)
+	// Create progress bar
+	bar := progressbar.DefaultBytes(
+		asset.Size,
+		"Downloading",
+	)
+
+	// Wrap writer with progress bar
+	_, err = io.Copy(io.MultiWriter(writer, bar), resp.Body)
 	return err
 }
 
@@ -208,4 +221,54 @@ func copyFile(src, dst string) error {
 
 	// Sync to ensure data is written to disk
 	return destFile.Sync()
+}
+
+// cleanupOldBackups removes old backup files, keeping only the most recent N backups
+func cleanupOldBackups(exePath string, keepCount int) error {
+	dir := filepath.Dir(exePath)
+	base := filepath.Base(exePath)
+
+	// Find all backup files
+	pattern := filepath.Join(dir, base+".backup.*")
+	backups, err := filepath.Glob(pattern)
+	if err != nil {
+		return err
+	}
+
+	// Sort by modification time (newest first)
+	sort.Slice(backups, func(i, j int) bool {
+		infoI, _ := os.Stat(backups[i])
+		infoJ, _ := os.Stat(backups[j])
+		return infoI.ModTime().After(infoJ.ModTime())
+	})
+
+	// Remove old backups beyond keepCount
+	for i := keepCount; i < len(backups); i++ {
+		os.Remove(backups[i])
+	}
+
+	return nil
+}
+
+// ListBackups returns a list of available backup versions
+func ListBackups(exePath string) ([]string, error) {
+	dir := filepath.Dir(exePath)
+	base := filepath.Base(exePath)
+	pattern := filepath.Join(dir, base+".backup.*")
+	return filepath.Glob(pattern)
+}
+
+// RestoreBackup restores a backup file to the executable path
+func RestoreBackup(exePath, backupPath string) error {
+	info, err := os.Stat(exePath)
+	if err != nil {
+		return err
+	}
+	fileMode := info.Mode()
+
+	if err := copyFile(backupPath, exePath); err != nil {
+		return err
+	}
+
+	return os.Chmod(exePath, fileMode)
 }

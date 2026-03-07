@@ -67,7 +67,7 @@ func main() {
 		commands.Project,
 		// Manufacturing
 		commands.DFM,
-		commands.Fabricate,
+		commands.Fab,
 		commands.AOI,
 		commands.QC,
 		commands.Publish,
@@ -191,7 +191,7 @@ func main() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 
-				result, err := update.CheckForUpdate(ctx, domain.Version, http.DefaultClient)
+				result, err := update.CheckForUpdate(ctx, domain.Version, updateConfig.Channel, http.DefaultClient)
 				if err != nil {
 					return // Silently fail - don't interrupt user's command
 				}
@@ -199,6 +199,11 @@ func main() {
 				if result.UpdateAvailable && result.LatestVersion != updateConfig.SkipVersion {
 					fmt.Fprintf(os.Stderr, "\n📦 Update available: %s → %s\n", domain.Version, result.LatestVersion)
 					fmt.Fprintf(os.Stderr, "Run '%s update check' for details\n\n", domain.BinaryName)
+
+					// Send notification if enabled
+					if updateConfig.Notifications {
+						_ = update.NotifyUpdateAvailable(domain.Version, result.LatestVersion)
+					}
 				}
 
 				// Update last check time

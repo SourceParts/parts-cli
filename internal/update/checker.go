@@ -130,7 +130,7 @@ func (v *SemVer) String() string {
 }
 
 // CheckForUpdate checks if a new version is available
-func CheckForUpdate(ctx context.Context, currentVersion string, client *http.Client) (*CheckResult, error) {
+func CheckForUpdate(ctx context.Context, currentVersion string, channel string, client *http.Client) (*CheckResult, error) {
 	// Detect installation method
 	installMethod, err := DetectInstallMethod()
 	if err != nil {
@@ -143,11 +143,11 @@ func CheckForUpdate(ctx context.Context, currentVersion string, client *http.Cli
 		return nil, fmt.Errorf("failed to parse current version: %w", err)
 	}
 
-	// Try Source Parts API first
-	release, err := fetchFromSourcePartsAPI(ctx, client)
+	// Try Source Parts API first (with channel support)
+	release, err := fetchFromSourcePartsAPI(ctx, channel, client)
 	if err != nil {
-		// Fallback to GitHub Releases API
-		release, err = fetchFromGitHubAPI(ctx, client)
+		// Fallback to GitHub Releases API (filters by prerelease)
+		release, err = fetchFromGitHubAPI(ctx, channel, client)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check for updates: %w", err)
 		}
@@ -170,8 +170,9 @@ func CheckForUpdate(ctx context.Context, currentVersion string, client *http.Cli
 }
 
 // fetchFromSourcePartsAPI fetches release info from Source Parts API
-func fetchFromSourcePartsAPI(ctx context.Context, client *http.Client) (*ReleaseInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", domain.Endpoint_CLIUpdate, nil)
+func fetchFromSourcePartsAPI(ctx context.Context, channel string, client *http.Client) (*ReleaseInfo, error) {
+	url := domain.Endpoint_CLIUpdate + "?channel=" + channel
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -198,10 +199,21 @@ func fetchFromSourcePartsAPI(ctx context.Context, client *http.Client) (*Release
 }
 
 // fetchFromGitHubAPI fetches release info from GitHub Releases API
-func fetchFromGitHubAPI(ctx context.Context, client *http.Client) (*ReleaseInfo, error) {
-	const githubAPI = "https://api.github.com/repos/SourceParts/parts-cli/releases/latest"
+func fetchFromGitHubAPI(ctx context.Context, channel string, client *http.Client) (*ReleaseInfo, error) {
+	var url string
+	switch channel {
+	case ChannelNightly:
+		// Use tags with "nightly" in name
+		url = "https://api.github.com/repos/SourceParts/parts-cli/releases?per_page=1"
+	case ChannelBeta:
+		// Include prereleases
+		url = "https://api.github.com/repos/SourceParts/parts-cli/releases?per_page=1"
+	default:
+		// Stable: latest non-prerelease
+		url = "https://api.github.com/repos/SourceParts/parts-cli/releases/latest"
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", githubAPI, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +231,31 @@ func fetchFromGitHubAPI(ctx context.Context, client *http.Client) (*ReleaseInfo,
 		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
 	}
 
+	// Handle list response for beta/nightly
+	if channel == ChannelBeta || channel == ChannelNightly {
+		var releases []ReleaseInfo
+		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+
+		if len(releases) == 0 {
+			return nil, fmt.Errorf("no releases found for %s channel", channel)
+		}
+
+		// Filter by channel
+		for _, release := range releases {
+			if channel == ChannelBeta && release.Prerelease {
+				return &release, nil
+			}
+			if channel == ChannelNightly && strings.Contains(strings.ToLower(release.Version), "nightly") {
+				return &release, nil
+			}
+		}
+
+		return nil, fmt.Errorf("no matching release found for %s channel", channel)
+	}
+
+	// Standard response for stable
 	var release ReleaseInfo
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)

@@ -9,10 +9,11 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/SourceParts/parts-cli/internal/api"
+	"github.com/SourceParts/parts-cli/internal/types"
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/SourceParts/parts-cli/internal/logger"
 )
@@ -81,7 +82,7 @@ func (c *Client) SetAPIKey(key string) {
 // httpErrorMessages maps HTTP status codes to user-friendly messages
 var httpErrorMessages = map[int]string{
 	400: "bad request",
-	401: "unauthorized - check your API key",
+	401: "unauthorized - run `parts auth login` to authenticate",
 	403: "forbidden - access denied",
 	404: "not found",
 	408: "request timeout",
@@ -338,14 +339,14 @@ func (c *Client) Gather(ctx context.Context, partNumber string, w io.Writer) err
 
 // BOM validates a BOM file (legacy)
 func (c *Client) BOM(ctx context.Context, fileName string, w io.Writer) error {
-	opts := api.BOMUploadOptions{ExtractLCSC: true}
+	opts := types.BOMUploadOptions{ExtractLCSC: true}
 	return c.BOMUpload(ctx, fileName, opts, w)
 }
 
 // BOMUpload uploads a BOM file to the API
-func (c *Client) BOMUpload(ctx context.Context, fileName string, opts api.BOMUploadOptions, w io.Writer) error {
+func (c *Client) BOMUpload(ctx context.Context, fileName string, opts types.BOMUploadOptions, w io.Writer) error {
 	// Read file
-	fileContent, err := io.ReadAll(bytes.NewReader([]byte{})) // Placeholder - needs actual file reading
+	fileContent, err := os.ReadFile(fileName)
 	if err != nil {
 		return fmt.Errorf("error reading file: %w", err)
 	}
@@ -449,7 +450,7 @@ func (c *Client) PollBOMStatus(ctx context.Context, jobID string, w io.Writer) e
 				return err
 			}
 
-			var status api.BOMStatusResponse
+			var status types.BOMStatusResponse
 			if err := json.Unmarshal(buf.Bytes(), &status); err != nil {
 				return fmt.Errorf("error parsing status: %w", err)
 			}
@@ -678,6 +679,201 @@ func (c *Client) QC(ctx context.Context, input string, w io.Writer) error {
 func (c *Client) Publish(ctx context.Context, input string, w io.Writer) error {
 	fmt.Fprintln(w, "Not implemented yet")
 	return nil
+}
+
+// Stackup generates a stackup PDF from a gerber ZIP file
+func (c *Client) Stackup(ctx context.Context, gerberZip string, opts types.StackupOptions, w io.Writer) error {
+	fileContent, err := os.ReadFile(gerberZip)
+	if err != nil {
+		return fmt.Errorf("error reading file: %w", err)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	baseName := filepath.Base(gerberZip)
+	part, err := writer.CreateFormFile("file", baseName)
+	if err != nil {
+		return fmt.Errorf("error creating form file: %w", err)
+	}
+	if _, err := part.Write(fileContent); err != nil {
+		return fmt.Errorf("error writing file to form: %w", err)
+	}
+
+	if opts.BoardName != "" {
+		_ = writer.WriteField("board_name", opts.BoardName)
+	}
+	if opts.Scale > 0 {
+		_ = writer.WriteField("scale", fmt.Sprintf("%d", opts.Scale))
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("error closing writer: %w", err)
+	}
+
+	url := domain.Endpoint_ManufacturingStackup
+	c.Logger.Printf("Request URL: %s", url)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	c.Logger.Printf("Generating stackup PDF for: %s", baseName)
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	return c.writePDFResponse(res, opts.Output, baseName, "stackup", w)
+}
+
+// StackupDiff generates a layer-by-layer diff PDF between two gerber revisions
+func (c *Client) StackupDiff(ctx context.Context, gerberA, gerberB string, opts types.StackupDiffOptions, w io.Writer) error {
+	fileContentA, err := os.ReadFile(gerberA)
+	if err != nil {
+		return fmt.Errorf("error reading file %s: %w", gerberA, err)
+	}
+	fileContentB, err := os.ReadFile(gerberB)
+	if err != nil {
+		return fmt.Errorf("error reading file %s: %w", gerberB, err)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	partA, err := writer.CreateFormFile("gerbers_a", filepath.Base(gerberA))
+	if err != nil {
+		return fmt.Errorf("error creating form file: %w", err)
+	}
+	if _, err := partA.Write(fileContentA); err != nil {
+		return fmt.Errorf("error writing file to form: %w", err)
+	}
+
+	partB, err := writer.CreateFormFile("gerbers_b", filepath.Base(gerberB))
+	if err != nil {
+		return fmt.Errorf("error creating form file: %w", err)
+	}
+	if _, err := partB.Write(fileContentB); err != nil {
+		return fmt.Errorf("error writing file to form: %w", err)
+	}
+
+	if opts.NameA != "" {
+		_ = writer.WriteField("name_a", opts.NameA)
+	}
+	if opts.NameB != "" {
+		_ = writer.WriteField("name_b", opts.NameB)
+	}
+	if opts.DPI > 0 {
+		_ = writer.WriteField("dpi", fmt.Sprintf("%d", opts.DPI))
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("error closing writer: %w", err)
+	}
+
+	url := domain.Endpoint_ManufacturingStackupDiff
+	c.Logger.Printf("Request URL: %s", url)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	c.Logger.Printf("Generating stackup diff: %s vs %s", filepath.Base(gerberA), filepath.Base(gerberB))
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	return c.writePDFResponse(res, opts.Output, filepath.Base(gerberA), "stackup-diff", w)
+}
+
+// writePDFResponse writes a binary PDF response to a file or writer.
+// It uses the output path if provided, otherwise derives a filename from the
+// Content-Disposition header or falls back to a default name.
+func (c *Client) writePDFResponse(res *http.Response, outputPath, baseName, suffix string, w io.Writer) error {
+	if outputPath != "" {
+		f, err := os.Create(outputPath)
+		if err != nil {
+			return fmt.Errorf("error creating output file: %w", err)
+		}
+		defer f.Close()
+
+		n, err := io.Copy(f, res.Body)
+		if err != nil {
+			return fmt.Errorf("error writing PDF: %w", err)
+		}
+		fmt.Fprintf(w, "Saved %s (%d bytes)\n", outputPath, n)
+		return nil
+	}
+
+	// Derive filename from Content-Disposition or fall back to default
+	fileName := ""
+	if cd := res.Header.Get("Content-Disposition"); cd != "" {
+		// Parse "attachment; filename=xyz.pdf"
+		for _, part := range splitContentDisposition(cd) {
+			if len(part) > 9 && part[:9] == "filename=" {
+				fileName = part[9:]
+				// Strip quotes
+				if len(fileName) >= 2 && fileName[0] == '"' && fileName[len(fileName)-1] == '"' {
+					fileName = fileName[1 : len(fileName)-1]
+				}
+				break
+			}
+		}
+	}
+	if fileName == "" {
+		ext := filepath.Ext(baseName)
+		nameWithoutExt := baseName[:len(baseName)-len(ext)]
+		fileName = nameWithoutExt + "-" + suffix + ".pdf"
+	}
+
+	f, err := os.Create(fileName)
+	if err != nil {
+		return fmt.Errorf("error creating output file: %w", err)
+	}
+	defer f.Close()
+
+	n, err := io.Copy(f, res.Body)
+	if err != nil {
+		return fmt.Errorf("error writing PDF: %w", err)
+	}
+	fmt.Fprintf(w, "Saved %s (%d bytes)\n", fileName, n)
+	return nil
+}
+
+// splitContentDisposition splits a Content-Disposition header value by semicolons,
+// trimming whitespace from each part.
+func splitContentDisposition(cd string) []string {
+	var parts []string
+	for _, p := range bytes.Split([]byte(cd), []byte(";")) {
+		trimmed := bytes.TrimSpace(p)
+		if len(trimmed) > 0 {
+			parts = append(parts, string(trimmed))
+		}
+	}
+	return parts
 }
 
 func (c *Client) Inventory(ctx context.Context, partNumber string, w io.Writer) error {

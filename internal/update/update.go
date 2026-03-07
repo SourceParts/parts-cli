@@ -58,6 +58,8 @@ type UpdateConfig struct {
 	LastCheckTime time.Time `json:"last_check_time"`
 	SkipVersion   string    `json:"skip_version,omitempty"`
 	Prerelease    bool      `json:"prerelease"`
+	Channel       string    `json:"channel"`        // "stable", "beta", "nightly"
+	Notifications bool      `json:"notifications"`  // Enable desktop notifications
 }
 
 // CheckResult contains the result of an update check
@@ -70,6 +72,12 @@ type CheckResult struct {
 	CanSelfUpdate   bool
 }
 
+const (
+	ChannelStable  = "stable"
+	ChannelBeta    = "beta"
+	ChannelNightly = "nightly"
+)
+
 // DefaultConfig returns the default update configuration
 func DefaultConfig() *UpdateConfig {
 	return &UpdateConfig{
@@ -78,5 +86,7 @@ func DefaultConfig() *UpdateConfig {
 		LastCheckTime: time.Time{},
 		SkipVersion:   "",
 		Prerelease:    false,
+		Channel:       ChannelStable,
+		Notifications: true,
 	}
 }

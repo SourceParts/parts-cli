@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,6 +44,9 @@ var updateCheck = &cobra.Command{
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		// Load config to get channel
+		config := loadConfigOrDefault()
+
 		fmt.Printf("Current version: %s\n", domain.Version)
 
 		// Detect installation method
@@ -49,12 +54,13 @@ var updateCheck = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to detect install method: %w", err)
 		}
-		fmt.Printf("Install method:  %s\n\n", installMethod)
+		fmt.Printf("Install method:  %s\n", installMethod)
+		fmt.Printf("Channel:         %s\n\n", config.Channel)
 
 		fmt.Println("Checking for updates...")
 
 		// Check for updates
-		result, err := update.CheckForUpdate(ctx, domain.Version, http.DefaultClient)
+		result, err := update.CheckForUpdate(ctx, domain.Version, config.Channel, http.DefaultClient)
 		if err != nil {
 			return fmt.Errorf("failed to check for updates: %w", err)
 		}
@@ -97,6 +103,9 @@ var updateApply = &cobra.Command{
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
+		// Load config
+		config := loadConfigOrDefault()
+
 		// Verify we can self-update
 		installMethod, err := update.DetectInstallMethod()
 		if err != nil {
@@ -110,8 +119,11 @@ var updateApply = &cobra.Command{
 
 		// Check for updates
 		fmt.Println("Checking for updates...")
-		result, err := update.CheckForUpdate(ctx, domain.Version, http.DefaultClient)
+		result, err := update.CheckForUpdate(ctx, domain.Version, config.Channel, http.DefaultClient)
 		if err != nil {
+			if config.Notifications {
+				_ = update.NotifyUpdateFailed(err)
+			}
 			return fmt.Errorf("failed to check for updates: %w", err)
 		}
 
@@ -143,23 +155,49 @@ var updateApply = &cobra.Command{
 		}
 
 		// Download and install
-		fmt.Printf("Downloading %s...\n", asset.Name)
-		if err := update.DownloadAndInstall(ctx, asset, http.DefaultClient); err != nil {
+		if err := update.DownloadAndInstall(ctx, asset, domain.Version, http.DefaultClient); err != nil {
+			if config.Notifications {
+				_ = update.NotifyUpdateFailed(err)
+			}
 			return fmt.Errorf("failed to install update: %w", err)
 		}
 
 		fmt.Printf("✓ Successfully updated to %s\n", result.LatestVersion)
 		fmt.Println("Please restart the CLI for the changes to take effect")
 
+		// Send notification if enabled
+		if config.Notifications {
+			_ = update.NotifyUpdateSuccess(result.LatestVersion)
+		}
+
 		return nil
 	},
 }
 
 var (
-	configAutoCheck  *bool
-	configInterval   int
-	configPrerelease bool
+	configAutoCheck     *bool
+	configInterval      int
+	configPrerelease    bool
+	configChannel       string
+	configNotifications bool
 )
+
+// loadConfigOrDefault loads update config or returns defaults
+func loadConfigOrDefault() *update.UpdateConfig {
+	configData, err := client.LoadUpdateConfig()
+	if err != nil || configData == nil {
+		return update.DefaultConfig()
+	}
+
+	// Unmarshal from map to struct
+	jsonData, _ := json.Marshal(configData)
+	config := &update.UpdateConfig{}
+	if err := json.Unmarshal(jsonData, config); err != nil {
+		return update.DefaultConfig()
+	}
+
+	return config
+}
 
 var updateConfig = &cobra.Command{
 	Use:   "config",
@@ -169,22 +207,7 @@ var updateConfig = &cobra.Command{
 Settings are stored securely in your system keychain.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load existing config or use defaults
-		var config *update.UpdateConfig
-		configData, err := client.LoadUpdateConfig()
-		if err != nil {
-			return fmt.Errorf("failed to load update config: %w", err)
-		}
-
-		if configData == nil {
-			config = update.DefaultConfig()
-		} else {
-			// Unmarshal from map to struct
-			jsonData, _ := json.Marshal(configData)
-			config = &update.UpdateConfig{}
-			if err := json.Unmarshal(jsonData, config); err != nil {
-				config = update.DefaultConfig()
-			}
-		}
+		config := loadConfigOrDefault()
 
 		// Update config from flags if provided
 		modified := false
@@ -200,6 +223,14 @@ Settings are stored securely in your system keychain.`,
 			config.Prerelease = configPrerelease
 			modified = true
 		}
+		if cmd.Flags().Changed("channel") {
+			config.Channel = configChannel
+			modified = true
+		}
+		if cmd.Flags().Changed("notifications") {
+			config.Notifications = configNotifications
+			modified = true
+		}
 
 		// Save if modified
 		if modified {
@@ -211,11 +242,12 @@ Settings are stored securely in your system keychain.`,
 
 		// Display current configuration
 		fmt.Println("\nCurrent update configuration:")
-		fmt.Printf("  Auto-check:  %v\n", config.AutoCheck)
-		fmt.Printf("  Interval:    %d hours\n", config.Interval)
-		fmt.Printf("  Prerelease:  %v\n", config.Prerelease)
+		fmt.Printf("  Auto-check:     %v\n", config.AutoCheck)
+		fmt.Printf("  Interval:       %d hours\n", config.Interval)
+		fmt.Printf("  Channel:        %s\n", config.Channel)
+		fmt.Printf("  Notifications:  %v\n", config.Notifications)
 		if !config.LastCheckTime.IsZero() {
-			fmt.Printf("  Last check:  %s\n", config.LastCheckTime.Format(time.RFC3339))
+			fmt.Printf("  Last check:     %s\n", config.LastCheckTime.Format(time.RFC3339))
 		}
 
 		return nil
@@ -238,28 +270,94 @@ var updateStatus = &cobra.Command{
 		fmt.Printf("Self-update:      %v\n", update.CanSelfUpdate(installMethod))
 
 		// Load and display update config
-		configData, err := client.LoadUpdateConfig()
-		if err != nil {
-			fmt.Printf("Update config:    failed to load: %v\n", err)
-			return nil
-		}
-
-		if configData == nil {
-			fmt.Println("Update config:    not configured (using defaults)")
-			return nil
-		}
-
-		var config update.UpdateConfig
-		jsonData, _ := json.Marshal(configData)
-		if err := json.Unmarshal(jsonData, &config); err != nil {
-			fmt.Printf("Update config:    failed to parse: %v\n", err)
-			return nil
-		}
+		config := loadConfigOrDefault()
 
 		fmt.Printf("Auto-check:       %v\n", config.AutoCheck)
 		fmt.Printf("Check interval:   %d hours\n", config.Interval)
+		fmt.Printf("Channel:          %s\n", config.Channel)
+		fmt.Printf("Notifications:    %v\n", config.Notifications)
 		if !config.LastCheckTime.IsZero() {
 			fmt.Printf("Last check:       %s\n", config.LastCheckTime.Format(time.RFC3339))
+		}
+
+		return nil
+	},
+}
+
+var updateRollback = &cobra.Command{
+	Use:   "rollback [version]",
+	Short: "Rollback to a previous version",
+	Long: `Rollback to a previous version from backup.
+
+If no version is specified, shows available backups.
+Use --list to see all available rollback versions.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		config := loadConfigOrDefault()
+
+		exePath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("failed to get executable path: %w", err)
+		}
+
+		realPath, err := filepath.EvalSymlinks(exePath)
+		if err != nil {
+			realPath = exePath
+		}
+
+		// List available backups
+		backups, err := update.ListBackups(realPath)
+		if err != nil {
+			return fmt.Errorf("failed to list backups: %w", err)
+		}
+
+		if len(backups) == 0 {
+			fmt.Println("No backup versions available for rollback")
+			return nil
+		}
+
+		// If no version specified or --list flag, show available versions
+		listFlag, _ := cmd.Flags().GetBool("list")
+		if len(args) == 0 || listFlag {
+			fmt.Println("Available backup versions:")
+			for _, backup := range backups {
+				version := filepath.Ext(backup)[1:] // Remove leading dot
+				fmt.Printf("  - %s\n", version)
+			}
+			if len(args) == 0 {
+				fmt.Println("\nUsage: parts update rollback <version>")
+			}
+			return nil
+		}
+
+		targetVersion := args[0]
+		backupPath := realPath + ".backup." + targetVersion
+
+		// Verify backup exists
+		if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+			return fmt.Errorf("no backup found for version %s", targetVersion)
+		}
+
+		// Confirm rollback
+		fmt.Printf("Rollback from %s to %s\n", domain.Version, targetVersion)
+		fmt.Printf("Continue? [y/N]: ")
+		var response string
+		fmt.Scanln(&response)
+		if strings.ToLower(strings.TrimSpace(response)) != "y" {
+			fmt.Println("Rollback cancelled")
+			return nil
+		}
+
+		// Perform rollback
+		if err := update.RestoreBackup(realPath, backupPath); err != nil {
+			return fmt.Errorf("failed to rollback: %w", err)
+		}
+
+		fmt.Printf("✓ Successfully rolled back to %s\n", targetVersion)
+		fmt.Println("Please restart the CLI for the changes to take effect")
+
+		// Send notification if enabled
+		if config.Notifications {
+			_ = update.NotifyRollbackSuccess(targetVersion)
 		}
 
 		return nil
@@ -285,6 +383,7 @@ func init() {
 	Update.AddCommand(updateApply)
 	Update.AddCommand(updateConfig)
 	Update.AddCommand(updateStatus)
+	Update.AddCommand(updateRollback)
 
 	// Flags for apply command
 	updateApply.Flags().BoolVarP(&applyYesFlag, "yes", "y", false, "Skip confirmation prompt")
@@ -293,4 +392,9 @@ func init() {
 	configAutoCheck = updateConfig.Flags().Bool("auto-check", false, "Enable automatic update checking")
 	updateConfig.Flags().IntVar(&configInterval, "interval", 24, "Hours between automatic checks")
 	updateConfig.Flags().BoolVar(&configPrerelease, "prerelease", false, "Include prerelease versions")
+	updateConfig.Flags().StringVar(&configChannel, "channel", "stable", "Release channel (stable, beta, nightly)")
+	updateConfig.Flags().BoolVar(&configNotifications, "notifications", true, "Enable desktop notifications")
+
+	// Flags for rollback command
+	updateRollback.Flags().Bool("list", false, "List available rollback versions")
 }

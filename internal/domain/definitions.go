@@ -114,6 +114,9 @@ const Endpoint_ManufacturingStackup = V1Prefix + `/manufacturing/stackup`
 // Endpoint_ManufacturingStackupDiff generates a diff PDF comparing two gerber sets
 const Endpoint_ManufacturingStackupDiff = V1Prefix + `/manufacturing/stackup/diff`
 
+// Endpoint_ManufacturingPlacement generates placement visualization and panelized pick-and-place files
+const Endpoint_ManufacturingPlacement = V1Prefix + `/manufacturing/placement`
+
 // Endpoint_ManufacturingStatus gets manufacturing job status
 const Endpoint_ManufacturingStatus = V1Prefix + `/manufacturing/%s/status`
 
