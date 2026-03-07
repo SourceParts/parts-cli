@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/SourceParts/parts-cli/internal/commands"
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/SourceParts/parts-cli/internal/logger"
+	"github.com/SourceParts/parts-cli/internal/update"
 	"github.com/spf13/cobra"
 )
 
@@ -109,6 +111,8 @@ func main() {
 		commands.Tag,
 		commands.Release,
 		commands.Test,
+		// Update
+		commands.Update,
 	)
 
 	// Resolve credentials with timeout to avoid hanging on locked keyrings.
@@ -175,6 +179,33 @@ func main() {
 		Endpoint_Search:    &Endpoint_Search,
 		Endpoint_Datasheet: &Endpoint_Datasheet,
 		Endpoint_Marking:   &Endpoint_Marking,
+	}
+
+	// Optional: Check for updates on startup if configured
+	configData, configErr := client.LoadUpdateConfig()
+	if configErr == nil && configData != nil {
+		var updateConfig update.UpdateConfig
+		jsonData, _ := json.Marshal(configData)
+		if err := json.Unmarshal(jsonData, &updateConfig); err == nil && update.ShouldCheck(&updateConfig) {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				result, err := update.CheckForUpdate(ctx, domain.Version, http.DefaultClient)
+				if err != nil {
+					return // Silently fail - don't interrupt user's command
+				}
+
+				if result.UpdateAvailable && result.LatestVersion != updateConfig.SkipVersion {
+					fmt.Fprintf(os.Stderr, "\n📦 Update available: %s → %s\n", domain.Version, result.LatestVersion)
+					fmt.Fprintf(os.Stderr, "Run '%s update check' for details\n\n", domain.BinaryName)
+				}
+
+				// Update last check time
+				updateConfig.LastCheckTime = time.Now()
+				_ = client.SaveUpdateConfig(&updateConfig)
+			}()
+		}
 	}
 
 	if err := rootCmd.Execute(); err != nil {

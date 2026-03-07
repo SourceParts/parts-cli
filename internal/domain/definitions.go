@@ -108,6 +108,12 @@ const Endpoint_ManufacturingQC = V1Prefix + `/manufacturing/qc`
 // Endpoint_ManufacturingPublish publishes a manufacturing package
 const Endpoint_ManufacturingPublish = V1Prefix + `/manufacturing/publish`
 
+// Endpoint_ManufacturingStackup generates a stackup PDF from gerber files
+const Endpoint_ManufacturingStackup = V1Prefix + `/manufacturing/stackup`
+
+// Endpoint_ManufacturingStackupDiff generates a diff PDF comparing two gerber sets
+const Endpoint_ManufacturingStackupDiff = V1Prefix + `/manufacturing/stackup/diff`
+
 // Endpoint_ManufacturingStatus gets manufacturing job status
 const Endpoint_ManufacturingStatus = V1Prefix + `/manufacturing/%s/status`
 
@@ -222,6 +228,13 @@ const Endpoint_Test = V1Prefix + `/test`
 
 // Endpoint_Health checks API health
 const Endpoint_Health = V1Prefix + `/health`
+
+// =============================================================================
+// CLI UPDATE
+// =============================================================================
+
+// Endpoint_CLIUpdate retrieves the latest CLI version information
+const Endpoint_CLIUpdate = V1Prefix + `/cli/update/latest`
 
 // =============================================================================
 // WEBHOOKS (source.parts, not api.source.parts)

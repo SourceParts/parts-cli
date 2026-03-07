@@ -12,8 +12,9 @@ const (
 	// KeyringService is the service name used in the system keychain
 	KeyringService = "parts-cli"
 	// KeyringUser is the user/account name used in the system keychain
-	KeyringUser   = "api-key"
-	keychainOAuth = "oauth-tokens"
+	KeyringUser       = "api-key"
+	keychainOAuth     = "oauth-tokens"
+	keychainUpdateCfg = "update-config"
 )
 
 // SaveAPIKey saves the API key to the system keychain.
@@ -105,4 +106,33 @@ func DeleteOAuthTokens() error {
 func HasOAuthTokens() bool {
 	tokens, err := LoadOAuthTokens()
 	return err == nil && tokens != nil
+}
+
+// SaveUpdateConfig saves the update configuration to the system keychain.
+func SaveUpdateConfig(config interface{}) error {
+	data, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to encode update config: %w", err)
+	}
+	if err := keyring.Set(KeyringService, keychainUpdateCfg, string(data)); err != nil {
+		return fmt.Errorf("failed to save update config to keychain: %w", err)
+	}
+	return nil
+}
+
+// LoadUpdateConfig retrieves the update configuration from the system keychain.
+// Returns nil, nil if no config is stored (caller should use DefaultConfig).
+func LoadUpdateConfig() (map[string]interface{}, error) {
+	data, err := keyring.Get(KeyringService, keychainUpdateCfg)
+	if err != nil {
+		if err == keyring.ErrNotFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to load update config from keychain: %w", err)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &config); err != nil {
+		return nil, fmt.Errorf("failed to decode update config: %w", err)
+	}
+	return config, nil
 }

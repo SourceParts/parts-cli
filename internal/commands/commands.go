@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/SourceParts/parts-cli/internal/api"
+	"github.com/SourceParts/parts-cli/internal/types"
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/spf13/cobra"
 )
@@ -92,7 +92,7 @@ var bomUpload = &cobra.Command{
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		projectID, _ := cmd.Flags().GetString("project")
-		opts := api.BOMUploadOptions{
+		opts := types.BOMUploadOptions{
 			ProjectID:   projectID,
 			ExtractLCSC: true,
 		}
@@ -175,15 +175,6 @@ var Fabricate = &cobra.Command{
 	},
 }
 
-var Stackup = &cobra.Command{
-	Use:   "stackup",
-	Short: "PCB stackup operations",
-	Long:  `Generate and manage PCB stackup documentation and diffs.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return cmd.Help()
-	},
-}
-
 var AOI = &cobra.Command{
 	Use:     "aoi",
 	Short:   "Submit AOI (Automated Optical Inspection) request",
@@ -220,6 +211,59 @@ var Publish = &cobra.Command{
 	},
 }
 
+// =============================================================================
+// Stackup Commands
+// =============================================================================
+
+var Stackup = &cobra.Command{
+	Use:   "stackup",
+	Short: "PCB stackup operations (PDF generation, revision diff)",
+	Long:  `Generate stackup PDFs from gerber files or compare revisions with layer-by-layer diffs.`,
+}
+
+var stackupGenerate = &cobra.Command{
+	Use:     "generate <gerber.zip>",
+	Aliases: []string{"gen"},
+	Short:   "Generate stackup PDF from gerber files",
+	Args:    cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` stackup generate board_v2.zip --name "My Board" --output stackup.pdf`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		name, _ := cmd.Flags().GetString("name")
+		scale, _ := cmd.Flags().GetInt("scale")
+		output, _ := cmd.Flags().GetString("output")
+		opts := types.StackupOptions{
+			BoardName: name,
+			Scale:     scale,
+			Output:    output,
+		}
+		return Client.Stackup(ctx, args[0], opts, os.Stdout)
+	},
+}
+
+var stackupDiff = &cobra.Command{
+	Use:     "diff <old.zip> <new.zip>",
+	Short:   "Generate layer-by-layer diff PDF between two gerber revisions",
+	Args:    cobra.ExactArgs(2),
+	Example: domain.BinaryName + ` stackup diff board_v1.zip board_v2.zip --name-a "v1.0" --name-b "v2.0"`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		nameA, _ := cmd.Flags().GetString("name-a")
+		nameB, _ := cmd.Flags().GetString("name-b")
+		dpi, _ := cmd.Flags().GetInt("dpi")
+		output, _ := cmd.Flags().GetString("output")
+		opts := types.StackupDiffOptions{
+			NameA:  nameA,
+			NameB:  nameB,
+			DPI:    dpi,
+			Output: output,
+		}
+		return Client.StackupDiff(ctx, args[0], args[1], opts, os.Stdout)
+	},
+}
+
 func init() {
 	DFM.Flags().StringP("project", "p", "", "Project ID")
 	Fabricate.Flags().StringP("project", "p", "", "Project ID")
@@ -229,6 +273,15 @@ func init() {
 	QC.Flags().StringP("project", "p", "", "Project ID")
 	Publish.Flags().StringP("project", "p", "", "Project ID")
 	Publish.Flags().StringP("version", "V", "", "Version string")
+
+	stackupGenerate.Flags().StringP("name", "n", "", "Board name for headers")
+	stackupGenerate.Flags().IntP("scale", "s", 0, "Scale factor")
+	stackupGenerate.Flags().StringP("output", "o", "", "Output PDF path")
+	stackupDiff.Flags().String("name-a", "", "Label for first revision")
+	stackupDiff.Flags().String("name-b", "", "Label for second revision")
+	stackupDiff.Flags().Int("dpi", 0, "Rasterization DPI (100-600)")
+	stackupDiff.Flags().StringP("output", "o", "", "Output PDF path")
+	Stackup.AddCommand(stackupGenerate, stackupDiff)
 }
 
 // =============================================================================
