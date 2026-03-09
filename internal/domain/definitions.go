@@ -165,6 +165,9 @@ const Endpoint_Tracker = V1Prefix + `/tracker`
 // COST MANAGEMENT
 // =============================================================================
 
+// Endpoint_CostsEstimate estimates pricing for parts
+const Endpoint_CostsEstimate = V1Prefix + `/costs/estimate`
+
 // Endpoint_COGS calculates Cost of Goods Sold
 const Endpoint_COGS = V1Prefix + `/costs/cogs`
 

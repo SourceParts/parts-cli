@@ -5,6 +5,7 @@ type BOMUploadOptions struct {
 	ProjectID   string
 	Wait        bool
 	ExtractLCSC bool
+	DFMCheck    bool
 }
 
 // BOMUploadResponse represents the API response from BOM upload

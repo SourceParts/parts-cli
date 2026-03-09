@@ -230,8 +230,8 @@ func (c *Client) Add(ctx context.Context, partNumber string, w io.Writer) error 
 	return err
 }
 
-// Search searches for parts
-func (c *Client) Search(ctx context.Context, query string, w io.Writer) error {
+// Search searches for parts with optional filters
+func (c *Client) Search(ctx context.Context, query string, opts types.SearchOptions, w io.Writer) error {
 	url := *c.Endpoint_Search
 	c.Logger.Printf("Request URL: %s", url)
 
@@ -242,7 +242,23 @@ func (c *Client) Search(ctx context.Context, query string, w io.Writer) error {
 
 	values := req.URL.Query()
 	values.Add("q", query)
-	values.Add("limit", "25")
+	limit := 25
+	if opts.Limit > 0 {
+		limit = opts.Limit
+	}
+	values.Add("limit", fmt.Sprintf("%d", limit))
+	if opts.InStock {
+		values.Add("in_stock", "true")
+	}
+	if opts.EUOnly {
+		values.Add("eu_only", "true")
+	}
+	if opts.USOnly {
+		values.Add("us_only", "true")
+	}
+	if opts.CNOnly {
+		values.Add("cn_only", "true")
+	}
 	req.URL.RawQuery = values.Encode()
 
 	c.Logger.Printf("Searching for: %s", query)
@@ -656,6 +672,44 @@ func mustJSON(s string) string {
 // Stub implementations for remaining methods
 // =============================================================================
 
+// DFMSubmit submits a DFM analysis referencing a BOM and/or project
+func (c *Client) DFMSubmit(ctx context.Context, bomID, projectID string, w io.Writer) error {
+	url := domain.Endpoint_ManufacturingDFM
+	c.Logger.Printf("Request URL: %s", url)
+
+	payload := map[string]string{}
+	if bomID != "" {
+		payload["bom_id"] = bomID
+	}
+	if projectID != "" {
+		payload["project_id"] = projectID
+	}
+
+	jsonBody, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("error marshaling request: %w", err)
+	}
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return err
+	}
+
+	c.Logger.Printf("Submitting DFM analysis (bom_id=%s, project_id=%s)", bomID, projectID)
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, res.Body)
+	return err
+}
+
 func (c *Client) DFM(ctx context.Context, input string, w io.Writer) error {
 	fmt.Fprintln(w, "Not implemented yet")
 	return nil
@@ -914,6 +968,55 @@ func (c *Client) Box(ctx context.Context, boxID string, w io.Writer) error {
 func (c *Client) Balance(ctx context.Context, w io.Writer) error {
 	fmt.Fprintln(w, "Not implemented yet")
 	return nil
+}
+
+// Price estimates pricing for a part at a given quantity
+func (c *Client) Price(ctx context.Context, partNumber string, opts types.PriceOptions, w io.Writer) error {
+	url := domain.Endpoint_CostsEstimate
+	c.Logger.Printf("Request URL: %s", url)
+
+	quantity := opts.Quantity
+	if quantity <= 0 {
+		quantity = 1
+	}
+	currency := opts.Currency
+	if currency == "" {
+		currency = "USD"
+	}
+
+	payload := map[string]interface{}{
+		"parts": []map[string]interface{}{
+			{
+				"part_number": partNumber,
+				"quantity":    quantity,
+			},
+		},
+		"currency": currency,
+	}
+
+	jsonBody, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("error marshaling request: %w", err)
+	}
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return err
+	}
+
+	c.Logger.Printf("Estimating price for %s (qty: %d, currency: %s)", partNumber, quantity, currency)
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, res.Body)
+	return err
 }
 
 func (c *Client) COGs(ctx context.Context, partNumber string, w io.Writer) error {

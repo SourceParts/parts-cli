@@ -88,6 +88,7 @@ func main() {
 		commands.Balance,
 		commands.COGs,
 		commands.Expense,
+		commands.Price,
 		// Workflow
 		commands.Note,
 		commands.Todo,

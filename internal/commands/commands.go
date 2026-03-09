@@ -1,7 +1,10 @@
 package commands
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 
 	"github.com/SourceParts/parts-cli/internal/types"
@@ -29,12 +32,32 @@ var Search = &cobra.Command{
 	Use:     "search <query>",
 	Short:   "Search for parts",
 	Args:    cobra.ExactArgs(1),
-	Example: domain.BinaryName + ` search "STM32F4"`,
+	Example: domain.BinaryName + ` search "STM32F4" --in-stock --eu-only`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		return Client.Search(ctx, args[0], os.Stdout)
+		inStock, _ := cmd.Flags().GetBool("in-stock")
+		euOnly, _ := cmd.Flags().GetBool("eu-only")
+		usOnly, _ := cmd.Flags().GetBool("us-only")
+		cnOnly, _ := cmd.Flags().GetBool("cn-only")
+		limit, _ := cmd.Flags().GetInt("limit")
+		opts := types.SearchOptions{
+			InStock: inStock,
+			EUOnly:  euOnly,
+			USOnly:  usOnly,
+			CNOnly:  cnOnly,
+			Limit:   limit,
+		}
+		return Client.Search(ctx, args[0], opts, os.Stdout)
 	},
+}
+
+func init() {
+	Search.Flags().Bool("in-stock", false, "Only show parts that are in stock")
+	Search.Flags().Bool("eu-only", false, "Only show parts from EU warehouses")
+	Search.Flags().Bool("us-only", false, "Only show parts from US warehouses")
+	Search.Flags().Bool("cn-only", false, "Only show parts from China warehouses")
+	Search.Flags().IntP("limit", "l", 25, "Maximum number of results")
 }
 
 var Datasheet = &cobra.Command{
@@ -87,16 +110,52 @@ var bomUpload = &cobra.Command{
 	Use:     "upload <file>",
 	Short:   "Upload a BOM file for processing",
 	Args:    cobra.ExactArgs(1),
-	Example: domain.BinaryName + ` bom upload assembly.xlsx`,
+	Example: domain.BinaryName + ` bom upload assembly.xlsx --dfm-check`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		projectID, _ := cmd.Flags().GetString("project")
+		dfmCheck, _ := cmd.Flags().GetBool("dfm-check")
 		opts := types.BOMUploadOptions{
 			ProjectID:   projectID,
 			ExtractLCSC: true,
+			DFMCheck:    dfmCheck,
 		}
-		return Client.BOMUpload(ctx, args[0], opts, os.Stdout)
+
+		if !dfmCheck {
+			return Client.BOMUpload(ctx, args[0], opts, os.Stdout)
+		}
+
+		// Upload BOM, poll for completion, then submit DFM
+		var uploadBuf bytes.Buffer
+		if err := Client.BOMUpload(ctx, args[0], opts, &uploadBuf); err != nil {
+			return err
+		}
+		fmt.Fprint(os.Stdout, uploadBuf.String())
+
+		var uploadResp types.BOMUploadResponse
+		if err := json.Unmarshal(uploadBuf.Bytes(), &uploadResp); err != nil {
+			return fmt.Errorf("failed to parse upload response: %w", err)
+		}
+
+		if uploadResp.JobID == "" {
+			return fmt.Errorf("no job ID in upload response — cannot poll for completion")
+		}
+
+		fmt.Fprintf(os.Stdout, "\nPolling BOM job %s...\n", uploadResp.JobID)
+		var statusBuf bytes.Buffer
+		if err := Client.PollBOMStatus(ctx, uploadResp.JobID, &statusBuf); err != nil {
+			return err
+		}
+
+		var statusResp types.BOMStatusResponse
+		if err := json.Unmarshal(statusBuf.Bytes(), &statusResp); err != nil {
+			return fmt.Errorf("failed to parse status response: %w", err)
+		}
+
+		bomID := statusResp.JobID
+		fmt.Fprintf(os.Stdout, "\nSubmitting DFM analysis for BOM %s...\n", bomID)
+		return Client.DFMSubmit(ctx, bomID, projectID, os.Stdout)
 	},
 }
 
@@ -114,6 +173,7 @@ var bomStatus = &cobra.Command{
 
 func init() {
 	bomUpload.Flags().StringP("project", "p", "", "Project ID to associate BOM with")
+	bomUpload.Flags().Bool("dfm-check", false, "Run DFM analysis after BOM processing completes")
 	BOM.AddCommand(bomUpload)
 	BOM.AddCommand(bomStatus)
 }
@@ -403,6 +463,29 @@ var Expense = &cobra.Command{
 		defer cancel()
 		return Client.Expense(ctx, "", os.Stdout)
 	},
+}
+
+var Price = &cobra.Command{
+	Use:     "price <part-number>",
+	Short:   "Estimate pricing for a part",
+	Args:    cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` price "ESP32-S3" --quantity 100`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		quantity, _ := cmd.Flags().GetInt("quantity")
+		currency, _ := cmd.Flags().GetString("currency")
+		opts := types.PriceOptions{
+			Quantity: quantity,
+			Currency: currency,
+		}
+		return Client.Price(ctx, args[0], opts, os.Stdout)
+	},
+}
+
+func init() {
+	Price.Flags().IntP("quantity", "n", 1, "Quantity to price")
+	Price.Flags().StringP("currency", "c", "USD", "Currency code (USD, EUR, etc.)")
 }
 
 // =============================================================================

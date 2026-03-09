@@ -17,7 +17,7 @@ type Client interface {
 
 	// Part operations
 	Add(ctx context.Context, partNumber string, w io.Writer) error
-	Search(ctx context.Context, query string, w io.Writer) error
+	Search(ctx context.Context, query string, opts types.SearchOptions, w io.Writer) error
 	Datasheet(ctx context.Context, partNumber string, w io.Writer) error
 	Marking(ctx context.Context, partNumber string, w io.Writer) error
 	Gather(ctx context.Context, partNumber string, w io.Writer) error
@@ -33,6 +33,7 @@ type Client interface {
 	Skeleton(ctx context.Context, w io.Writer) error
 
 	// Manufacturing
+	DFMSubmit(ctx context.Context, bomID, projectID string, w io.Writer) error
 	DFM(ctx context.Context, input string, w io.Writer) error
 	Fabricate(ctx context.Context, input string, w io.Writer) error
 	AOI(ctx context.Context, input string, w io.Writer) error
@@ -54,6 +55,7 @@ type Client interface {
 	Balance(ctx context.Context, w io.Writer) error
 	COGs(ctx context.Context, partNumber string, w io.Writer) error
 	Expense(ctx context.Context, input string, w io.Writer) error
+	Price(ctx context.Context, partNumber string, opts types.PriceOptions, w io.Writer) error
 
 	// Workflow
 	Note(ctx context.Context, note string, w io.Writer) error
