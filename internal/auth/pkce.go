@@ -157,6 +157,7 @@ func Refresh(ctx context.Context, refreshToken string) (*OAuthTokens, error) {
 		return nil, fmt.Errorf("failed to create refresh request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "parts-cli/auth")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -202,6 +203,7 @@ func exchangeCode(ctx context.Context, code, verifier, redirectURI string) (*OAu
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "parts-cli/auth")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
