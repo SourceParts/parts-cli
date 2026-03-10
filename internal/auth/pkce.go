@@ -82,26 +82,32 @@ func Login(ctx context.Context, out io.Writer) (*OAuthTokens, error) {
 
 		if s := q.Get("state"); s != state {
 			errCh <- fmt.Errorf("state mismatch in callback")
-			http.Error(w, "Authentication failed: state mismatch", http.StatusBadRequest)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintln(w, callbackErrorHTML("State Mismatch", "Authentication failed due to a state mismatch. Please try again.", "state"))
 			return
 		}
 
 		if errMsg := q.Get("error"); errMsg != "" {
 			desc := q.Get("error_description")
 			errCh <- fmt.Errorf("%s: %s", errMsg, desc)
-			http.Error(w, "Authentication failed: "+errMsg, http.StatusBadRequest)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintln(w, callbackErrorHTML("Authentication Failed", desc, errMsg))
 			return
 		}
 
 		code := q.Get("code")
 		if code == "" {
 			errCh <- fmt.Errorf("no authorization code received")
-			http.Error(w, "Authentication failed: no code", http.StatusBadRequest)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintln(w, callbackErrorHTML("No Authorization Code", "No authorization code was received. Please try again.", "no_code"))
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintln(w, `<!DOCTYPE html><html><body><h2>Authentication successful!</h2><p>You can close this tab and return to your terminal.</p></body></html>`)
+		fmt.Fprintln(w, callbackSuccessHTML())
 		codeCh <- code
 	})
 
@@ -268,6 +274,67 @@ func openBrowser(rawURL string) error {
 	default:
 		return exec.Command("xdg-open", rawURL).Start()
 	}
+}
+
+// callbackPageCSS is the shared CSS for OAuth callback pages,
+// matching the Source Parts / FastMCP branded page style.
+const callbackPageCSS = `
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  background:#f9fafb;color:#0a0a0a;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.container{background:#fff;border:1px solid #e5e7eb;border-radius:1rem;padding:3rem 2.5rem;
+  max-width:36rem;width:100%;text-align:center;box-shadow:0 4px 6px -1px rgba(0,0,0,.1),0 2px 4px -1px rgba(0,0,0,.06)}
+.logo{width:64px;height:auto;margin:0 auto 1.5rem}
+h1{font-size:1.5rem;font-weight:600;color:#111827;margin-bottom:1rem}
+.message{color:#374151;font-size:1rem;line-height:1.6}
+.icon{width:2rem;height:2rem;border-radius:.5rem;display:inline-flex;align-items:center;
+  justify-content:center;font-size:1.25rem;margin-bottom:1rem}
+.icon-success{background:rgba(16,185,129,.13);color:#10b981}
+.icon-error{background:rgba(239,68,68,.13);color:#ef4444}
+.info-box{background:#f0f9ff;border:1px solid #bae6fd;border-radius:.5rem;padding:1rem;
+  margin-top:1.5rem;color:#374151;font-size:.875rem;line-height:1.5}
+.error-box{background:#fef2f2;border:1px solid #fecaca;border-radius:.5rem;padding:1rem;
+  margin-top:1.5rem;color:#991b1b;font-size:.875rem;line-height:1.5}
+@media(max-width:640px){.container{padding:2rem 1.5rem}}
+`
+
+// iconURL returns the Source Parts icon URL for callback pages.
+func iconURL(event, reason string) string {
+	u := "https://source.parts/api/cli/icon?e=" + event + "&p=" + runtime.GOOS
+	if reason != "" {
+		u += "&r=" + reason
+	}
+	return u
+}
+
+// callbackSuccessHTML returns the branded success page shown after OAuth login.
+func callbackSuccessHTML() string {
+	return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authentication Successful - Source Parts</title>
+<style>` + callbackPageCSS + `</style></head>
+<body><div class="container">
+  <img class="logo" src="` + iconURL("success", "") + `" alt="Source Parts">
+  <div class="icon icon-success">&#10003;</div>
+  <h1>Authentication Successful</h1>
+  <p class="message">You can close this tab and return to your terminal.</p>
+  <div class="info-box">Your credentials have been saved securely to your system keychain.</div>
+</div></body></html>`
+}
+
+// callbackErrorHTML returns a branded error page for failed OAuth callbacks.
+func callbackErrorHTML(title, detail, reason string) string {
+	return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authentication Failed - Source Parts</title>
+<style>` + callbackPageCSS + `</style></head>
+<body><div class="container">
+  <img class="logo" src="` + iconURL("error", reason) + `" alt="Source Parts">
+  <div class="icon icon-error">&#10007;</div>
+  <h1>` + title + `</h1>
+  <p class="message">` + detail + `</p>
+  <div class="error-box">Please return to your terminal and try again.</div>
+</div></body></html>`
 }
 
 func extractIDTokenClaims(idToken string) (sub, email string, err error) {
