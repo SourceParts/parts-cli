@@ -30,6 +30,11 @@ type Client interface {
 
 	// Project operations
 	ProjectCreate(ctx context.Context, name, description string, w io.Writer) error
+	ProjectList(ctx context.Context, opts types.ProjectListOptions, w io.Writer) error
+	ProjectGet(ctx context.Context, projectID string, w io.Writer) error
+	ProjectDelete(ctx context.Context, projectID string, w io.Writer) error
+	ProjectECO(ctx context.Context, projectID string, data types.ECORequest, w io.Writer) error
+	ProjectTransfer(ctx context.Context, projectID, email string, w io.Writer) error
 	Skeleton(ctx context.Context, w io.Writer) error
 
 	// Manufacturing

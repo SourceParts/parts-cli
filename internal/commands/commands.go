@@ -227,9 +227,149 @@ var projectCreate = &cobra.Command{
 	},
 }
 
+var projectList = &cobra.Command{
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Short:   "List your projects",
+	Long:    `List all projects for the authenticated user.`,
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		limit, _ := cmd.Flags().GetInt("limit")
+		offset, _ := cmd.Flags().GetInt("offset")
+		status, _ := cmd.Flags().GetString("status")
+		opts := types.ProjectListOptions{
+			Limit:  limit,
+			Offset: offset,
+			Status: status,
+		}
+		return Client.ProjectList(ctx, opts, os.Stdout)
+	},
+	Example: domain.BinaryName + ` project list
+` + domain.BinaryName + ` project ls --limit 10
+` + domain.BinaryName + ` project list --status active`,
+}
+
+var projectGet = &cobra.Command{
+	Use:     "get <project-id>",
+	Aliases: []string{"show", "info"},
+	Short:   "Get project details",
+	Long:    `Get detailed information about a specific project by its ID.`,
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		return Client.ProjectGet(ctx, args[0], os.Stdout)
+	},
+	Example: domain.BinaryName + ` project get proj_abc123
+` + domain.BinaryName + ` project show proj_abc123`,
+}
+
+var projectDelete = &cobra.Command{
+	Use:   "delete <project-id>",
+	Short: "Delete a project",
+	Long: `Delete a project permanently. This cannot be undone.
+
+You will be prompted for confirmation unless --yes is specified.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		projectID := args[0]
+		yes, _ := cmd.Flags().GetBool("yes")
+		if !yes {
+			fmt.Printf("Delete project %s? This cannot be undone. [y/N] ", projectID)
+			var input string
+			fmt.Scanln(&input)
+			input = strings.TrimSpace(strings.ToLower(input))
+			if input != "y" && input != "yes" {
+				fmt.Println("Cancelled.")
+				return nil
+			}
+		}
+		return Client.ProjectDelete(ctx, projectID, os.Stdout)
+	},
+	Example: domain.BinaryName + ` project delete proj_abc123
+` + domain.BinaryName + ` project delete proj_abc123 --yes`,
+}
+
+var projectECO = &cobra.Command{
+	Use:   "eco <project-id>",
+	Short: "Create an Engineering Change Order",
+	Long: `Create an Engineering Change Order (ECO) for a project.
+
+An ECO tracks changes to a project's design, such as part substitutions,
+reference designator updates, or other modifications.
+
+The --changes flag accepts a path to a JSON file containing an array of
+change objects.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		title, _ := cmd.Flags().GetString("title")
+		description, _ := cmd.Flags().GetString("description")
+		changesFile, _ := cmd.Flags().GetString("changes")
+
+		ecoData := types.ECORequest{
+			Title:       title,
+			Description: description,
+		}
+
+		if changesFile != "" {
+			data, err := os.ReadFile(changesFile)
+			if err != nil {
+				return fmt.Errorf("failed to read changes file: %w", err)
+			}
+			var changes []any
+			if err := json.Unmarshal(data, &changes); err != nil {
+				return fmt.Errorf("invalid changes JSON: %w", err)
+			}
+			ecoData.Changes = changes
+		}
+
+		return Client.ProjectECO(ctx, args[0], ecoData, os.Stdout)
+	},
+	Example: domain.BinaryName + ` project eco proj_abc123 --title "Update capacitors"
+` + domain.BinaryName + ` project eco proj_abc123 --title "BOM revision" --changes changes.json`,
+}
+
+var projectTransfer = &cobra.Command{
+	Use:   "transfer <project-id>",
+	Short: "Transfer project ownership",
+	Long:  `Transfer ownership of a project to another user by email address.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		email, _ := cmd.Flags().GetString("email")
+		if email == "" {
+			return fmt.Errorf("--email is required")
+		}
+		return Client.ProjectTransfer(ctx, args[0], email, os.Stdout)
+	},
+	Example: domain.BinaryName + ` project transfer proj_abc123 --email user@example.com`,
+}
+
 func init() {
 	projectCreate.Flags().StringP("description", "d", "", "Project description")
+	projectList.Flags().Int("limit", 20, "Maximum number of results")
+	projectList.Flags().Int("offset", 0, "Number of results to skip")
+	projectList.Flags().String("status", "", "Filter by status (active, archived)")
+	projectDelete.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
+	projectECO.Flags().String("title", "", "ECO title (required)")
+	projectECO.Flags().String("description", "", "ECO description")
+	projectECO.Flags().String("changes", "", "Path to JSON file with changes array")
+	projectECO.MarkFlagRequired("title")
+	projectTransfer.Flags().String("email", "", "Email of new owner (required)")
+	projectTransfer.MarkFlagRequired("email")
 	Project.AddCommand(projectCreate)
+	Project.AddCommand(projectList)
+	Project.AddCommand(projectGet)
+	Project.AddCommand(projectDelete)
+	Project.AddCommand(projectECO)
+	Project.AddCommand(projectTransfer)
 }
 
 // =============================================================================

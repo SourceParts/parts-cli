@@ -512,6 +512,222 @@ func (c *Client) ProjectCreate(ctx context.Context, name, description string, w 
 	return err
 }
 
+// ProjectList lists all projects for the authenticated user
+func (c *Client) ProjectList(ctx context.Context, opts types.ProjectListOptions, w io.Writer) error {
+	url := domain.Endpoint_ProjectList
+
+	sep := "?"
+	if opts.Limit > 0 {
+		url += fmt.Sprintf("%slimit=%d", sep, opts.Limit)
+		sep = "&"
+	}
+	if opts.Offset > 0 {
+		url += fmt.Sprintf("%soffset=%d", sep, opts.Offset)
+		sep = "&"
+	}
+	if opts.Status != "" {
+		url += fmt.Sprintf("%sstatus=%s", sep, opts.Status)
+	}
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response: %w", err)
+	}
+
+	var resp struct {
+		Status string `json:"status"`
+		Data   struct {
+			Projects []struct {
+				ID        string `json:"id"`
+				Name      string `json:"name"`
+				Status    string `json:"status"`
+				CreatedAt string `json:"created_at"`
+			} `json:"projects"`
+			Total  int `json:"total"`
+			Limit  int `json:"limit"`
+			Offset int `json:"offset"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		_, err = w.Write(data)
+		return err
+	}
+
+	if len(resp.Data.Projects) == 0 {
+		fmt.Fprintln(w, "No projects found.")
+		return nil
+	}
+
+	fmt.Fprintf(w, "Projects (%d total)\n\n", resp.Data.Total)
+	fmt.Fprintf(w, "  %-36s  %-30s  %-10s  %s\n", "ID", "NAME", "STATUS", "CREATED")
+	fmt.Fprintf(w, "  %-36s  %-30s  %-10s  %s\n", "------------------------------------", "------------------------------", "----------", "----------")
+	for _, p := range resp.Data.Projects {
+		created := p.CreatedAt
+		if len(created) > 10 {
+			created = created[:10]
+		}
+		name := p.Name
+		if len(name) > 30 {
+			name = name[:27] + "..."
+		}
+		fmt.Fprintf(w, "  %-36s  %-30s  %-10s  %s\n", p.ID, name, p.Status, created)
+	}
+
+	return nil
+}
+
+// ProjectGet gets detailed information about a specific project
+func (c *Client) ProjectGet(ctx context.Context, projectID string, w io.Writer) error {
+	url := fmt.Sprintf(domain.Endpoint_ProjectGet, projectID)
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response: %w", err)
+	}
+
+	var resp struct {
+		Status string `json:"status"`
+		Data   struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Status      string `json:"status"`
+			UserID      string `json:"user_id"`
+			CreatedAt   string `json:"created_at"`
+			UpdatedAt   string `json:"updated_at"`
+			PartsCount  int    `json:"parts_count"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		_, err = w.Write(data)
+		return err
+	}
+
+	d := resp.Data
+	fmt.Fprintf(w, "Project: %s\n\n", d.Name)
+	fmt.Fprintf(w, "  ID:          %s\n", d.ID)
+	if d.Description != "" {
+		fmt.Fprintf(w, "  Description: %s\n", d.Description)
+	}
+	fmt.Fprintf(w, "  Status:      %s\n", d.Status)
+	fmt.Fprintf(w, "  Owner:       %s\n", d.UserID)
+	fmt.Fprintf(w, "  Created:     %s\n", d.CreatedAt)
+	fmt.Fprintf(w, "  Updated:     %s\n", d.UpdatedAt)
+	if d.PartsCount > 0 {
+		fmt.Fprintf(w, "  Parts:       %d\n", d.PartsCount)
+	}
+
+	return nil
+}
+
+// ProjectDelete deletes a project
+func (c *Client) ProjectDelete(ctx context.Context, projectID string, w io.Writer) error {
+	url := fmt.Sprintf(domain.Endpoint_ProjectDelete, projectID)
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(w, "Project %s deleted successfully.\n", projectID)
+	return nil
+}
+
+// ProjectECO creates an Engineering Change Order for a project
+func (c *Client) ProjectECO(ctx context.Context, projectID string, data types.ECORequest, w io.Writer) error {
+	url := fmt.Sprintf(domain.Endpoint_ProjectECO, projectID)
+
+	bodyJSON, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("error marshaling ECO data: %w", err)
+	}
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return err
+	}
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, res.Body)
+	return err
+}
+
+// ProjectTransfer transfers project ownership to another user by email
+func (c *Client) ProjectTransfer(ctx context.Context, projectID, email string, w io.Writer) error {
+	url := fmt.Sprintf(domain.Endpoint_ProjectTransfer, projectID)
+
+	body := fmt.Sprintf(`{"email": %q}`, email)
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, url, bytes.NewBufferString(body))
+	if err != nil {
+		return err
+	}
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, res.Body)
+	return err
+}
+
 // Skeleton creates a project skeleton
 func (c *Client) Skeleton(ctx context.Context, w io.Writer) error {
 	fmt.Fprintln(w, "Not implemented yet")

@@ -73,6 +73,12 @@ const Endpoint_ProjectRelease = V1Prefix + `/projects/%s/release`
 // Endpoint_ProjectTag creates a project tag
 const Endpoint_ProjectTag = V1Prefix + `/projects/%s/tag`
 
+// Endpoint_ProjectDelete deletes a project
+const Endpoint_ProjectDelete = V1Prefix + `/projects/%s`
+
+// Endpoint_ProjectTransfer transfers project ownership to another user
+const Endpoint_ProjectTransfer = V1Prefix + `/projects/%s/transfer`
+
 // Endpoint_ProjectSkeleton creates a project skeleton
 const Endpoint_ProjectSkeleton = V1Prefix + `/projects/skeleton`
 
