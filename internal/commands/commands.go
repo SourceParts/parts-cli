@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"strconv"
+	"strings"
 
-	"github.com/SourceParts/parts-cli/internal/types"
 	"github.com/SourceParts/parts-cli/internal/domain"
+	"github.com/SourceParts/parts-cli/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -41,6 +44,7 @@ var Search = &cobra.Command{
 		usOnly, _ := cmd.Flags().GetBool("us-only")
 		cnOnly, _ := cmd.Flags().GetBool("cn-only")
 		limit, _ := cmd.Flags().GetInt("limit")
+		jsonOutput, _ := cmd.Flags().GetBool("json")
 		opts := types.SearchOptions{
 			InStock: inStock,
 			EUOnly:  euOnly,
@@ -48,7 +52,21 @@ var Search = &cobra.Command{
 			CNOnly:  cnOnly,
 			Limit:   limit,
 		}
-		return Client.Search(ctx, args[0], opts, os.Stdout)
+		var buf bytes.Buffer
+		if err := Client.Search(ctx, args[0], opts, &buf); err != nil {
+			return err
+		}
+		data, err := io.ReadAll(&buf)
+		if err != nil {
+			return fmt.Errorf("error reading response: %w", err)
+		}
+		if jsonOutput {
+			os.Stdout.Write(data)
+			fmt.Println()
+			return nil
+		}
+		printSearchResultsPublic(data)
+		return nil
 	},
 }
 
@@ -58,6 +76,7 @@ func init() {
 	Search.Flags().Bool("us-only", false, "Only show parts from US warehouses")
 	Search.Flags().Bool("cn-only", false, "Only show parts from China warehouses")
 	Search.Flags().IntP("limit", "l", 25, "Maximum number of results")
+	Search.Flags().Bool("json", false, "Output raw JSON")
 }
 
 var Datasheet = &cobra.Command{
@@ -475,17 +494,33 @@ var Price = &cobra.Command{
 		defer cancel()
 		quantity, _ := cmd.Flags().GetInt("quantity")
 		currency, _ := cmd.Flags().GetString("currency")
+		jsonOutput, _ := cmd.Flags().GetBool("json")
 		opts := types.PriceOptions{
 			Quantity: quantity,
 			Currency: currency,
 		}
-		return Client.Price(ctx, args[0], opts, os.Stdout)
+		var buf bytes.Buffer
+		if err := Client.Price(ctx, args[0], opts, &buf); err != nil {
+			return err
+		}
+		data, err := io.ReadAll(&buf)
+		if err != nil {
+			return fmt.Errorf("error reading response: %w", err)
+		}
+		if jsonOutput {
+			os.Stdout.Write(data)
+			fmt.Println()
+			return nil
+		}
+		printPriceResultsPublic(data)
+		return nil
 	},
 }
 
 func init() {
 	Price.Flags().IntP("quantity", "n", 1, "Quantity to price")
 	Price.Flags().StringP("currency", "c", "USD", "Currency code (USD, EUR, etc.)")
+	Price.Flags().Bool("json", false, "Output raw JSON")
 }
 
 // =============================================================================
@@ -678,7 +713,7 @@ var Release = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		return Client.Release(ctx, args[0], os.Stdout)
+		return Client.Release(ctx, args[0], types.ReleaseOptions{}, os.Stdout)
 	},
 }
 
@@ -690,4 +725,74 @@ var Test = &cobra.Command{
 		defer cancel()
 		return Client.Test(ctx, "", os.Stdout)
 	},
+}
+
+// =============================================================================
+// Output Formatting
+// =============================================================================
+
+func printSearchResultsPublic(data []byte) {
+	var resp types.SearchResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		os.Stdout.Write(data)
+		fmt.Println()
+		return
+	}
+
+	fmt.Printf("Search: %q (%d results)\n", resp.Data.Query, resp.Data.Total)
+
+	if len(resp.Data.Parts) == 0 {
+		fmt.Println("\n  No parts found.")
+		return
+	}
+
+	fmt.Println()
+	for _, p := range resp.Data.Parts {
+		price := "—"
+		if p.Price != nil && *p.Price != "" {
+			price = "$" + *p.Price
+		}
+		fmt.Printf("  %-28s %s\n", p.Name, p.Manufacturer)
+		fmt.Printf("    %s  %s  %s  Stock: %s\n\n", p.SKU, p.Category, price, fmtNumber(p.StockQuantity))
+	}
+}
+
+func printPriceResultsPublic(data []byte) {
+	var resp types.PriceResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		os.Stdout.Write(data)
+		fmt.Println()
+		return
+	}
+
+	currency := resp.Data.Currency
+	if currency == "" {
+		currency = "USD"
+	}
+
+	fmt.Printf("Price Estimate (%s)\n\n", currency)
+
+	for _, p := range resp.Data.Parts {
+		avail := "unavailable"
+		if p.Available {
+			avail = "available"
+		}
+		fmt.Printf("  %-14s qty: %-6d $%.4f/ea    $%.2f    %s\n", p.PartNumber, p.Quantity, p.UnitPrice, p.Total, avail)
+	}
+
+	fmt.Printf("\nTotal: $%.2f\n", resp.Data.TotalEstimate)
+}
+
+func fmtNumber(n int) string {
+	s := strconv.Itoa(n)
+	if len(s) <= 3 {
+		return s
+	}
+	var parts []string
+	for len(s) > 3 {
+		parts = append([]string{s[len(s)-3:]}, parts...)
+		s = s[:len(s)-3]
+	}
+	parts = append([]string{s}, parts...)
+	return strings.Join(parts, ",")
 }

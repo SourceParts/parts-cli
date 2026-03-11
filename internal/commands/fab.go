@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/SourceParts/parts-cli/internal/domain"
+	"github.com/SourceParts/parts-cli/internal/types"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
@@ -590,20 +591,104 @@ name derived from the board prefix.`,
 // Fabrication Release
 // =============================================================================
 
-var fabRelease = &cobra.Command{
-	Use:   "release <part-number>",
-	Short: "Create a fabrication/assembly release package",
-	Long: `Generate a complete fabrication release package including gerbers, BOM, and assembly files.
+var (
+	releaseVersion string
+	releaseNotes   string
+	releaseBOM     bool
+	releaseAsm     bool
+	releaseOutput  string
+)
 
-This command creates a manufacturing-ready package with all necessary documentation.`,
-	Args:    cobra.ExactArgs(1),
-	Example: domain.BinaryName + ` fab release STM32F407VGT6`,
+var fabRelease = &cobra.Command{
+	Use:   "release <gerber-zip>",
+	Short: "Create a fabrication/assembly release package",
+	Long: `Upload gerbers and create a manufacturing-ready release package.
+Validates gerbers, runs DRC checks, and packages all manufacturing files.
+
+The input can be a .zip archive of gerber files or a directory containing them.
+If a directory is given, it will be zipped automatically before upload.`,
+	Args: cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` fab release board_v7.zip
+` + domain.BinaryName + ` fab release gerbers/ --version 1.0.0 --bom --assembly`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		partNumber := args[0]
-		fmt.Printf("Creating fabrication release for: %s\n", partNumber)
-		fmt.Println("(This feature is under development)")
-		return fmt.Errorf("fabrication release generation not yet implemented")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		input := args[0]
+
+		// Check input exists
+		info, err := os.Stat(input)
+		if err != nil {
+			return fmt.Errorf("input not found: %s", input)
+		}
+
+		zipPath := input
+
+		// If input is a directory, zip it first
+		if info.IsDir() {
+			fmt.Printf("Zipping directory: %s\n", input)
+			tmpZip, err := zipDirectory(input)
+			if err != nil {
+				return fmt.Errorf("failed to zip directory: %w", err)
+			}
+			defer os.Remove(tmpZip)
+			zipPath = tmpZip
+		} else if !strings.HasSuffix(strings.ToLower(input), ".zip") {
+			return fmt.Errorf("input must be a .zip file or a directory: %s", input)
+		}
+
+		fmt.Printf("Creating release package for: %s\n", filepath.Base(input))
+
+		opts := types.ReleaseOptions{
+			Version:    releaseVersion,
+			Notes:      releaseNotes,
+			IncludeBOM: releaseBOM,
+			IncludeAsm: releaseAsm,
+			Output:     releaseOutput,
+		}
+
+		return Client.Release(ctx, zipPath, opts, os.Stdout)
 	},
+}
+
+// zipDirectory creates a temporary zip file from a directory's contents
+func zipDirectory(dir string) (string, error) {
+	tmpFile, err := os.CreateTemp("", "parts-release-*.zip")
+	if err != nil {
+		return "", err
+	}
+	defer tmpFile.Close()
+
+	zipWriter := zip.NewWriter(tmpFile)
+	defer zipWriter.Close()
+
+	return tmpFile.Name(), filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+
+		w, err := zipWriter.Create(relPath)
+		if err != nil {
+			return err
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		_, err = io.Copy(w, f)
+		return err
+	})
 }
 
 // =============================================================================
@@ -912,6 +997,13 @@ func init() {
 	fabQuote.Flags().StringVar(&quotePriority, "priority", "normal", "Priority level (low, normal, high)")
 	fabQuote.Flags().StringVar(&quoteBom, "bom", "", "BOM file path for assembly quote")
 	fabQuote.Flags().BoolVar(&quoteAssembly, "assembly", false, "Include assembly cost (requires --bom)")
+
+	// Release command flags
+	fabRelease.Flags().StringVar(&releaseVersion, "version", "", "Version tag for the release")
+	fabRelease.Flags().StringVar(&releaseNotes, "notes", "", "Release notes")
+	fabRelease.Flags().BoolVar(&releaseBOM, "bom", false, "Include BOM in release package")
+	fabRelease.Flags().BoolVar(&releaseAsm, "assembly", false, "Include assembly files in release package")
+	fabRelease.Flags().StringVarP(&releaseOutput, "output", "o", "", "Output directory for downloaded package")
 
 	// Machine load command flags
 	fabMachineLoad.Flags().StringVar(&machineLoadFile, "file", "", "Source machine program file")

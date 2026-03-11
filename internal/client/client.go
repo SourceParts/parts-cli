@@ -1104,9 +1104,128 @@ func (c *Client) Tag(ctx context.Context, tag string, w io.Writer) error {
 	return nil
 }
 
-func (c *Client) Release(ctx context.Context, version string, w io.Writer) error {
-	fmt.Fprintln(w, "Not implemented yet")
-	return nil
+// Release uploads gerbers and creates a manufacturing-ready release package.
+// It POSTs the file to the publish endpoint, then polls for job completion.
+func (c *Client) Release(ctx context.Context, input string, opts types.ReleaseOptions, w io.Writer) error {
+	fileContent, err := os.ReadFile(input)
+	if err != nil {
+		return fmt.Errorf("error reading file: %w", err)
+	}
+
+	// Create multipart form
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	part, err := writer.CreateFormFile("file", filepath.Base(input))
+	if err != nil {
+		return fmt.Errorf("error creating form file: %w", err)
+	}
+	if _, err := part.Write(fileContent); err != nil {
+		return fmt.Errorf("error writing file to form: %w", err)
+	}
+
+	if opts.Version != "" {
+		_ = writer.WriteField("version", opts.Version)
+	}
+	if opts.Notes != "" {
+		_ = writer.WriteField("release_notes", opts.Notes)
+	}
+	if opts.IncludeBOM {
+		_ = writer.WriteField("include_bom", "true")
+	}
+	if opts.IncludeAsm {
+		_ = writer.WriteField("include_assembly", "true")
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("error closing writer: %w", err)
+	}
+
+	url := domain.Endpoint_ManufacturingPublish
+	c.Logger.Printf("Request URL: %s", url)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	c.Logger.Printf("Uploading release package: %s", filepath.Base(input))
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	// Parse initial response for job ID
+	var releaseResp types.ReleaseResponse
+	if err := json.NewDecoder(res.Body).Decode(&releaseResp); err != nil {
+		return fmt.Errorf("error parsing response: %w", err)
+	}
+
+	jobID := releaseResp.Data.JobID
+	if jobID == "" {
+		return fmt.Errorf("no job ID returned from API")
+	}
+
+	c.Logger.Printf("Job ID: %s", jobID)
+
+	// Poll for completion
+	pollInterval := 2 * time.Second
+	pollTimeout := 5 * time.Minute
+
+	pollCtx, cancel := context.WithTimeout(ctx, pollTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-pollCtx.Done():
+			return fmt.Errorf("timeout waiting for release processing")
+		case <-ticker.C:
+			statusURL := fmt.Sprintf(domain.Endpoint_ManufacturingStatus, jobID)
+			statusReq, err := c.newAuthenticatedRequestWithContext(pollCtx, http.MethodGet, statusURL, nil)
+			if err != nil {
+				return err
+			}
+
+			statusRes, err := c.Client.Do(statusReq)
+			if err != nil {
+				return fmt.Errorf("error checking status: %w", err)
+			}
+
+			var status types.ReleaseStatusResponse
+			if err := json.NewDecoder(statusRes.Body).Decode(&status); err != nil {
+				statusRes.Body.Close()
+				return fmt.Errorf("error parsing status: %w", err)
+			}
+			statusRes.Body.Close()
+
+			switch status.Status {
+			case "completed":
+				fmt.Fprintf(w, "Gerbers validated. %d DRC errors.\n", status.Data.DRCErrors)
+				if status.Data.PackageURL != "" {
+					fmt.Fprintf(w, "Package: %s\n", status.Data.PackageURL)
+				}
+				fmt.Fprintln(w, "validated. quoted. ordered.")
+				return nil
+			case "error":
+				return fmt.Errorf("release processing failed: %s", status.Error)
+			default:
+				c.Logger.Printf("Status: %s (progress: %d%%)", status.Status, status.Progress)
+			}
+		}
+	}
 }
 
 func (c *Client) Test(ctx context.Context, input string, w io.Writer) error {

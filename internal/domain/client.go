@@ -86,6 +86,6 @@ type Client interface {
 	Pull(ctx context.Context, input string, w io.Writer) error
 	Push(ctx context.Context, input string, w io.Writer) error
 	Tag(ctx context.Context, tag string, w io.Writer) error
-	Release(ctx context.Context, version string, w io.Writer) error
+	Release(ctx context.Context, input string, opts types.ReleaseOptions, w io.Writer) error
 	Test(ctx context.Context, input string, w io.Writer) error
 }
