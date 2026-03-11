@@ -106,13 +106,20 @@ var Marking = &cobra.Command{
 var Gather = &cobra.Command{
 	Use:     "gather <part-number>",
 	Short:   "Gather comprehensive information about a part",
-	Args:    cobra.ExactArgs(1),
-	Example: domain.BinaryName + ` gather STM32F407VGT6`,
+	Long: `Fetch all available data for a part in a single request: details,
+datasheet, pricing, and alternatives.`,
+	Args: cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` gather STM32F411CEU6
+` + domain.BinaryName + ` gather STM32F411CEU6 --everything`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		return Client.Gather(ctx, args[0], os.Stdout)
 	},
+}
+
+func init() {
+	Gather.Flags().Bool("everything", false, "Include all available data (default behavior)")
 }
 
 // =============================================================================
