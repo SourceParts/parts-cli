@@ -338,18 +338,45 @@ change objects.`,
 var projectTransfer = &cobra.Command{
 	Use:   "transfer <project-id>",
 	Short: "Transfer project ownership",
-	Long:  `Transfer ownership of a project to another user by email address.`,
-	Args:  cobra.ExactArgs(1),
+	Long: `Transfer ownership of a project to another user by email address.
+
+This is irreversible — the new owner will have full control of the project
+and you will lose access. You will be prompted for confirmation unless
+--yes is specified.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		projectID := args[0]
 		email, _ := cmd.Flags().GetString("email")
 		if email == "" {
 			return fmt.Errorf("--email is required")
 		}
-		return Client.ProjectTransfer(ctx, args[0], email, os.Stdout)
+		yes, _ := cmd.Flags().GetBool("yes")
+
+		if !yes {
+			// Fetch project details to show what's being transferred
+			var buf bytes.Buffer
+			if err := Client.ProjectGet(ctx, projectID, &buf); err != nil {
+				return fmt.Errorf("failed to look up project: %w", err)
+			}
+			fmt.Print(buf.String())
+			fmt.Println()
+			fmt.Printf("Transfer this project to %s?\n", email)
+			fmt.Printf("This is irreversible — you will lose ownership. [y/N] ")
+			var input string
+			fmt.Scanln(&input)
+			input = strings.TrimSpace(strings.ToLower(input))
+			if input != "y" && input != "yes" {
+				fmt.Println("Cancelled.")
+				return nil
+			}
+		}
+
+		return Client.ProjectTransfer(ctx, projectID, email, os.Stdout)
 	},
-	Example: domain.BinaryName + ` project transfer proj_abc123 --email user@example.com`,
+	Example: domain.BinaryName + ` project transfer proj_abc123 --email user@example.com
+` + domain.BinaryName + ` project transfer proj_abc123 --email user@example.com --yes`,
 }
 
 func init() {
@@ -363,6 +390,7 @@ func init() {
 	projectECO.Flags().String("changes", "", "Path to JSON file with changes array")
 	projectECO.MarkFlagRequired("title")
 	projectTransfer.Flags().String("email", "", "Email of new owner (required)")
+	projectTransfer.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 	projectTransfer.MarkFlagRequired("email")
 	Project.AddCommand(projectCreate)
 	Project.AddCommand(projectList)
