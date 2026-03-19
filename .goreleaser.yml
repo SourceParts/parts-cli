@@ -42,6 +42,7 @@ brews:
     repository:
       owner: SourceParts
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://source.parts
     description: CLI for Source Parts - Electronic Component Intelligence Platform
     license: Polyform-Shield-1.0.0
