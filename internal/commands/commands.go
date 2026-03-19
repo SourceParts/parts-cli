@@ -20,15 +20,37 @@ import (
 // =============================================================================
 
 var Add = &cobra.Command{
-	Use:     "add <part-number>",
-	Short:   "Add a part to the database",
-	Args:    cobra.ExactArgs(1),
-	Example: domain.BinaryName + ` add STM32F407VGT6`,
+	Use:   "add <part-number>",
+	Short: "Add a part to the database",
+	Args:  cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` add STM32F407VGT6
+` + domain.BinaryName + ` add STM32F407VGT6 --manufacturer STMicroelectronics --category Microcontrollers
+` + domain.BinaryName + ` add RC0603FR-0710KL --value 10k --package 0603`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		return Client.Add(ctx, args[0], os.Stdout)
+		manufacturer, _ := cmd.Flags().GetString("manufacturer")
+		description, _ := cmd.Flags().GetString("description")
+		category, _ := cmd.Flags().GetString("category")
+		pkg, _ := cmd.Flags().GetString("package")
+		value, _ := cmd.Flags().GetString("value")
+		opts := types.AddOptions{
+			Manufacturer: manufacturer,
+			Description:  description,
+			Category:     category,
+			Package:      pkg,
+			Value:        value,
+		}
+		return Client.Add(ctx, args[0], opts, os.Stdout)
 	},
+}
+
+func init() {
+	Add.Flags().StringP("manufacturer", "m", "", "Manufacturer name")
+	Add.Flags().StringP("description", "d", "", "Part description")
+	Add.Flags().StringP("category", "c", "", "Part category")
+	Add.Flags().String("package", "", "Package/footprint (e.g., 0603, LQFP100)")
+	Add.Flags().String("value", "", "Component value (e.g., 10k, 100nF)")
 }
 
 var Search = &cobra.Command{
@@ -77,18 +99,6 @@ func init() {
 	Search.Flags().Bool("cn-only", false, "Only show parts from China warehouses")
 	Search.Flags().IntP("limit", "l", 25, "Maximum number of results")
 	Search.Flags().Bool("json", false, "Output raw JSON")
-}
-
-var Datasheet = &cobra.Command{
-	Use:     "datasheet <part-number>",
-	Short:   "Get datasheet for a part",
-	Args:    cobra.ExactArgs(1),
-	Example: domain.BinaryName + ` datasheet STM32F407VGT6`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		return Client.Datasheet(ctx, args[0], os.Stdout)
-	},
 }
 
 var Marking = &cobra.Command{

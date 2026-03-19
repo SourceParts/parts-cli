@@ -16,7 +16,7 @@ type Client interface {
 	SetAPIKey(key string)
 
 	// Part operations
-	Add(ctx context.Context, partNumber string, w io.Writer) error
+	Add(ctx context.Context, partNumber string, opts types.AddOptions, w io.Writer) error
 	Search(ctx context.Context, query string, opts types.SearchOptions, w io.Writer) error
 	Datasheet(ctx context.Context, partNumber string, w io.Writer) error
 	Marking(ctx context.Context, partNumber string, w io.Writer) error
