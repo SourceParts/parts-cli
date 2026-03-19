@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/SourceParts/parts-cli/internal/auth"
 	"github.com/zalando/go-keyring"
@@ -12,10 +13,20 @@ const (
 	// KeyringService is the service name used in the system keychain
 	KeyringService = "parts-cli"
 	// KeyringUser is the user/account name used in the system keychain
-	KeyringUser       = "api-key"
-	keychainOAuth     = "oauth-tokens"
-	keychainUpdateCfg = "update-config"
+	KeyringUser          = "api-key"
+	keychainOAuthAccess  = "oauth-access-token"
+	keychainOAuthRefresh = "oauth-refresh-token"
+	keychainOAuthMeta    = "oauth-metadata"
+	keychainUpdateCfg    = "update-config"
 )
+
+// oauthMeta holds the non-JWT fields of OAuthTokens, stored as a small JSON blob.
+type oauthMeta struct {
+	IDToken   string    `json:"id_token"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Sub       string    `json:"sub"`
+	Email     string    `json:"email"`
+}
 
 // SaveAPIKey saves the API key to the system keychain.
 // Uses platform-specific secure storage:
@@ -65,21 +76,66 @@ func HasAPIKey() bool {
 }
 
 // SaveOAuthTokens saves Auth0 OAuth tokens to the system keychain.
+// Tokens are split across separate keychain entries to stay under
+// the macOS Keychain per-item size limit.
 func SaveOAuthTokens(tokens *auth.OAuthTokens) error {
-	data, err := json.Marshal(tokens)
-	if err != nil {
-		return fmt.Errorf("failed to encode OAuth tokens: %w", err)
+	if err := keyring.Set(KeyringService, keychainOAuthAccess, tokens.AccessToken); err != nil {
+		return fmt.Errorf("failed to save access token to keychain: %w", err)
 	}
-	if err := keyring.Set(KeyringService, keychainOAuth, string(data)); err != nil {
-		return fmt.Errorf("failed to save OAuth tokens to keychain: %w", err)
+	if err := keyring.Set(KeyringService, keychainOAuthRefresh, tokens.RefreshToken); err != nil {
+		return fmt.Errorf("failed to save refresh token to keychain: %w", err)
+	}
+	meta := oauthMeta{
+		IDToken:   tokens.IDToken,
+		ExpiresAt: tokens.ExpiresAt,
+		Sub:       tokens.Sub,
+		Email:     tokens.Email,
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("failed to encode OAuth metadata: %w", err)
+	}
+	if err := keyring.Set(KeyringService, keychainOAuthMeta, string(data)); err != nil {
+		return fmt.Errorf("failed to save OAuth metadata to keychain: %w", err)
 	}
 	return nil
 }
 
 // LoadOAuthTokens retrieves Auth0 OAuth tokens from the system keychain.
 // Returns nil, nil if no tokens are stored.
+// Falls back to the legacy single-entry format for backward compatibility.
 func LoadOAuthTokens() (*auth.OAuthTokens, error) {
-	data, err := keyring.Get(KeyringService, keychainOAuth)
+	access, err := keyring.Get(KeyringService, keychainOAuthAccess)
+	if err == keyring.ErrNotFound {
+		return loadLegacyOAuthTokens()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to load access token from keychain: %w", err)
+	}
+
+	refresh, _ := keyring.Get(KeyringService, keychainOAuthRefresh)
+
+	metaStr, err := keyring.Get(KeyringService, keychainOAuthMeta)
+	if err != nil && err != keyring.ErrNotFound {
+		return nil, fmt.Errorf("failed to load OAuth metadata from keychain: %w", err)
+	}
+
+	tokens := &auth.OAuthTokens{AccessToken: access, RefreshToken: refresh}
+	if metaStr != "" {
+		var meta oauthMeta
+		if err := json.Unmarshal([]byte(metaStr), &meta); err == nil {
+			tokens.IDToken = meta.IDToken
+			tokens.ExpiresAt = meta.ExpiresAt
+			tokens.Sub = meta.Sub
+			tokens.Email = meta.Email
+		}
+	}
+	return tokens, nil
+}
+
+// loadLegacyOAuthTokens reads the old single-entry "oauth-tokens" format.
+func loadLegacyOAuthTokens() (*auth.OAuthTokens, error) {
+	data, err := keyring.Get(KeyringService, "oauth-tokens")
 	if err != nil {
 		if err == keyring.ErrNotFound {
 			return nil, nil
@@ -94,10 +150,13 @@ func LoadOAuthTokens() (*auth.OAuthTokens, error) {
 }
 
 // DeleteOAuthTokens removes Auth0 OAuth tokens from the system keychain.
+// Cleans up both the split entries and the legacy single-entry format.
 func DeleteOAuthTokens() error {
-	err := keyring.Delete(KeyringService, keychainOAuth)
-	if err != nil && err != keyring.ErrNotFound {
-		return fmt.Errorf("failed to delete OAuth tokens from keychain: %w", err)
+	for _, acct := range []string{keychainOAuthAccess, keychainOAuthRefresh, keychainOAuthMeta, "oauth-tokens"} {
+		err := keyring.Delete(KeyringService, acct)
+		if err != nil && err != keyring.ErrNotFound {
+			return fmt.Errorf("failed to delete %s from keychain: %w", acct, err)
+		}
 	}
 	return nil
 }
