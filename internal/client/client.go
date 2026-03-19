@@ -202,18 +202,38 @@ func (c *Client) Auth(ctx context.Context, apiKey string, w io.Writer) error {
 // =============================================================================
 
 // Add adds a part to the database
-func (c *Client) Add(ctx context.Context, partNumber string, w io.Writer) error {
+func (c *Client) Add(ctx context.Context, partNumber string, opts types.AddOptions, w io.Writer) error {
 	url := *c.Endpoint_Add
 	c.Logger.Printf("Request URL: %s", url)
 
-	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, url, nil)
+	// Build JSON body
+	body := map[string]string{"part_number": partNumber}
+	if opts.Manufacturer != "" {
+		body["manufacturer"] = opts.Manufacturer
+	}
+	if opts.Description != "" {
+		body["description"] = opts.Description
+	}
+	if opts.Category != "" {
+		body["category"] = opts.Category
+	}
+	if opts.Package != "" {
+		body["package"] = opts.Package
+	}
+	if opts.Value != "" {
+		body["value"] = opts.Value
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("error encoding request body: %w", err)
+	}
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return err
 	}
-
-	values := req.URL.Query()
-	values.Add("p", partNumber)
-	req.URL.RawQuery = values.Encode()
+	req.Header.Set("Content-Type", "application/json")
 
 	c.Logger.Printf("Adding part: %s", partNumber)
 	res, err := c.Client.Do(req)
