@@ -16,7 +16,29 @@ struct ConversationPanelView: View {
             HStack {
                 Text("Page \(appState.currentPage + 1)")
                     .font(.headline)
+
+                if let lastSync = conversations.lastSyncDate {
+                    Text(lastSyncLabel(lastSync))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
                 Spacer()
+
+                Button(action: {
+                    Task { await conversations.sync(); refreshId = UUID() }
+                }) {
+                    if conversations.isSyncing {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 16, height: 16)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath.icloud")
+                    }
+                }
+                .disabled(conversations.isSyncing)
+                .help(syncHelpText)
+
                 Button(action: { showNewThread.toggle() }) {
                     Image(systemName: "plus.bubble")
                 }
@@ -27,6 +49,30 @@ struct ConversationPanelView: View {
             .background(.bar)
 
             Divider()
+
+            // Sync error banner
+            if let error = conversations.syncError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                        .font(.caption)
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer()
+                    Button(action: { conversations.syncError = nil }) {
+                        Image(systemName: "xmark")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.yellow.opacity(0.1))
+                Divider()
+            }
 
             let threads = conversations.threadsForPage(appState.currentPage)
 
@@ -80,6 +126,24 @@ struct ConversationPanelView: View {
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .id(refreshId)  // Force refresh when threads mutate
+    }
+
+    // MARK: - Helpers
+
+    private func lastSyncLabel(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return "synced \(formatter.localizedString(for: date, relativeTo: Date()))"
+    }
+
+    private var syncHelpText: String {
+        if conversations.isSyncing {
+            return "Syncing..."
+        }
+        if let date = conversations.lastSyncDate {
+            return "Sync threads with team (last: \(lastSyncLabel(date)))"
+        }
+        return "Sync threads with team"
     }
 }
 

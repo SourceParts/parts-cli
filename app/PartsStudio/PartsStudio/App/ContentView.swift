@@ -45,6 +45,18 @@ struct ContentView: View {
                 importPDF(url: url)
             }
         }
+        .onChange(of: appState.showStripMetadata) { _, newValue in
+            if newValue {
+                appState.showStripMetadata = false
+                PDFExporter.stripMetadata(from: appState.pdfDocument)
+            }
+        }
+        .onChange(of: appState.showExport) { _, newValue in
+            if newValue {
+                appState.showExport = false
+                PDFExporter.exportWithRedactions(from: appState.pdfDocument)
+            }
+        }
     }
 
     @ViewBuilder
