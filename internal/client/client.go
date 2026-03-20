@@ -1255,6 +1255,72 @@ func (c *Client) Price(ctx context.Context, partNumber string, opts types.PriceO
 	return err
 }
 
+// CreditsBalance fetches the current sourcing credit balance
+func (c *Client) CreditsBalance(ctx context.Context, jsonOutput bool, w io.Writer) error {
+	url := domain.Endpoint_CreditsBalance
+	c.Logger.Printf("Request URL: %s", url)
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	c.Logger.Printf("Fetching credit balance")
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return fmt.Errorf("failed to fetch credit balance: %w", err)
+	}
+
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response: %w", err)
+	}
+
+	if jsonOutput {
+		_, err = w.Write(data)
+		if err == nil {
+			fmt.Fprintln(w)
+		}
+		return err
+	}
+
+	// Try to format the response nicely
+	var resp struct {
+		Status string `json:"status"`
+		Data   struct {
+			Balance  float64 `json:"balance"`
+			Currency string  `json:"currency"`
+			Plan     string  `json:"plan"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		// If we can't parse it, just output the raw response
+		_, err = w.Write(data)
+		if err == nil {
+			fmt.Fprintln(w)
+		}
+		return err
+	}
+
+	currency := resp.Data.Currency
+	if currency == "" {
+		currency = "USD"
+	}
+
+	fmt.Fprintf(w, "Credit Balance: %.2f %s\n", resp.Data.Balance, currency)
+	if resp.Data.Plan != "" {
+		fmt.Fprintf(w, "Plan: %s\n", resp.Data.Plan)
+	}
+
+	return nil
+}
+
 func (c *Client) COGs(ctx context.Context, partNumber string, w io.Writer) error {
 	fmt.Fprintln(w, "Not implemented yet")
 	return nil
