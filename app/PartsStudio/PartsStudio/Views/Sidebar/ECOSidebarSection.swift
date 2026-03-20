@@ -4,20 +4,19 @@ struct ECOSidebarSection: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        Section("ECO Tracker") {
-            ForEach(appState.ecoStore.documents) { doc in
-                ECODocumentRow(document: doc)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        appState.selectedECO = doc
-                        appState.selectedDatasheet = nil
-                        appState.pdfDocument = nil
-                    }
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(appState.selectedECO?.id == doc.id ? Color.accentColor.opacity(0.15) : Color.clear)
-                    )
-            }
+        ForEach(appState.ecoStore.documents) { doc in
+            ECODocumentRow(document: doc)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    appState.selectedECO = doc
+                    appState.selectedDatasheet = nil
+                    appState.selectedIQCItem = nil
+                    appState.pdfDocument = nil
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(appState.selectedECO?.id == doc.id ? Color.accentColor.opacity(0.15) : Color.clear)
+                )
         }
     }
 }

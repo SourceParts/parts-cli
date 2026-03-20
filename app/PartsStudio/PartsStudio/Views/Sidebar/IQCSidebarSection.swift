@@ -4,17 +4,15 @@ struct IQCSidebarSection: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        Section("IQC Reports") {
-            ForEach(appState.iqcItems) { item in
-                IQCItemRow(item: item, isSelected: appState.selectedIQCItem?.id == item.id)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        appState.selectedIQCItem = item
-                        appState.selectedECO = nil
-                        appState.selectedDatasheet = nil
-                        appState.pdfDocument = nil
-                    }
-            }
+        ForEach(appState.iqcItems) { item in
+            IQCItemRow(item: item, isSelected: appState.selectedIQCItem?.id == item.id)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    appState.selectedIQCItem = item
+                    appState.selectedECO = nil
+                    appState.selectedDatasheet = nil
+                    appState.pdfDocument = nil
+                }
         }
     }
 }

@@ -6,6 +6,9 @@ struct DatasheetSidebarView: View {
     @State private var showNewProject: Bool = false
     @State private var renamingProjectId: String?
     @State private var renameText: String = ""
+    @State private var datasheetsExpanded: Bool = true
+    @State private var iqcExpanded: Bool = true
+    @State private var ecoExpanded: Bool = true
 
     private var projectStore: ProjectStore { appState.projectStore }
 
@@ -94,7 +97,7 @@ struct DatasheetSidebarView: View {
 
                     // Unassigned datasheets
                     if !unassignedDatasheets.isEmpty {
-                        Section("All Datasheets") {
+                        DisclosureGroup(isExpanded: $datasheetsExpanded) {
                             ForEach(unassignedDatasheets) { datasheet in
                                 DatasheetRowView(datasheet: datasheet)
                                     .tag(datasheet)
@@ -102,17 +105,33 @@ struct DatasheetSidebarView: View {
                                         datasheetContextMenu(datasheet)
                                     }
                             }
+                        } label: {
+                            Label("Datasheets (\(unassignedDatasheets.count))", systemImage: "doc.text")
+                                .font(.caption)
+                                .fontWeight(.semibold)
                         }
                     }
 
                     // IQC Reports
                     if !appState.iqcItems.isEmpty {
-                        IQCSidebarSection()
+                        DisclosureGroup(isExpanded: $iqcExpanded) {
+                            IQCSidebarSection()
+                        } label: {
+                            Label("IQC Reports (\(appState.iqcItems.count))", systemImage: "checkmark.shield")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
                     }
 
                     // ECO Tracker
                     if !appState.ecoStore.documents.isEmpty {
-                        ECOSidebarSection()
+                        DisclosureGroup(isExpanded: $ecoExpanded) {
+                            ECOSidebarSection()
+                        } label: {
+                            Label("ECO Tracker (\(appState.ecoStore.documents.count))", systemImage: "doc.badge.gearshape")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
                     }
                 }
             }
@@ -145,7 +164,7 @@ struct DatasheetSidebarView: View {
     private func projectSection(_ project: Project) -> some View {
         let datasheets = projectStore.datasheetsForProject(project, allDatasheets: filteredDatasheets)
 
-        Section {
+        DisclosureGroup {
             ForEach(datasheets) { datasheet in
                 DatasheetRowView(datasheet: datasheet)
                     .tag(datasheet)
@@ -159,7 +178,7 @@ struct DatasheetSidebarView: View {
                         }
                     }
             }
-        } header: {
+        } label: {
             projectHeader(project, count: datasheets.count)
         }
     }
