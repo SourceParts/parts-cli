@@ -6,8 +6,7 @@ class ECOStore: ObservableObject {
     @Published var documents: [ECODocument] = []
 
     static var defaultECOPath: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Work/Consulting/nRF54H20-Main-Board/ECO")
+        URL(fileURLWithPath: PartsConfig.shared.ecoPath)
     }
 
     private let directoryPath: String
@@ -16,8 +15,7 @@ class ECOStore: ObservableObject {
         if let directoryPath = directoryPath {
             self.directoryPath = directoryPath
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
-            self.directoryPath = "\(home)/Work/Consulting/nRF54H20-Main-Board/ECO"
+            self.directoryPath = PartsConfig.shared.ecoPath
         }
         loadDocuments()
     }

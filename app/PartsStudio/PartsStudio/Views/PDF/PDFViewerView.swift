@@ -1,6 +1,12 @@
 import SwiftUI
 import PDFKit
 
+extension Notification.Name {
+    static let zoomIn = Notification.Name("partsStudioZoomIn")
+    static let zoomOut = Notification.Name("partsStudioZoomOut")
+    static let zoomFit = Notification.Name("partsStudioZoomFit")
+}
+
 struct PDFViewerView: NSViewRepresentable {
     let document: PDFDocument
     @Binding var currentPage: Int
@@ -25,6 +31,19 @@ struct PDFViewerView: NSViewRepresentable {
             name: .PDFViewPageChanged,
             object: pdfView
         )
+
+        // Zoom notifications
+        NotificationCenter.default.addObserver(
+            forName: .zoomIn, object: nil, queue: .main
+        ) { _ in pdfView.zoomIn(nil) }
+
+        NotificationCenter.default.addObserver(
+            forName: .zoomOut, object: nil, queue: .main
+        ) { _ in pdfView.zoomOut(nil) }
+
+        NotificationCenter.default.addObserver(
+            forName: .zoomFit, object: nil, queue: .main
+        ) { _ in pdfView.autoScales = true }
 
         return pdfView
     }
@@ -299,6 +318,16 @@ class AnnotatingPDFView: PDFView {
 
         documentView?.superview?.addSubview(overlay)
         dragOverlay = overlay
+    }
+
+    // MARK: - Zoom (always allow)
+
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        super.magnify(with: event)
     }
 
     // MARK: - Cursor

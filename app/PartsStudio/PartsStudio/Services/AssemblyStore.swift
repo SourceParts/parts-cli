@@ -30,8 +30,7 @@ class AssemblyStore: ObservableObject {
     private let projectPath: String
 
     init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        self.projectPath = "\(home)/Work/Consulting/nRF54H20-Main-Board"
+        self.projectPath = PartsConfig.shared.projectPath
         loadDocuments()
     }
 

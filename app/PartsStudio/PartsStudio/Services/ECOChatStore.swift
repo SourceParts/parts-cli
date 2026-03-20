@@ -6,8 +6,7 @@ class ECOChatStore: ObservableObject {
     @Published private var chatData: [String: [ECOChatMessage]] = [:]
 
     private var filePath: URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent("Work/Consulting/nRF54H20-Main-Board/ECO/.feedback.json")
+        URL(fileURLWithPath: PartsConfig.shared.ecoPath).appendingPathComponent(".feedback.json")
     }
 
     init() {

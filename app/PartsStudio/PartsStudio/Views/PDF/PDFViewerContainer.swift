@@ -78,6 +78,27 @@ struct PDFToolbarView: View {
                 appState.goToPage(page - 1)
             }
 
+            Divider()
+                .frame(height: 28)
+
+            // Zoom controls
+            Button(action: { NotificationCenter.default.post(name: .zoomOut, object: nil) }) {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            .help("Zoom out (Cmd+-)")
+            .keyboardShortcut("-", modifiers: [.command])
+
+            Button(action: { NotificationCenter.default.post(name: .zoomFit, object: nil) }) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .help("Fit to window")
+
+            Button(action: { NotificationCenter.default.post(name: .zoomIn, object: nil) }) {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .help("Zoom in (Cmd++)")
+            .keyboardShortcut("+", modifiers: [.command])
+
             Spacer()
 
             // Annotation count for current page
