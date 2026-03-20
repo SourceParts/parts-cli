@@ -1,5 +1,26 @@
 import Foundation
 
+struct IQCBarcode: Codable, Identifiable {
+    var id: String { "\(type)_\(data)" }
+    let data: String
+    let type: String
+    let confidence: Double?
+}
+
+struct IQCDiscoveredURL: Codable, Identifiable {
+    var id: String { url }
+    let url: String
+    let source: String?        // barcode, ocr, barcode_secondary, ocr_secondary
+    let domainType: String?    // lcsc, digikey, mouser, etc.
+    let crawlStatus: String?   // pending, crawled, unsupported, failed
+
+    enum CodingKeys: String, CodingKey {
+        case url, source
+        case domainType = "domain_type"
+        case crawlStatus = "crawl_status"
+    }
+}
+
 struct IQCItem: Identifiable, Codable {
     let id: String
     let code: String
@@ -13,12 +34,18 @@ struct IQCItem: Identifiable, Codable {
     var receivedLocation: String?
     var partnerName: String?
     var photoCount: Int?
-    var conditionRating: Int?      // 1-5 stars
+    var conditionRating: Int?
     var hasDamage: Bool?
-    var inspectionResult: String?  // pass, fail, partial, pending
+    var inspectionResult: String?
+    // Barcode / OCR / metadata
+    var barcodes: [IQCBarcode]?
+    var ocrText: String?
+    var discoveredUrls: [IQCDiscoveredURL]?
+    var localFiles: [String]?  // Local file paths (e.g., X-ray BMPs)
+    var metadata: [String: String]?
 
     enum CodingKeys: String, CodingKey {
-        case id, code, status, images, carrier
+        case id, code, status, images, carrier, barcodes, metadata
         case createdAt = "created_at"
         case inspectionNotes = "inspection_notes"
         case trackingNumber = "tracking_number"
@@ -29,6 +56,9 @@ struct IQCItem: Identifiable, Codable {
         case conditionRating = "condition_rating"
         case hasDamage = "has_damage"
         case inspectionResult = "inspection_result"
+        case ocrText = "ocr_text"
+        case discoveredUrls = "discovered_urls"
+        case localFiles = "local_files"
     }
 
     init(from decoder: Decoder) throws {
@@ -48,12 +78,19 @@ struct IQCItem: Identifiable, Codable {
         conditionRating = try container.decodeIfPresent(Int.self, forKey: .conditionRating)
         hasDamage = try container.decodeIfPresent(Bool.self, forKey: .hasDamage)
         inspectionResult = try container.decodeIfPresent(String.self, forKey: .inspectionResult)
+        barcodes = try container.decodeIfPresent([IQCBarcode].self, forKey: .barcodes)
+        ocrText = try container.decodeIfPresent(String.self, forKey: .ocrText)
+        discoveredUrls = try container.decodeIfPresent([IQCDiscoveredURL].self, forKey: .discoveredUrls)
+        localFiles = try container.decodeIfPresent([String].self, forKey: .localFiles)
+        metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata)
     }
 
     init(code: String, status: String, createdAt: String, images: [IQCImage] = [], inspectionNotes: String? = nil,
          trackingNumber: String? = nil, carrier: String? = nil, receivedDate: String? = nil,
          receivedLocation: String? = nil, partnerName: String? = nil, photoCount: Int? = nil,
-         conditionRating: Int? = nil, hasDamage: Bool? = nil, inspectionResult: String? = nil) {
+         conditionRating: Int? = nil, hasDamage: Bool? = nil, inspectionResult: String? = nil,
+         barcodes: [IQCBarcode]? = nil, ocrText: String? = nil, discoveredUrls: [IQCDiscoveredURL]? = nil,
+         localFiles: [String]? = nil, metadata: [String: String]? = nil) {
         self.id = code
         self.code = code
         self.status = status
@@ -69,6 +106,11 @@ struct IQCItem: Identifiable, Codable {
         self.conditionRating = conditionRating
         self.hasDamage = hasDamage
         self.inspectionResult = inspectionResult
+        self.barcodes = barcodes
+        self.ocrText = ocrText
+        self.discoveredUrls = discoveredUrls
+        self.localFiles = localFiles
+        self.metadata = metadata
     }
 }
 

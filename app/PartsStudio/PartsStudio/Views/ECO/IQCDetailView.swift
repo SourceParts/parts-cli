@@ -1,19 +1,283 @@
 import SwiftUI
 import WebKit
 
+enum IQCTab: String, CaseIterable {
+    case report = "Report"
+    case docs = "Documentation"
+}
+
 struct IQCDetailView: View {
     let item: IQCItem
     @EnvironmentObject var appState: AppState
+    @State private var selectedTab: IQCTab = .report
 
     var body: some View {
         VStack(spacing: 0) {
-            IQCEmailView(item: item)
+            // Tab bar
+            HStack(spacing: 0) {
+                ForEach(IQCTab.allCases, id: \.self) { tab in
+                    Button(action: { selectedTab = tab }) {
+                        Text(tab.rawValue)
+                            .font(.caption)
+                            .fontWeight(selectedTab == tab ? .bold : .regular)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(selectedTab == tab ? Color.accentColor.opacity(0.1) : Color.clear)
+                            .foregroundStyle(selectedTab == tab ? Color.accentColor : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .background(.bar)
+
+            Divider()
+
+            switch selectedTab {
+            case .report:
+                IQCEmailView(item: item)
+            case .docs:
+                IQCDocumentationView(item: item)
+            }
         }
     }
 }
 
-/// Renders the IQC report as a signed email using WKWebView,
-/// matching the Source Parts IQC email template design.
+// MARK: - Documentation View
+
+struct IQCDocumentationView: View {
+    let item: IQCItem
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Local files (X-ray images, etc.)
+                if let localFiles = item.localFiles, !localFiles.isEmpty {
+                    sectionCard(title: "Local Files", icon: "doc.on.doc") {
+                        let resolvedFiles = localFiles.map { resolvePath($0) }
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180))], spacing: 8) {
+                            ForEach(Array(resolvedFiles.enumerated()), id: \.offset) { _, path in
+                                LocalImageView(path: path)
+                            }
+                        }
+                    }
+                }
+
+                // Detected barcodes
+                if let barcodes = item.barcodes, !barcodes.isEmpty {
+                    sectionCard(title: "Detected Barcodes", icon: "barcode.viewfinder") {
+                        VStack(spacing: 0) {
+                            ForEach(barcodes) { barcode in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(barcode.data)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .textSelection(.enabled)
+                                        Text(barcode.type.uppercased())
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if let conf = barcode.confidence {
+                                        Text("\(Int(conf * 100))%")
+                                            .font(.caption2)
+                                            .fontWeight(.semibold)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(conf > 0.9 ? Color.green.opacity(0.15) : Color.orange.opacity(0.15))
+                                            .foregroundStyle(conf > 0.9 ? .green : .orange)
+                                            .clipShape(Capsule())
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                if barcode.id != barcodes.last?.id {
+                                    Divider()
+                                }
+                            }
+                        }
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                    }
+                }
+
+                // OCR text
+                if let ocrText = item.ocrText, !ocrText.isEmpty {
+                    sectionCard(title: "Extracted Text (OCR)", icon: "text.viewfinder") {
+                        ScrollView(.vertical) {
+                            Text(ocrText)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                        }
+                        .frame(maxHeight: 200)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                    }
+                }
+
+                // Discovered URLs
+                if let urls = item.discoveredUrls, !urls.isEmpty {
+                    sectionCard(title: "Discovered URLs", icon: "link") {
+                        VStack(spacing: 0) {
+                            ForEach(urls) { discovered in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(discovered.url)
+                                            .font(.caption)
+                                            .foregroundStyle(.blue)
+                                            .textSelection(.enabled)
+                                            .lineLimit(1)
+                                        HStack(spacing: 8) {
+                                            if let source = discovered.source {
+                                                Text(source)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            if let domain = discovered.domainType {
+                                                Text(domain.uppercased())
+                                                    .font(.caption2)
+                                                    .fontWeight(.bold)
+                                                    .padding(.horizontal, 4)
+                                                    .padding(.vertical, 1)
+                                                    .background(Color.blue.opacity(0.1))
+                                                    .foregroundStyle(.blue)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                                            }
+                                        }
+                                    }
+                                    Spacer()
+                                    if let crawl = discovered.crawlStatus {
+                                        Text(crawl)
+                                            .font(.caption2)
+                                            .foregroundStyle(crawl == "crawled" ? .green : .orange)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                if discovered.id != urls.last?.id {
+                                    Divider()
+                                }
+                            }
+                        }
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                    }
+                }
+
+                // Metadata
+                if let metadata = item.metadata, !metadata.isEmpty {
+                    sectionCard(title: "Metadata", icon: "info.circle") {
+                        VStack(spacing: 0) {
+                            ForEach(Array(metadata.sorted(by: { $0.key < $1.key })), id: \.key) { key, value in
+                                HStack {
+                                    Text(key.replacingOccurrences(of: "_", with: " ").capitalized)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 120, alignment: .leading)
+                                    Text(value)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .textSelection(.enabled)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                            }
+                        }
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                    }
+                }
+
+                // Empty state
+                let hasContent = (item.localFiles?.isEmpty == false) || (item.barcodes?.isEmpty == false) ||
+                    (item.ocrText?.isEmpty == false) || (item.discoveredUrls?.isEmpty == false) || (item.metadata?.isEmpty == false)
+                if !hasContent {
+                    VStack(spacing: 8) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(.largeTitle)
+                            .foregroundStyle(.tertiary)
+                        Text("No documentation available")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Upload images via the API to generate barcodes, OCR, and metadata")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(40)
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    @ViewBuilder
+    private func sectionCard<Content: View>(title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: icon)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    private func resolvePath(_ path: String) -> String {
+        if path.hasPrefix("~/") {
+            return FileManager.default.homeDirectoryForCurrentUser.path + String(path.dropFirst(1))
+        }
+        return path
+    }
+}
+
+// MARK: - Local Image View
+
+struct LocalImageView: View {
+    let path: String
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let img = image {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .shadow(color: .black.opacity(0.1), radius: 2)
+                    .contextMenu {
+                        Button("Reveal in Finder") {
+                            NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+                        }
+                        Button("Open in Preview") {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                        }
+                        Button("Copy Path") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(path, forType: .string)
+                        }
+                    }
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.1))
+                    .aspectRatio(4/3, contentMode: .fit)
+                    .overlay(
+                        VStack(spacing: 4) {
+                            Image(systemName: "photo")
+                                .foregroundStyle(.tertiary)
+                            Text(URL(fileURLWithPath: path).lastPathComponent)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    )
+            }
+        }
+        .onAppear {
+            image = NSImage(contentsOfFile: path)
+        }
+        .help(URL(fileURLWithPath: path).lastPathComponent)
+    }
+}
+
+// MARK: - Email View (unchanged)
+
 struct IQCEmailView: NSViewRepresentable {
     let item: IQCItem
 
@@ -67,7 +331,6 @@ struct IQCEmailView: NSViewRepresentable {
         .section-title { font-size: 14px; font-weight: 600; color: \(textPrimary); margin: 20px 0 8px 0; }
         .notes { background: \(infoBg); border-radius: 8px; padding: 14px 18px; font-size: 13px; line-height: 1.6; color: \(textPrimary); border: 1px solid \(border); }
         .stars { color: #f59e0b; font-size: 16px; letter-spacing: 2px; }
-        .cta { display: block; width: 260px; margin: 20px auto; text-align: center; background: #2563eb; color: white !important; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-size: 14px; font-weight: 700; }
         hr { border: none; border-top: 1px solid \(border); margin: 20px 0; }
         .steps { margin: 16px 0; }
         .step { display: flex; align-items: flex-start; gap: 12px; margin: 10px 0; font-size: 13px; line-height: 1.5; }
@@ -79,21 +342,13 @@ struct IQCEmailView: NSViewRepresentable {
         </style></head>
         <body>
         <div class="container">
-
             <div class="header">
                 <h1>\(item.inspectionResult == "pending" ? "📦 Package Received" : "✅ IQC Inspection Report")</h1>
                 <div class="subtitle">Source Parts Incoming Quality Control &mdash; \(item.code)</div>
             </div>
-
             <div class="body-content">
-                <p class="greeting">
-                    \(item.partnerName.map { "Dear <strong>\($0)</strong> team," } ?? "Dear valued partner,")
-                </p>
-
-                <p class="greeting">
-                    \(statusMessage())
-                </p>
-
+                <p class="greeting">\(item.partnerName.map { "Dear <strong>\($0)</strong> team," } ?? "Dear valued partner,")</p>
+                <p class="greeting">\(statusMessage())</p>
                 <div class="info-box">
                     <div class="info-row"><span class="info-label">Receipt ID</span><span class="info-value">\(item.code)</span></div>
                     \(item.trackingNumber.map { "<div class=\"info-row\"><span class=\"info-label\">Tracking Number</span><span class=\"info-value\">\($0)</span></div>" } ?? "")
@@ -104,54 +359,29 @@ struct IQCEmailView: NSViewRepresentable {
                     \(item.conditionRating.map { _ in "<div class=\"info-row\"><span class=\"info-label\">Condition</span><span class=\"info-value\"><span class=\"stars\">\(stars)</span></span></div>" } ?? "")
                     \(item.photoCount.map { "<div class=\"info-row\"><span class=\"info-label\">Documentation</span><span class=\"info-value\"><span class=\"photos-badge\">📸 \($0) photos</span></span></div>" } ?? "")
                 </div>
-
                 \(item.hasDamage == true ? "<div class=\"damage-alert\">⚠️ <strong>Damage Detected</strong> — Physical damage was observed during inspection. See notes below for details.</div>" : "")
-
-                \(item.inspectionNotes.map { notes in
-                    "<div class=\"section-title\">Inspection Notes</div><div class=\"notes\">\(escapeHTML(notes))</div>"
-                } ?? "")
-
+                \(item.inspectionNotes.map { "<div class=\"section-title\">Inspection Notes</div><div class=\"notes\">\(escapeHTML($0))</div>" } ?? "")
                 \(item.inspectionResult == "pending" ? nextStepsHTML() : completionHTML())
-
-                <div class="signature">
-                    Best regards,<br>
-                    <strong>Source Parts IQC Team</strong><br>
-                    iqc@source.parts
-                </div>
+                <div class="signature">Best regards,<br><strong>Source Parts IQC Team</strong><br>iqc@source.parts</div>
             </div>
-
-            <div class="footer">
-                <strong>Source Parts</strong> &mdash; Electronic Component Intelligence<br>
-                <a href="https://source.parts">source.parts</a><br><br>
-                This is an automated IQC notification. Please do not reply directly to this email.<br>
-                For questions, contact <a href="mailto:iqc@source.parts">iqc@source.parts</a>
-            </div>
-
+            <div class="footer"><strong>Source Parts</strong> &mdash; Electronic Component Intelligence<br><a href="https://source.parts">source.parts</a><br><br>This is an automated IQC notification.<br>For questions, contact <a href="mailto:iqc@source.parts">iqc@source.parts</a></div>
         </div>
-        </body>
-        </html>
+        </body></html>
         """
     }
 
     private func statusMessage() -> String {
         switch item.inspectionResult {
-        case "pass":
-            return "We have completed the incoming quality inspection for your shipment. <strong>All items have passed inspection</strong> and are cleared for use."
-        case "fail":
-            return "We have completed the incoming quality inspection for your shipment. Unfortunately, <strong>the items did not pass inspection</strong>. Please review the details below."
-        case "partial":
-            return "We have completed the incoming quality inspection for your shipment. <strong>Some items require further review</strong>. Please see the inspection notes for details."
-        default:
-            return "Your package has been received at our facility and is <strong>queued for incoming quality inspection</strong>. We will notify you once the inspection is complete."
+        case "pass": return "We have completed the incoming quality inspection for your shipment. <strong>All items have passed inspection</strong> and are cleared for use."
+        case "fail": return "We have completed the incoming quality inspection for your shipment. Unfortunately, <strong>the items did not pass inspection</strong>. Please review the details below."
+        case "partial": return "We have completed the incoming quality inspection for your shipment. <strong>Some items require further review</strong>. Please see the inspection notes for details."
+        default: return "Your package has been received at our facility and is <strong>queued for incoming quality inspection</strong>. We will notify you once the inspection is complete."
         }
     }
 
     private func resultLabel() -> String {
         switch item.inspectionResult {
-        case "pass": return "PASSED"
-        case "fail": return "FAILED"
-        case "partial": return "PARTIAL"
-        default: return "PENDING"
+        case "pass": return "PASSED"; case "fail": return "FAILED"; case "partial": return "PARTIAL"; default: return "PENDING"
         }
     }
 
@@ -166,8 +396,8 @@ struct IQCEmailView: NSViewRepresentable {
     }
 
     private func starRating() -> String {
-        let rating = item.conditionRating ?? 0
-        return String(repeating: "★", count: rating) + String(repeating: "☆", count: max(0, 5 - rating))
+        let r = item.conditionRating ?? 0
+        return String(repeating: "★", count: r) + String(repeating: "☆", count: max(0, 5 - r))
     }
 
     private func nextStepsHTML() -> String {
@@ -185,17 +415,12 @@ struct IQCEmailView: NSViewRepresentable {
     private func completionHTML() -> String {
         """
         <hr>
-        <div class="highlight">
-            Your complete IQC documentation — including high-resolution photos, inspection report, and condition assessment — is available in your Source Parts dashboard.
-        </div>
-        <a class="cta" href="#">View IQC Documentation</a>
+        <div class="highlight">Your complete IQC documentation — including high-resolution photos, inspection report, and condition assessment — is available in the <strong>Documentation</strong> tab above.</div>
         """
     }
 
     private func escapeHTML(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\n", with: "<br>")
+        text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\n", with: "<br>")
     }
 }
