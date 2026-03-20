@@ -10,28 +10,22 @@ struct ContentView: View {
             if appState.showCredits {
                 CreditsView()
             } else if let iqc = appState.selectedIQCItem {
-                HSplitView {
+                detailWithPanel {
                     IQCDetailView(item: iqc)
-                        .frame(minWidth: 500)
-
+                } panel: {
                     ECOChatView(document: ECODocument(id: iqc.code, type: .ecn, title: "IQC Report", severity: "", status: iqc.status, filePath: "", body: ""))
-                        .frame(width: 280)
                 }
             } else if let eco = appState.selectedECO {
-                HSplitView {
+                detailWithPanel {
                     ECODetailView(document: eco)
-                        .frame(minWidth: 500)
-
+                } panel: {
                     ECOChatView(document: eco)
-                        .frame(width: 280)
                 }
             } else if appState.pdfDocument != nil {
-                HSplitView {
+                detailWithPanel {
                     PDFViewerContainer()
-                        .frame(minWidth: 500)
-
+                } panel: {
                     ConversationPanelView()
-                        .frame(width: 280)
                 }
             } else {
                 PartsQView()
@@ -45,6 +39,50 @@ struct ContentView: View {
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
                 importPDF(url: url)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detailWithPanel<Detail: View, Panel: View>(
+        @ViewBuilder detail: () -> Detail,
+        @ViewBuilder panel: () -> Panel
+    ) -> some View {
+        HSplitView {
+            VStack(spacing: 0) {
+                detail()
+            }
+            .frame(minWidth: 500)
+
+            if appState.showRightPanel {
+                VStack(spacing: 0) {
+                    // Collapse button at top of panel
+                    HStack {
+                        Spacer()
+                        Button(action: { appState.showRightPanel = false }) {
+                            Image(systemName: "sidebar.trailing")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Hide panel (Cmd+.)")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
+
+                    panel()
+                }
+                .frame(width: 280)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: { appState.showRightPanel.toggle() }) {
+                    Image(systemName: appState.showRightPanel ? "sidebar.trailing" : "sidebar.trailing")
+                        .symbolVariant(appState.showRightPanel ? .none : .slash)
+                }
+                .help(appState.showRightPanel ? "Hide threads panel" : "Show threads panel")
+                .keyboardShortcut(".", modifiers: [.command])
             }
         }
     }

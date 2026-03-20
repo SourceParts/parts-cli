@@ -65,6 +65,7 @@ class AppState: ObservableObject {
     @Published var selectedECO: ECODocument?
     @Published var selectedIQCItem: IQCItem?
     @Published var showCredits: Bool = false
+    @AppStorage("showRightPanel") var showRightPanel: Bool = true
 
     let cacheService = CacheService()
     let annotationStore = AnnotationStoreContainer()
