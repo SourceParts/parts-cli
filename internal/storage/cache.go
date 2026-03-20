@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -244,4 +247,119 @@ func ListCachedDatasheets() ([]CachedDatasheet, error) {
 		}
 	}
 	return results, nil
+}
+
+// PageSpec represents parsed page numbers from user input.
+type PageSpec struct {
+	Pages []int
+}
+
+// ParsePageSpec parses a page specification string into sorted, deduplicated page numbers.
+// Supports: single page ("29"), comma-separated ("29,143"), ranges ("1-5"), and combinations ("1-3,7,10-12").
+func ParsePageSpec(spec string) (PageSpec, error) {
+	if spec == "" {
+		return PageSpec{}, fmt.Errorf("page specification cannot be empty")
+	}
+
+	seen := make(map[int]bool)
+	parts := strings.Split(spec, ",")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		if strings.Contains(part, "-") {
+			bounds := strings.SplitN(part, "-", 2)
+			start, err := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			if err != nil {
+				return PageSpec{}, fmt.Errorf("invalid page number %q: %w", bounds[0], err)
+			}
+			end, err := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err != nil {
+				return PageSpec{}, fmt.Errorf("invalid page number %q: %w", bounds[1], err)
+			}
+			if start > end {
+				return PageSpec{}, fmt.Errorf("invalid range %d-%d: start must be <= end", start, end)
+			}
+			if end-start > 100 {
+				return PageSpec{}, fmt.Errorf("range %d-%d too large (max 100 pages per range)", start, end)
+			}
+			for i := start; i <= end; i++ {
+				seen[i] = true
+			}
+		} else {
+			page, err := strconv.Atoi(part)
+			if err != nil {
+				return PageSpec{}, fmt.Errorf("invalid page number %q: %w", part, err)
+			}
+			seen[page] = true
+		}
+	}
+
+	if len(seen) == 0 {
+		return PageSpec{}, fmt.Errorf("no valid page numbers in specification")
+	}
+
+	pages := make([]int, 0, len(seen))
+	for p := range seen {
+		if p < 1 {
+			return PageSpec{}, fmt.Errorf("page numbers must be >= 1, got %d", p)
+		}
+		pages = append(pages, p)
+	}
+	sort.Ints(pages)
+
+	return PageSpec{Pages: pages}, nil
+}
+
+// ReadPages renders specified pages from a cached PDF as PNG images.
+// Returns paths to the rendered PNG files.
+func ReadPages(contentHash, filename string, spec PageSpec, outputDir string) ([]string, error) {
+	pdfPath, ok := GetCachedDatasheet(contentHash, filename)
+	if !ok {
+		return nil, fmt.Errorf("datasheet sha256_%s/%s not found in cache", contentHash, filename)
+	}
+
+	// Check pdftoppm is available
+	pdftoppmPath, err := exec.LookPath("pdftoppm")
+	if err != nil {
+		return nil, fmt.Errorf("pdftoppm not found in PATH — install poppler:\n  brew install poppler")
+	}
+
+	// Create output directory
+	if outputDir == "" {
+		outputDir, err = os.MkdirTemp("", "parts-datasheet-*")
+		if err != nil {
+			return nil, fmt.Errorf("create temp dir: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return nil, fmt.Errorf("create output dir: %w", err)
+		}
+	}
+
+	var paths []string
+	prefix := strings.TrimSuffix(filename, filepath.Ext(filename))
+
+	for _, page := range spec.Pages {
+		outPrefix := filepath.Join(outputDir, fmt.Sprintf("%s_p%d", prefix, page))
+		cmd := exec.Command(pdftoppmPath, "-png", "-r", "200",
+			"-f", strconv.Itoa(page), "-l", strconv.Itoa(page),
+			pdfPath, outPrefix)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return paths, fmt.Errorf("pdftoppm page %d: %w\n%s", page, err, string(out))
+		}
+
+		// pdftoppm appends page numbers to the prefix: prefix-01.png or prefix-1.png
+		// Find the actual output file
+		matches, _ := filepath.Glob(outPrefix + "*.png")
+		if len(matches) == 0 {
+			return paths, fmt.Errorf("pdftoppm produced no output for page %d", page)
+		}
+		paths = append(paths, matches[0])
+	}
+
+	return paths, nil
 }
