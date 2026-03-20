@@ -23,6 +23,14 @@ struct PartsQView: View {
                     ProgressView()
                         .scaleEffect(0.7)
                 } else if !query.isEmpty {
+                    Button(action: { query = ""; result = ""; errorInfo = nil }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.body)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Clear search")
+
                     Button(action: runQuery) {
                         Image(systemName: "arrow.right.circle.fill")
                             .font(.title2)
@@ -33,6 +41,22 @@ struct PartsQView: View {
             }
             .padding(16)
             .background(Color(nsColor: .controlBackgroundColor))
+            .onAppear {
+                // Sync from sidebar search if it has a value
+                if !appState.sidebarSearchText.isEmpty {
+                    query = appState.sidebarSearchText
+                    appState.sidebarSearchText = ""
+                    runQuery()
+                }
+            }
+            .onChange(of: appState.sidebarSearchText) { _, newValue in
+                // When sidebar search changes while Parts Q is visible, sync it
+                if !newValue.isEmpty && appState.selectedDatasheet == nil
+                    && appState.selectedECO == nil && appState.selectedIQCItem == nil
+                    && !appState.showCredits {
+                    query = newValue
+                }
+            }
 
             Divider()
 
