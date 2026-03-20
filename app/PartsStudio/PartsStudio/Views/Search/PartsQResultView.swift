@@ -237,54 +237,202 @@ struct ResistorColorView: View {
 struct SMDCodeView: View {
     let results: QResults
 
+    private var code: String { results.code ?? "" }
+
+    /// Decode the 3-digit code for all passive component types
+    private var interpretations: [(type: String, icon: String, value: String, spec: String, unit: String, color: Color)] {
+        guard code.count >= 3,
+              let sig = Int(String(code.prefix(code.count - 1))),
+              let mul = Int(String(code.suffix(1))) else { return [] }
+
+        let multiplier = pow(10.0, Double(mul))
+
+        // Resistor: EIA-198 / IEC 60062 marking
+        let rOhms = Double(sig) * multiplier
+        let rFormatted = formatValue(rOhms, units: [
+            (1e9, "GΩ"), (1e6, "MΩ"), (1e3, "kΩ"), (1, "Ω"), (1e-3, "mΩ")
+        ])
+
+        // Capacitor: IEC 60062 / EIA-198 (value in pF)
+        let cPF = Double(sig) * multiplier
+        let cFormatted = formatValue(cPF, units: [
+            (1e6, "µF"), (1e3, "nF"), (1, "pF")
+        ])
+
+        // Inductor: IEC 60062 (value in µH)
+        let lUH = Double(sig) * multiplier
+        let lFormatted = formatValue(lUH, units: [
+            (1e6, "H"), (1e3, "mH"), (1, "µH"), (1e-3, "nH")
+        ])
+
+        return [
+            ("Resistor", "r.square", rFormatted.0, "IEC 60062 / EIA-198", rFormatted.1, .orange),
+            ("Capacitor", "c.square", cFormatted.0, "IEC 60062 / EIA-198", cFormatted.1, .blue),
+            ("Inductor", "l.square", lFormatted.0, "IEC 60062 / EIA-198", lFormatted.1, .green),
+        ]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if let msg = results.message {
-                Text(msg)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .textSelection(.enabled)
-            }
-
-            // Visual SMD component
-            if let code = results.code {
+            // Header
+            HStack(spacing: 12) {
+                // Visual SMD chip
                 ZStack {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color(red: 0.15, green: 0.15, blue: 0.15))
-                        .frame(width: 120, height: 60)
+                        .frame(width: 100, height: 50)
+                    // Termination pads
+                    HStack {
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(Color(red: 0.75, green: 0.75, blue: 0.75))
+                            .frame(width: 8, height: 50)
+                        Spacer()
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(Color(red: 0.75, green: 0.75, blue: 0.75))
+                            .frame(width: 8, height: 50)
+                    }
+                    .frame(width: 100)
                     Text(code)
-                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                        .font(.system(size: 18, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white)
                 }
-                .padding(.vertical, 4)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("SMD Code \(code)")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    if let msg = results.message {
+                        Text(msg)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
-            HStack(spacing: 24) {
-                if let fv = results.formattedValue {
-                    detailPill("Value", fv)
+            // All interpretations
+            Text("Possible Specifications")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+
+            ForEach(Array(interpretations.enumerated()), id: \.offset) { _, interp in
+                HStack(spacing: 12) {
+                    // Component icon
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(interp.color.opacity(0.12))
+                            .frame(width: 44, height: 44)
+                        Image(systemName: interp.icon)
+                            .font(.title3)
+                            .foregroundStyle(interp.color)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(interp.type)
+                                .font(.body)
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Text(interp.value + " " + interp.unit)
+                                .font(.system(.body, design: .rounded))
+                                .fontWeight(.bold)
+                        }
+                        Text(interp.spec)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(specDetail(interp.type))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                if let code = results.code {
-                    detailPill("SMD Code", code)
-                }
-                if let t = results.tolerance, !t.isEmpty {
-                    detailPill("Tolerance", t)
-                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                )
             }
+
+            // Encoding explanation
+            VStack(alignment: .leading, spacing: 6) {
+                Text("How to read: \(code)")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 4) {
+                    ForEach(Array(code.enumerated()), id: \.offset) { i, char in
+                        VStack(spacing: 2) {
+                            Text(String(char))
+                                .font(.system(.title3, design: .monospaced))
+                                .fontWeight(.bold)
+                                .frame(width: 32, height: 32)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(i < code.count - 1 ? Color.blue.opacity(0.1) : Color.orange.opacity(0.1))
+                                )
+                            Text(i < code.count - 1 ? "significant" : "multiplier")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    VStack(spacing: 2) {
+                        Text("=")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32)
+                        Text("")
+                            .font(.system(size: 9))
+                    }
+
+                    VStack(spacing: 2) {
+                        let sig = String(code.prefix(code.count - 1))
+                        let mul = String(code.suffix(1))
+                        Text("\(sig)×10^\(mul)")
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.medium)
+                            .frame(height: 32)
+                        Text("formula")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, 2)
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
         }
     }
 
-    @ViewBuilder
-    private func detailPill(_ label: String, _ value: String) -> some View {
-        VStack(spacing: 2) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption)
-                .fontWeight(.semibold)
+    private func specDetail(_ type: String) -> String {
+        switch type {
+        case "Resistor":
+            return "First \(code.count - 1) digits = significant figures, last digit = number of zeros (Ω)"
+        case "Capacitor":
+            return "First \(code.count - 1) digits = significant figures, last digit = number of zeros (pF)"
+        case "Inductor":
+            return "First \(code.count - 1) digits = significant figures, last digit = number of zeros (µH)"
+        default:
+            return ""
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
+    private func formatValue(_ raw: Double, units: [(threshold: Double, suffix: String)]) -> (String, String) {
+        for (threshold, suffix) in units {
+            if raw >= threshold {
+                let scaled = raw / threshold
+                if scaled == floor(scaled) {
+                    return (String(format: "%.0f", scaled), suffix)
+                } else {
+                    return (String(format: "%.2g", scaled), suffix)
+                }
+            }
+        }
+        return (String(format: "%.2g", raw), units.last?.suffix ?? "")
     }
 }
 
