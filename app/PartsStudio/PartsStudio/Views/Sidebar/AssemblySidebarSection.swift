@@ -67,16 +67,18 @@ struct AssemblySidebarSection: View {
     }
 
     private func openAssemblyDoc(_ doc: AssemblyDocument) {
+        appState.selectedAssemblyDoc = doc
+        appState.selectedDatasheet = nil
+        appState.selectedECO = nil
+        appState.selectedIQCItem = nil
+        appState.showCredits = false
+
         if doc.path.lowercased().hasSuffix(".pdf") {
-            // Load PDF in the viewer
-            appState.selectedAssemblyDoc = doc
-            appState.selectedDatasheet = nil
-            appState.selectedECO = nil
-            appState.selectedIQCItem = nil
-            appState.showCredits = false
             appState.loadPDF(at: doc.path)
+        } else if doc.path.lowercased().hasSuffix(".csv") {
+            // CSV opens in built-in viewer (clear PDF state)
+            appState.pdfDocument = nil
         } else {
-            // Open non-PDF files externally
             NSWorkspace.shared.open(URL(fileURLWithPath: doc.path))
         }
     }

@@ -21,6 +21,8 @@ struct ContentView: View {
                 } panel: {
                     ECOChatView(document: eco)
                 }
+            } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".csv") {
+                CSVViewerView(filePath: asmDoc.path)
             } else if appState.pdfDocument != nil {
                 detailWithPanel {
                     PDFViewerContainer()
