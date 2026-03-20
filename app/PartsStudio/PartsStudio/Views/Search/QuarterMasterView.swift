@@ -4,6 +4,7 @@ struct PartsQView: View {
     @EnvironmentObject var appState: AppState
     @State private var query: String = ""
     @State private var result: String = ""
+    @State private var errorInfo: QueryError? = nil
     @State private var isLoading: Bool = false
     @State private var history: [String] = []
 
@@ -38,7 +39,41 @@ struct PartsQView: View {
 
             Divider()
 
-            if result.isEmpty && history.isEmpty {
+            if let err = errorInfo {
+                // Friendly error view
+                VStack(spacing: 16) {
+                    Spacer()
+                    Image(systemName: err.icon)
+                        .font(.system(size: 40))
+                        .foregroundStyle(err.color)
+                    Text(err.title)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                    Text(err.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 400)
+                    if let hint = err.hint {
+                        Text(hint)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
+                    }
+                    HStack(spacing: 12) {
+                        Button("Try Again") { runQuery() }
+                            .buttonStyle(.borderedProminent)
+                            .font(.caption)
+                        Button("Clear") { errorInfo = nil; query = "" }
+                            .buttonStyle(.bordered)
+                            .font(.caption)
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else if result.isEmpty && history.isEmpty {
                 // Empty state with examples
                 ScrollView {
                     VStack(spacing: 24) {
@@ -192,27 +227,134 @@ struct PartsQView: View {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
 
-        // Add to history
         history.removeAll { $0 == q }
         history.insert(q, at: 0)
         if history.count > 10 { history = Array(history.prefix(10)) }
 
         isLoading = true
         result = ""
+        errorInfo = nil
 
         Task {
             do {
                 let output = try await CLIBridge.shared.run(["q", q])
                 await MainActor.run {
-                    result = output
+                    if let err = QueryError.parse(output) {
+                        errorInfo = err
+                    } else {
+                        result = output
+                    }
                     isLoading = false
                 }
             } catch {
                 await MainActor.run {
-                    result = "Error: \(error.localizedDescription)"
+                    errorInfo = QueryError.parse(error.localizedDescription)
+                        ?? QueryError(icon: "exclamationmark.triangle", color: .orange,
+                                      title: "Something went wrong",
+                                      message: error.localizedDescription, hint: nil)
                     isLoading = false
                 }
             }
         }
+    }
+}
+
+// MARK: - Error Handling
+
+struct QueryError {
+    let icon: String
+    let color: Color
+    let title: String
+    let message: String
+    let hint: String?
+
+    static func parse(_ output: String) -> QueryError? {
+        let lower = output.lowercased()
+
+        if lower.contains("502") || lower.contains("bad gateway") {
+            return QueryError(
+                icon: "icloud.slash",
+                color: .red,
+                title: "API Server Unreachable",
+                message: "The Source Parts API is currently down or unreachable. This is usually temporary.",
+                hint: "Check api.source.parts status or try again in a few minutes"
+            )
+        }
+        if lower.contains("503") || lower.contains("service unavailable") {
+            return QueryError(
+                icon: "wrench.and.screwdriver",
+                color: .orange,
+                title: "Service Maintenance",
+                message: "The API is temporarily unavailable, likely for maintenance or updates.",
+                hint: "This usually resolves within a few minutes"
+            )
+        }
+        if lower.contains("401") || lower.contains("unauthorized") || lower.contains("api key") {
+            return QueryError(
+                icon: "key.slash",
+                color: .orange,
+                title: "Authentication Required",
+                message: "Your API key is missing or invalid. Run `parts auth login` to authenticate.",
+                hint: "parts auth login"
+            )
+        }
+        if lower.contains("429") || lower.contains("rate limit") {
+            return QueryError(
+                icon: "gauge.with.dots.needle.67percent",
+                color: .yellow,
+                title: "Rate Limited",
+                message: "Too many requests. Wait a moment before trying again.",
+                hint: "Upgrade your plan for higher rate limits"
+            )
+        }
+        if lower.contains("timeout") || lower.contains("timed out") {
+            return QueryError(
+                icon: "clock.badge.exclamationmark",
+                color: .orange,
+                title: "Request Timed Out",
+                message: "The server took too long to respond. Try a simpler query or try again.",
+                hint: nil
+            )
+        }
+        if lower.contains("no such host") || lower.contains("could not resolve") || lower.contains("network") {
+            return QueryError(
+                icon: "wifi.slash",
+                color: .red,
+                title: "No Internet Connection",
+                message: "Cannot reach the Source Parts API. Check your network connection.",
+                hint: nil
+            )
+        }
+        if lower.contains("not found") || lower.contains("command not found") || lower.contains("no such file") {
+            return QueryError(
+                icon: "questionmark.app",
+                color: .orange,
+                title: "Parts CLI Not Found",
+                message: "The `parts` command is not installed or not in your PATH.",
+                hint: "Install with: go install github.com/SourceParts/parts-cli/cmd/parts@latest"
+            )
+        }
+        if lower.contains("500") || lower.contains("internal server error") {
+            return QueryError(
+                icon: "exclamationmark.octagon",
+                color: .red,
+                title: "Server Error",
+                message: "The API encountered an internal error. This has been logged for investigation.",
+                hint: "Try again or contact support@source.parts"
+            )
+        }
+
+        // Check if entire output looks like an error (contains "Error:" and no JSON)
+        if (lower.contains("error:") || lower.contains("http ")) && !output.contains("{") {
+            return QueryError(
+                icon: "exclamationmark.triangle",
+                color: .orange,
+                title: "Request Failed",
+                message: output.components(separatedBy: "\n").first(where: { $0.lowercased().contains("error") || $0.lowercased().contains("http") })?.trimmingCharacters(in: .whitespaces) ?? output,
+                hint: nil
+            )
+        }
+
+        return nil
     }
 }
