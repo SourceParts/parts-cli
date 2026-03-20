@@ -249,6 +249,21 @@ const Endpoint_Test = V1Prefix + `/test`
 const Endpoint_Health = V1Prefix + `/health`
 
 // =============================================================================
+// EDA (Convert Service)
+// =============================================================================
+
+const ConvertAPI = `convert.source.parts`
+
+// Endpoint_ERC runs Electrical Rules Check on a KiCad schematic
+const Endpoint_ERC = `https://` + ConvertAPI + `/api/eda/erc`
+
+// Endpoint_DRC runs Design Rules Check on a KiCad PCB
+const Endpoint_DRC = `https://` + ConvertAPI + `/api/eda/drc`
+
+// Endpoint_ImportAltium converts an Altium .SchDoc to KiCad .kicad_sch
+const Endpoint_ImportAltium = `https://` + ConvertAPI + `/api/eda/import/altium`
+
+// =============================================================================
 // CLI UPDATE
 // =============================================================================
 

@@ -1534,3 +1534,118 @@ func (c *Client) Test(ctx context.Context, input string, w io.Writer) error {
 	fmt.Fprintln(w, "Not implemented yet")
 	return nil
 }
+
+// =============================================================================
+// EDA — ERC, DRC, Altium Import (via convert.source.parts)
+// =============================================================================
+
+// edaUpload uploads a file (and optional secondary file) to a convert-service
+// endpoint and streams the response body to w.
+func (c *Client) edaUpload(ctx context.Context, endpoint, filePath string, formFields map[string]string, extraFiles map[string]string, w io.Writer) error {
+	fileContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("error reading file: %w", err)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add primary file
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return fmt.Errorf("error creating form file: %w", err)
+	}
+	if _, err := part.Write(fileContent); err != nil {
+		return fmt.Errorf("error writing file to form: %w", err)
+	}
+
+	// Add optional extra files (e.g. rules_file)
+	for fieldName, path := range extraFiles {
+		if path == "" {
+			continue
+		}
+		extraContent, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("error reading %s: %w", fieldName, err)
+		}
+		extraPart, err := writer.CreateFormFile(fieldName, filepath.Base(path))
+		if err != nil {
+			return fmt.Errorf("error creating form file %s: %w", fieldName, err)
+		}
+		if _, err := extraPart.Write(extraContent); err != nil {
+			return fmt.Errorf("error writing %s to form: %w", fieldName, err)
+		}
+	}
+
+	// Add form fields
+	for key, value := range formFields {
+		if value != "" {
+			_ = writer.WriteField(key, value)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("error closing multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	c.Logger.Printf("Request URL: %s", endpoint)
+	c.Logger.Printf("Uploading: %s (%d bytes)", filepath.Base(filePath), len(fileContent))
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, res.Body)
+	return err
+}
+
+// ERC runs Electrical Rules Check on a KiCad schematic.
+func (c *Client) ERC(ctx context.Context, fileName string, opts types.ERCOptions, w io.Writer) error {
+	fields := map[string]string{"severity": opts.Severity}
+	extras := map[string]string{"rules_file": opts.RulesFile}
+	return c.edaUpload(ctx, domain.Endpoint_ERC, fileName, fields, extras, w)
+}
+
+// DRC runs Design Rules Check on a KiCad PCB.
+func (c *Client) DRC(ctx context.Context, fileName string, opts types.DRCOptions, w io.Writer) error {
+	fields := map[string]string{"severity": opts.Severity}
+	extras := map[string]string{"rules_file": opts.RulesFile}
+	return c.edaUpload(ctx, domain.Endpoint_DRC, fileName, fields, extras, w)
+}
+
+// ImportAltium converts an Altium .SchDoc to KiCad .kicad_sch.
+// If outputPath is non-empty the converted file is saved there; otherwise the
+// response is streamed to w.
+func (c *Client) ImportAltium(ctx context.Context, fileName string, outputPath string, w io.Writer) error {
+	var buf bytes.Buffer
+	if err := c.edaUpload(ctx, domain.Endpoint_ImportAltium, fileName, nil, nil, &buf); err != nil {
+		return err
+	}
+
+	if outputPath != "" {
+		if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+			return fmt.Errorf("error writing output file: %w", err)
+		}
+		fmt.Fprintf(w, "Saved: %s\n", outputPath)
+		return nil
+	}
+
+	_, err := io.Copy(w, &buf)
+	return err
+}

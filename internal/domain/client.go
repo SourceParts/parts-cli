@@ -47,6 +47,11 @@ type Client interface {
 	Stackup(ctx context.Context, gerberZip string, opts types.StackupOptions, w io.Writer) error
 	StackupDiff(ctx context.Context, gerberA, gerberB string, opts types.StackupDiffOptions, w io.Writer) error
 
+	// EDA
+	ERC(ctx context.Context, fileName string, opts types.ERCOptions, w io.Writer) error
+	DRC(ctx context.Context, fileName string, opts types.DRCOptions, w io.Writer) error
+	ImportAltium(ctx context.Context, fileName string, outputPath string, w io.Writer) error
+
 	// Inventory & Supply Chain
 	Inventory(ctx context.Context, partNumber string, w io.Writer) error
 	Cart(ctx context.Context, w io.Writer) error
