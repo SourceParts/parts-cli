@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct QuarterMasterView: View {
+struct PartsQView: View {
     @EnvironmentObject var appState: AppState
     @State private var query: String = ""
     @State private var result: String = ""
@@ -48,7 +48,7 @@ struct QuarterMasterView: View {
                             .font(.system(size: 48))
                             .foregroundStyle(.tertiary)
 
-                        Text("QuarterMaster")
+                        Text("Parts Q")
                             .font(.title2)
                             .fontWeight(.semibold)
 
@@ -106,10 +106,7 @@ struct QuarterMasterView: View {
                     Divider()
 
                     ScrollView {
-                        Text(result)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        PartsQResultView(raw: result)
                             .padding(16)
                     }
                 }

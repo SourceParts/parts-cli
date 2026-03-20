@@ -32,7 +32,7 @@ struct ContentView: View {
                         .frame(width: 280)
                 }
             } else {
-                QuarterMasterView()
+                PartsQView()
             }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
