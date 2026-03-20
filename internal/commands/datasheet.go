@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -39,6 +40,7 @@ var (
 	dsProject  string
 	dsReadPages  string
 	dsReadOutput string
+	dsReadOpen   bool
 )
 
 var datasheetUpload = &cobra.Command{
@@ -203,6 +205,13 @@ Install poppler: brew install poppler`,
 		for _, p := range paths {
 			fmt.Println(p)
 		}
+
+		if dsReadOpen && len(paths) > 0 {
+			cmd := exec.Command("open", paths...)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("open: %w", err)
+			}
+		}
 		return nil
 	},
 }
@@ -319,6 +328,7 @@ func init() {
 	datasheetRead.Flags().StringVar(&dsReadPages, "pages", "", "Page(s) to render (e.g., 29, 1-5, 29,143)")
 	datasheetRead.MarkFlagRequired("pages")
 	datasheetRead.Flags().StringVar(&dsReadOutput, "output", "", "Output directory (default: temp dir)")
+	datasheetRead.Flags().BoolVar(&dsReadOpen, "open", false, "Open rendered pages in default viewer (macOS Preview)")
 
 	datasheetAlias.AddCommand(datasheetAliasList)
 	datasheetAlias.AddCommand(datasheetAliasSet)
