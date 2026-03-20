@@ -1,0 +1,27 @@
+name: PartsStudio
+options:
+  bundleIdPrefix: parts.studio
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  groupSortPosition: top
+
+targets:
+  PartsStudio:
+    type: application
+    platform: macOS
+    sources:
+      - PartsStudio
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: parts.studio.PartsStudio
+        PRODUCT_NAME: Parts Studio
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.10"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
+        INFOPLIST_KEY_CFBundleDisplayName: "Parts Studio"
+        CODE_SIGN_ENTITLEMENTS: ""
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_APP_SANDBOX: NO

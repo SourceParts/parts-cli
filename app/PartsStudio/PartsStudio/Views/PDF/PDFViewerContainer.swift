@@ -1,0 +1,106 @@
+import SwiftUI
+import PDFKit
+
+struct PDFViewerContainer: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PDFToolbarView()
+
+            if let document = appState.pdfDocument {
+                PDFViewerView(document: document, currentPage: $appState.currentPage)
+            }
+        }
+    }
+}
+
+struct PDFToolbarView: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Tool mode picker
+            ForEach(ToolMode.allCases) { mode in
+                Button(action: { appState.currentTool = mode }) {
+                    VStack(spacing: 1) {
+                        Image(systemName: mode.icon)
+                            .frame(width: 24, height: 24)
+                        Text(mode.label)
+                            .font(.system(size: 9))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(appState.currentTool == mode ? .accentColor : .secondary)
+                .help(mode.tooltip)
+            }
+
+            Divider()
+                .frame(height: 28)
+
+            // Page navigation
+            Button(action: { appState.goToPage(appState.currentPage - 1) }) {
+                Image(systemName: "chevron.left")
+            }
+            .disabled(appState.currentPage <= 0)
+            .help("Previous page")
+
+            Text("Page \(appState.currentPage + 1) of \(appState.pageCount)")
+                .font(.caption)
+                .monospacedDigit()
+                .frame(minWidth: 120)
+
+            Button(action: { appState.goToPage(appState.currentPage + 1) }) {
+                Image(systemName: "chevron.right")
+            }
+            .disabled(appState.currentPage >= appState.pageCount - 1)
+            .help("Next page")
+
+            Divider()
+                .frame(height: 28)
+
+            // Go to page
+            PageJumpField(pageCount: appState.pageCount) { page in
+                appState.goToPage(page - 1)
+            }
+
+            Spacer()
+
+            // Datasheet name
+            if let ds = appState.selectedDatasheet {
+                Text(ds.displayName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Currently viewing: \(ds.filename)\nHash: sha256_\(ds.contentHash)")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+}
+
+struct PageJumpField: View {
+    let pageCount: Int
+    let onSubmit: (Int) -> Void
+    @State private var text: String = ""
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("Go to:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("pg #", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 50)
+                .font(.caption)
+                .onSubmit {
+                    if let page = Int(text), page >= 1, page <= pageCount {
+                        onSubmit(page)
+                        text = ""
+                    }
+                }
+                .help("Type a page number and press Enter to jump")
+        }
+    }
+}
