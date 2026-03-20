@@ -3,13 +3,27 @@ import PDFKit
 
 struct PDFViewerContainer: View {
     @EnvironmentObject var appState: AppState
+    @State private var annotationRefresh: UUID = UUID()
 
     var body: some View {
         VStack(spacing: 0) {
             PDFToolbarView()
 
             if let document = appState.pdfDocument {
-                PDFViewerView(document: document, currentPage: $appState.currentPage)
+                PDFViewerView(
+                    document: document,
+                    currentPage: $appState.currentPage,
+                    toolMode: appState.currentTool,
+                    annotationStore: appState.annotationStore.annotations,
+                    conversationStore: appState.annotationStore.conversations,
+                    onAnnotationAdded: {
+                        annotationRefresh = UUID()
+                    },
+                    onCommentAdded: {
+                        annotationRefresh = UUID()
+                    }
+                )
+                .id(annotationRefresh)
             }
         }
     }
@@ -65,6 +79,17 @@ struct PDFToolbarView: View {
             }
 
             Spacer()
+
+            // Annotation count for current page
+            let pageAnnotations = appState.annotationStore.annotations.annotationsForPage(appState.currentPage)
+            if !pageAnnotations.isEmpty {
+                Text("\(pageAnnotations.count) annotation\(pageAnnotations.count == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+            }
 
             // Datasheet name
             if let ds = appState.selectedDatasheet {
