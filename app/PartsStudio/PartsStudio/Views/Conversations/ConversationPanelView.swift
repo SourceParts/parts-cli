@@ -4,10 +4,7 @@ struct ConversationPanelView: View {
     @EnvironmentObject var appState: AppState
     @State private var newThreadText: String = ""
     @State private var showNewThread: Bool = false
-
-    private var currentPageThreads: [ConversationThread] {
-        appState.annotationStore.conversations.threadsForPage(appState.currentPage)
-    }
+    @State private var refreshId: UUID = UUID()
 
     private var conversations: ConversationStore {
         appState.annotationStore.conversations
@@ -31,7 +28,9 @@ struct ConversationPanelView: View {
 
             Divider()
 
-            if currentPageThreads.isEmpty && !showNewThread {
+            let threads = conversations.threadsForPage(appState.currentPage)
+
+            if threads.isEmpty && !showNewThread {
                 VStack(spacing: 8) {
                     Spacer()
                     Image(systemName: "bubble.left.and.bubble.right")
@@ -60,14 +59,19 @@ struct ConversationPanelView: View {
                                 )
                                 newThreadText = ""
                                 showNewThread = false
+                                refreshId = UUID()
                             } onCancel: {
                                 newThreadText = ""
                                 showNewThread = false
                             }
                         }
 
-                        ForEach(currentPageThreads) { thread in
-                            ThreadView(thread: thread, store: conversations)
+                        ForEach(threads) { thread in
+                            ThreadView(
+                                threadId: thread.id,
+                                store: conversations,
+                                onMutate: { refreshId = UUID() }
+                            )
                         }
                     }
                     .padding(12)
@@ -75,81 +79,108 @@ struct ConversationPanelView: View {
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
+        .id(refreshId)  // Force refresh when threads mutate
     }
 }
 
 struct ThreadView: View {
-    let thread: ConversationThread
+    let threadId: String
     let store: ConversationStore
+    let onMutate: () -> Void
     @State private var replyText: String = ""
     @State private var showReply: Bool = false
-    @FocusState private var replyFocused: Bool
+
+    private var thread: ConversationThread? {
+        store.threads.first(where: { $0.id == threadId })
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(thread.comments) { comment in
-                CommentView(comment: comment)
-            }
+        if let thread = thread {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(thread.comments) { comment in
+                    CommentView(comment: comment)
+                }
 
-            if showReply {
-                HStack(spacing: 4) {
-                    TextField("Reply...", text: $replyText, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption)
-                        .lineLimit(1...4)
-                        .focused($replyFocused)
-                        .onSubmit {
-                            submitReply()
+                if showReply {
+                    HStack(spacing: 4) {
+                        FocusableTextView(text: $replyText, placeholder: "Reply...")
+                            .frame(minHeight: 30, maxHeight: 60)
+                        Button(action: submitReply) {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title3)
                         }
-                    Button(action: submitReply) {
-                        Image(systemName: "arrow.up.circle.fill")
+                        .buttonStyle(.plain)
+                        .foregroundStyle(replyText.isEmpty ? .secondary : Color.accentColor)
+                        .disabled(replyText.isEmpty)
                     }
-                    .disabled(replyText.isEmpty)
                 }
-                .onAppear { replyFocused = true }
-            }
 
-            HStack(spacing: 8) {
-                Button(action: {
-                    showReply.toggle()
-                }) {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left")
-                        .font(.caption2)
-                }
-                .buttonStyle(.link)
-
-                if !thread.resolved {
-                    Button(action: { store.resolveThread(id: thread.id) }) {
-                        Label("Resolve", systemImage: "checkmark.circle")
+                HStack(spacing: 8) {
+                    Button(action: { showReply.toggle() }) {
+                        Label("Reply", systemImage: "arrowshape.turn.up.left")
                             .font(.caption2)
                     }
                     .buttonStyle(.link)
-                    .foregroundStyle(.green)
-                } else {
-                    Label("Resolved", systemImage: "checkmark.circle.fill")
-                        .font(.caption2)
+                    .help("Add a reply to this thread")
+
+                    if !thread.resolved {
+                        Button(action: {
+                            store.resolveThread(id: thread.id)
+                            onMutate()
+                        }) {
+                            Label("Resolve", systemImage: "checkmark.circle")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.link)
                         .foregroundStyle(.green)
+                        .help("Mark this thread as resolved")
+                    } else {
+                        Button(action: {
+                            store.unresolveThread(id: thread.id)
+                            onMutate()
+                        }) {
+                            Label("Resolved", systemImage: "checkmark.circle.fill")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.link)
+                        .foregroundStyle(.green)
+                        .help("Click to reopen this thread")
+                    }
+
+                    Spacer()
+
+                    Button(action: {
+                        store.deleteThread(id: thread.id)
+                        onMutate()
+                    }) {
+                        Image(systemName: "trash")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.link)
+                    .foregroundStyle(.secondary)
+                    .help("Delete this thread")
                 }
             }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
+            .opacity(thread.resolved ? 0.6 : 1.0)
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
-        .opacity(thread.resolved ? 0.6 : 1.0)
     }
 
     private func submitReply() {
         guard !replyText.isEmpty else { return }
-        store.addReply(threadId: thread.id, text: replyText)
+        store.addReply(threadId: threadId, text: replyText)
         replyText = ""
         showReply = false
+        onMutate()
     }
 }
 
@@ -170,6 +201,7 @@ struct CommentView: View {
             Text(comment.text)
                 .font(.caption)
                 .foregroundStyle(.primary)
+                .textSelection(.enabled)
         }
     }
 
@@ -238,7 +270,6 @@ struct FocusableTextView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .bezelBorder
 
-        // Repeatedly claim focus until we actually have it
         func claimFocus(attempts: Int = 0) {
             guard attempts < 5 else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(attempts) * 0.1 + 0.05) {

@@ -76,6 +76,12 @@ class ConversationStore: ObservableObject {
         save()
     }
 
+    func unresolveThread(id: String) {
+        guard let index = threads.firstIndex(where: { $0.id == id }) else { return }
+        threads[index].resolved = false
+        save()
+    }
+
     func deleteThread(id: String) {
         threads.removeAll { $0.id == id }
         save()
