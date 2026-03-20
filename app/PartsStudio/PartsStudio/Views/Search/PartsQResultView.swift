@@ -13,22 +13,26 @@ struct PartsQResultView: View {
     var body: some View {
         if let resp = parsed, resp.status == "success", let qData = resp.data {
             VStack(alignment: .leading, spacing: 16) {
-                switch qData.type {
-                case "resistor_colors":
-                    if let r = qData.results {
-                        ResistorColorView(results: r)
+                // Check for empty results first
+                if let r = qData.results, r.isEmpty {
+                    EmptyResultView(query: qData.query ?? "")
+                } else {
+                    switch qData.type {
+                    case "resistor_colors":
+                        if let r = qData.results {
+                            ResistorColorView(results: r)
+                        }
+                    case "smd_code":
+                        if let r = qData.results {
+                            SMDCodeView(results: r)
+                        }
+                    case "search", "part_search":
+                        if let r = qData.results {
+                            PartSearchResultView(results: r)
+                        }
+                    default:
+                        GenericResultView(data: qData)
                     }
-                case "smd_code":
-                    if let r = qData.results {
-                        SMDCodeView(results: r)
-                    }
-                case "part_search":
-                    if let r = qData.results {
-                        PartSearchResultView(results: r)
-                    }
-                default:
-                    // Generic JSON view
-                    GenericResultView(data: qData)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -52,6 +56,13 @@ struct QResponse: Decodable {
 struct QData: Decodable {
     let type: String
     let results: QResults?
+    let query: String?
+    let searchId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, results, query
+        case searchId = "search_id"
+    }
 }
 
 struct QResults: Decodable {
@@ -59,6 +70,8 @@ struct QResults: Decodable {
     let details: QDetails?
     let type: String?
     let parts: [[String: AnyCodable]]?
+    let products: [[String: AnyCodable]]?
+    let total: Int?
     // SMD code fields
     let code: String?
     let value: Double?
@@ -67,8 +80,14 @@ struct QResults: Decodable {
     let tolerance: String?
 
     enum CodingKeys: String, CodingKey {
-        case message, details, type, parts, code, value, unit, tolerance
+        case message, details, type, parts, products, total, code, value, unit, tolerance
         case formattedValue = "formatted_value"
+    }
+
+    var isEmpty: Bool {
+        let p = parts ?? []
+        let pr = products ?? []
+        return p.isEmpty && pr.isEmpty && (total ?? 0) == 0 && message == nil && code == nil
     }
 
     struct QDetails: Decodable {
@@ -436,10 +455,57 @@ struct SMDCodeView: View {
     }
 }
 
+// MARK: - Empty Result
+
+struct EmptyResultView: View {
+    let query: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 36))
+                .foregroundStyle(.tertiary)
+            Text("No results found")
+                .font(.title3)
+                .fontWeight(.semibold)
+            if !query.isEmpty {
+                Text("Nothing matched \"\(query)\"")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Suggestions:")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                Text("  \u{2022} Check the spelling or try a different search term")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text("  \u{2022} Use a part number (e.g., STM32F407VGT6)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text("  \u{2022} Try a broader search (e.g., \"STM32\" instead of full MPN)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 40)
+    }
+}
+
 // MARK: - Part Search Results
 
 struct PartSearchResultView: View {
     let results: QResults
+
+    private var allParts: [[String: AnyCodable]] {
+        let p = results.parts ?? []
+        let pr = results.products ?? []
+        return p.isEmpty ? pr : p
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -448,37 +514,62 @@ struct PartSearchResultView: View {
                     .font(.headline)
             }
 
-            if let parts = results.parts {
-                ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(part["mpn"]?.string ?? part["sku"]?.string ?? "Unknown")
-                                .font(.body)
-                                .fontWeight(.semibold)
-                            Spacer()
-                            if let price = part["price"]?.string {
-                                Text(price)
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                        if let desc = part["description"]?.string {
-                            Text(desc)
+            if let total = results.total {
+                Text("\(total) result\(total == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(Array(allParts.enumerated()), id: \.offset) { _, part in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(part["mpn"]?.string ?? part["sku"]?.string ?? part["name"]?.string ?? "Unknown")
+                            .font(.body)
+                            .fontWeight(.semibold)
+                        Spacer()
+                        if let price = part["price"]?.string {
+                            Text(price)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.green)
                         }
+                        if let stock = part["stock"]?.string, stock != "0" {
+                            Text("\(stock) in stock")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let desc = part["description"]?.string {
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    HStack(spacing: 8) {
                         if let mfr = part["manufacturer"]?.string {
                             Text(mfr)
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
+                        if let cat = part["category"]?.string {
+                            Text(cat)
+                                .font(.caption2)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.blue.opacity(0.1))
+                                .foregroundStyle(.blue)
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        }
+                        if let pkg = part["package"]?.string {
+                            Text(pkg)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
-                    .textSelection(.enabled)
                 }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+                .textSelection(.enabled)
             }
         }
     }
