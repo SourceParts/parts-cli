@@ -7,7 +7,9 @@ struct ContentView: View {
         NavigationSplitView {
             DatasheetSidebarView()
         } detail: {
-            if appState.showCredits {
+            if appState.showUSBMonitor {
+                USBMonitorView()
+            } else if appState.showCredits {
                 CreditsView()
             } else if let iqc = appState.selectedIQCItem {
                 detailWithPanel {

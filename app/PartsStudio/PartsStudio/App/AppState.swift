@@ -70,6 +70,7 @@ class AppState: ObservableObject {
     @Published var selectedECO: ECODocument?
     @Published var selectedIQCItem: IQCItem?
     @Published var showCredits: Bool = false
+    @Published var showUSBMonitor: Bool = false
     @AppStorage("showRightPanel") var showRightPanel: Bool = true
 
     let cacheService = CacheService()
@@ -102,6 +103,7 @@ class AppState: ObservableObject {
         selectedIQCItem = nil
         selectedAssemblyDoc = nil
         showCredits = false
+        showUSBMonitor = false
         loadPDF(at: datasheet.path)
     }
 

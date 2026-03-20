@@ -162,6 +162,22 @@ struct DatasheetSidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(appState.showCredits ? Color.accentColor : .primary)
+
+                    Button(action: {
+                        appState.showUSBMonitor = true
+                        appState.showCredits = false
+                        appState.selectedDatasheet = nil
+                        appState.selectedECO = nil
+                        appState.selectedIQCItem = nil
+                        appState.pdfDocument = nil
+                    }) {
+                        Label("USB Monitor", systemImage: "cable.connector")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(appState.showUSBMonitor ? Color.accentColor : .primary)
                 }
             }
             .searchable(text: $appState.sidebarSearchText, prompt: "Filter datasheets")
