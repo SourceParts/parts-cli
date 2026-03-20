@@ -1,33 +1,17 @@
 import SwiftUI
+import AppKit
 
 struct CSVViewerView: View {
     let filePath: String
     @State private var headers: [String] = []
     @State private var rows: [[String]] = []
     @State private var searchText: String = ""
-    @State private var sortColumn: Int?
-    @State private var sortAscending: Bool = true
 
     private var filteredRows: [[String]] {
         let query = searchText.lowercased()
-        if query.isEmpty { return sortedRows }
-        return sortedRows.filter { row in
+        if query.isEmpty { return rows }
+        return rows.filter { row in
             row.contains(where: { $0.lowercased().contains(query) })
-        }
-    }
-
-    private var sortedRows: [[String]] {
-        guard let col = sortColumn, col < headers.count else { return rows }
-        return rows.sorted { a, b in
-            let va = col < a.count ? a[col] : ""
-            let vb = col < b.count ? b[col] : ""
-            // Try numeric sort
-            if let na = Double(va), let nb = Double(vb) {
-                return sortAscending ? na < nb : na > nb
-            }
-            return sortAscending
-                ? va.localizedCaseInsensitiveCompare(vb) == .orderedAscending
-                : va.localizedCaseInsensitiveCompare(vb) == .orderedDescending
         }
     }
 
@@ -73,7 +57,7 @@ struct CSVViewerView: View {
 
             Divider()
 
-            // Table
+            // Native table
             if headers.isEmpty {
                 VStack {
                     Spacer()
@@ -82,89 +66,13 @@ struct CSVViewerView: View {
                     Spacer()
                 }
             } else {
-                ScrollView([.horizontal, .vertical]) {
-                    VStack(spacing: 0) {
-                        // Header row
-                        HStack(spacing: 0) {
-                            // Row number column
-                            Text("#")
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 40, alignment: .center)
-                                .padding(.vertical, 6)
-                                .background(Color(nsColor: .controlBackgroundColor))
-
-                            ForEach(Array(headers.enumerated()), id: \.offset) { i, header in
-                                Button(action: {
-                                    if sortColumn == i {
-                                        sortAscending.toggle()
-                                    } else {
-                                        sortColumn = i
-                                        sortAscending = true
-                                    }
-                                }) {
-                                    HStack(spacing: 2) {
-                                        Text(header)
-                                            .font(.caption)
-                                            .fontWeight(.bold)
-                                            .lineLimit(1)
-                                        if sortColumn == i {
-                                            Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
-                                                .font(.system(size: 8))
-                                        }
-                                    }
-                                    .frame(minWidth: 80, alignment: .leading)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
-                                }
-                                .buttonStyle(.plain)
-                                .background(Color(nsColor: .controlBackgroundColor))
-
-                                if i < headers.count - 1 {
-                                    Divider()
-                                }
-                            }
-                        }
-
-                        Divider()
-
-                        // Data rows
-                        ForEach(Array(filteredRows.enumerated()), id: \.offset) { rowIndex, row in
-                            HStack(spacing: 0) {
-                                Text("\(rowIndex + 1)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .frame(width: 40, alignment: .center)
-                                    .padding(.vertical, 4)
-
-                                ForEach(Array(headers.indices), id: \.self) { colIndex in
-                                    Text(colIndex < row.count ? row[colIndex] : "")
-                                        .font(.system(.caption, design: .monospaced))
-                                        .lineLimit(1)
-                                        .frame(minWidth: 80, alignment: .leading)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .textSelection(.enabled)
-
-                                    if colIndex < headers.count - 1 {
-                                        Divider()
-                                    }
-                                }
-                            }
-                            .background(rowIndex % 2 == 0 ? Color.clear : Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                        }
-                    }
-                }
+                NativeTableView(headers: headers, rows: filteredRows)
             }
 
             Divider()
 
             // Footer
             HStack {
-                Image(systemName: "doc.text")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
                 Text(filePath)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -179,6 +87,7 @@ struct CSVViewerView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .help("Reveal in Finder")
                 Button(action: {
                     NSWorkspace.shared.open(URL(fileURLWithPath: filePath))
                 }) {
@@ -198,10 +107,8 @@ struct CSVViewerView: View {
 
     private func loadCSV() {
         guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return }
-
         let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
         guard let headerLine = lines.first else { return }
-
         headers = parseCSVLine(headerLine)
         rows = Array(lines.dropFirst()).map { parseCSVLine($0) }
     }
@@ -210,7 +117,6 @@ struct CSVViewerView: View {
         var fields: [String] = []
         var current = ""
         var inQuotes = false
-
         for char in line {
             if char == "\"" {
                 inQuotes.toggle()
@@ -223,5 +129,136 @@ struct CSVViewerView: View {
         }
         fields.append(current.trimmingCharacters(in: .whitespaces))
         return fields
+    }
+}
+
+// MARK: - Native NSTableView
+
+struct NativeTableView: NSViewRepresentable {
+    let headers: [String]
+    let rows: [[String]]
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+
+        let tableView = NSTableView()
+        tableView.style = .plain
+        tableView.usesAlternatingRowBackgroundColors = true
+        tableView.allowsColumnReordering = true
+        tableView.allowsColumnResizing = true
+        tableView.allowsMultipleSelection = false
+        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        tableView.intercellSpacing = NSSize(width: 8, height: 4)
+        tableView.rowHeight = 22
+        tableView.headerView = NSTableHeaderView()
+        tableView.gridStyleMask = [.solidVerticalGridLineMask]
+
+        // Row number column
+        let numCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("_row"))
+        numCol.title = "#"
+        numCol.width = 40
+        numCol.minWidth = 30
+        numCol.maxWidth = 60
+        tableView.addTableColumn(numCol)
+
+        // Data columns
+        for (i, header) in headers.enumerated() {
+            let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("col_\(i)"))
+            col.title = header
+            col.minWidth = 60
+            col.width = 120
+            col.sortDescriptorPrototype = NSSortDescriptor(key: "col_\(i)", ascending: true)
+            tableView.addTableColumn(col)
+        }
+
+        tableView.delegate = context.coordinator
+        tableView.dataSource = context.coordinator
+        context.coordinator.tableView = tableView
+
+        scrollView.documentView = tableView
+
+        // Size columns to fit
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            tableView.sizeToFit()
+        }
+
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.rows = rows
+        (scrollView.documentView as? NSTableView)?.reloadData()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(headers: headers, rows: rows)
+    }
+
+    class Coordinator: NSObject, NSTableViewDelegate, NSTableViewDataSource {
+        let headers: [String]
+        var rows: [[String]]
+        weak var tableView: NSTableView?
+
+        init(headers: [String], rows: [[String]]) {
+            self.headers = headers
+            self.rows = rows
+        }
+
+        func numberOfRows(in tableView: NSTableView) -> Int {
+            rows.count
+        }
+
+        func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            guard let colId = tableColumn?.identifier.rawValue else { return nil }
+
+            let cellId = NSUserInterfaceItemIdentifier("cell")
+            let cell: NSTextField
+            if let existing = tableView.makeView(withIdentifier: cellId, owner: nil) as? NSTextField {
+                cell = existing
+            } else {
+                cell = NSTextField()
+                cell.identifier = cellId
+                cell.isBordered = false
+                cell.isEditable = false
+                cell.isSelectable = true
+                cell.backgroundColor = .clear
+                cell.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+                cell.lineBreakMode = .byTruncatingTail
+                cell.cell?.truncatesLastVisibleLine = true
+            }
+
+            if colId == "_row" {
+                cell.stringValue = "\(row + 1)"
+                cell.alignment = .center
+                cell.font = NSFont.systemFont(ofSize: 10)
+                cell.textColor = .tertiaryLabelColor
+            } else if colId.hasPrefix("col_"), let colIndex = Int(colId.dropFirst(4)) {
+                cell.stringValue = colIndex < rows[row].count ? rows[row][colIndex] : ""
+                cell.alignment = .left
+                cell.textColor = .labelColor
+            }
+
+            return cell
+        }
+
+        func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
+            guard let sort = tableView.sortDescriptors.first,
+                  let key = sort.key, key.hasPrefix("col_"),
+                  let colIndex = Int(key.dropFirst(4)) else { return }
+
+            rows.sort { a, b in
+                let va = colIndex < a.count ? a[colIndex] : ""
+                let vb = colIndex < b.count ? b[colIndex] : ""
+                if let na = Double(va), let nb = Double(vb) {
+                    return sort.ascending ? na < nb : na > nb
+                }
+                let result = va.localizedCaseInsensitiveCompare(vb)
+                return sort.ascending ? result == .orderedAscending : result == .orderedDescending
+            }
+            tableView.reloadData()
+        }
     }
 }
