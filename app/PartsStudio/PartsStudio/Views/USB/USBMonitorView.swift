@@ -44,6 +44,14 @@ struct USBDevice: Identifiable {
             case 0x1010: return "Allwinner A64 (ADB)"
             default: return "Allwinner SoC"
             }
+        case 0x303A: // Espressif
+            switch productId {
+            case 0x1001: return "ESP32-S2"
+            case 0x0002: return "ESP32-S3"
+            case 0x0003: return "ESP32-C3"
+            case 0x1002: return "ESP32-C6"
+            default: return "ESP32 (Espressif)"
+            }
         case 0x2341: return "Arduino"
         case 0x1D6B: return "Linux USB (gadget)"
         case 0x0525: // Linux USB gadget (common for CDC-ECM)
@@ -60,9 +68,31 @@ struct USBDevice: Identifiable {
     var isSerial: Bool { serialPort != nil }
     var isFEL: Bool { vendorId == 0x1F3A && productId == 0xEFE8 }
     var isAllwinner: Bool { vendorId == 0x1F3A }
-    var isCDCEthernet: Bool { vendorId == 0x0525 || name.lowercased().contains("ethernet") || name.lowercased().contains("cdc") }
+    var isCDCEthernet: Bool { vendorId == 0x0525 || name.lowercased().contains("ethernet") || name.lowercased().contains("cdc") || name.lowercased().contains("popcorn") }
     var isKnownDebugChip: Bool { [0x1A86, 0x10C4, 0x0403].contains(vendorId) }
-    var isInteresting: Bool { isKnownDebugChip || isAllwinner || isCDCEthernet }
+    var isInteresting: Bool { isKnownDebugChip || isAllwinner || isCDCEthernet || isPocketPC }
+    var isPocketPC: Bool { isAllwinner || isCDCEthernet || (vendorId == 0x1A86 && serialPort?.contains("usbserial") == true) }
+
+    /// Friendly device name — like iTunes recognizing an iPod
+    var friendlyName: String? {
+        if isFEL { return "PocketPC (FEL Boot Mode)" }
+        if vendorId == 0x1F3A { return "PocketPC (Allwinner A64)" }
+        if isCDCEthernet || name.lowercased().contains("popcorn") { return "Popstick (CDC Ethernet)" }
+        if vendorId == 0x1A86 && serialPort != nil { return "PocketPC Debug Console" }
+        // ESP32 detection
+        if vendorId == 0x303A { return "ESP32 (Espressif)" }
+        if vendorId == 0x10C4 && name.lowercased().contains("cp210") { return "ESP32 (CP2102 Bridge)" }
+        return nil
+    }
+
+    var deviceIcon: String {
+        if isFEL { return "bolt.fill" }
+        if isPocketPC { return "desktopcomputer" }
+        if isCDCEthernet { return "network" }
+        if vendorId == 0x303A || (vendorId == 0x10C4 && name.lowercased().contains("esp")) { return "antenna.radiowaves.left.and.right" }
+        if isSerial { return "cable.connector" }
+        return "usb"
+    }
 }
 
 struct SerialSession: Identifiable {
@@ -392,9 +422,28 @@ struct USBDeviceCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Friendly name banner (like iTunes for iPod)
+            if let friendly = device.friendlyName {
+                HStack(spacing: 6) {
+                    Image(systemName: device.deviceIcon)
+                        .font(.caption)
+                    Text(friendly)
+                        .font(.caption)
+                        .fontWeight(.bold)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(device.isFEL ? Color.yellow : Color.accentColor)
+                )
+            }
+
             HStack {
-                Image(systemName: device.isSerial ? "cable.connector" : "usb")
-                    .foregroundStyle(device.isKnownDebugChip ? Color.accentColor : .secondary)
+                Image(systemName: device.deviceIcon)
+                    .foregroundStyle(device.isInteresting ? Color.accentColor : .secondary)
                 Text(device.name)
                     .font(.body)
                     .fontWeight(.medium)
