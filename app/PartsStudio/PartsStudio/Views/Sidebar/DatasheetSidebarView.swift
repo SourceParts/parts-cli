@@ -114,13 +114,11 @@ struct DatasheetSidebarView: View {
                     }
 
                     // IQC Reports
-                    if !appState.iqcItems.isEmpty {
+                    if !appState.effectiveIQCItems.isEmpty {
                         DisclosureGroup(isExpanded: $iqcExpanded) {
                             IQCSidebarSection()
                         } label: {
-                            Label("IQC Reports (\(appState.iqcItems.count))", systemImage: "checkmark.shield")
-                                .font(.caption)
-                                .fontWeight(.semibold)
+                            IQCSidebarSectionHeader()
                         }
                     }
 

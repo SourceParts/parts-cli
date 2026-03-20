@@ -3,8 +3,12 @@ import SwiftUI
 struct IQCSidebarSection: View {
     @EnvironmentObject var appState: AppState
 
+    private var items: [IQCItem] {
+        appState.effectiveIQCItems
+    }
+
     var body: some View {
-        ForEach(appState.iqcItems) { item in
+        ForEach(items) { item in
             IQCItemRow(item: item, isSelected: appState.selectedIQCItem?.id == item.id)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -13,6 +17,33 @@ struct IQCSidebarSection: View {
                     appState.selectedDatasheet = nil
                     appState.pdfDocument = nil
                 }
+        }
+    }
+}
+
+struct IQCSidebarSectionHeader: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        HStack {
+            Label("IQC Reports (\(appState.effectiveIQCItems.count))", systemImage: "checkmark.shield")
+                .font(.caption)
+                .fontWeight(.semibold)
+            Spacer()
+            if appState.iqcService.isLoading {
+                ProgressView()
+                    .controlSize(.mini)
+            } else {
+                Button(action: {
+                    Task { await appState.iqcService.fetchItems() }
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Refresh IQC items from API")
+            }
         }
     }
 }
