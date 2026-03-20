@@ -23,6 +23,8 @@ struct ContentView: View {
                 }
             } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".csv") {
                 CSVViewerView(filePath: asmDoc.path)
+            } else if let asmDoc = appState.selectedAssemblyDoc, isGerberFile(asmDoc.path) {
+                GerberViewerView(filePaths: gerberFilesInSameDir(asmDoc.path))
             } else if appState.pdfDocument != nil {
                 detailWithPanel {
                     PDFViewerContainer()
@@ -87,6 +89,21 @@ struct ContentView: View {
                 .keyboardShortcut(".", modifiers: [.command])
             }
         }
+    }
+
+    private func isGerberFile(_ path: String) -> Bool {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        return ["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"].contains(ext)
+    }
+
+    private func gerberFilesInSameDir(_ path: String) -> [String] {
+        let dir = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [path] }
+        let gerberExts = Set(["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"])
+        return files
+            .filter { gerberExts.contains(URL(fileURLWithPath: $0).pathExtension.lowercased()) }
+            .sorted()
+            .map { "\(dir)/\($0)" }
     }
 
     private func importPDF(url: URL) {

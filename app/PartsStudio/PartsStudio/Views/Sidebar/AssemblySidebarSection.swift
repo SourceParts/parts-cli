@@ -66,6 +66,11 @@ struct AssemblySidebarSection: View {
         }
     }
 
+    private func isGerberFile(_ path: String) -> Bool {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        return ["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"].contains(ext)
+    }
+
     private func openAssemblyDoc(_ doc: AssemblyDocument) {
         appState.selectedAssemblyDoc = doc
         appState.selectedDatasheet = nil
@@ -76,7 +81,8 @@ struct AssemblySidebarSection: View {
         if doc.path.lowercased().hasSuffix(".pdf") {
             appState.loadPDF(at: doc.path)
         } else if doc.path.lowercased().hasSuffix(".csv") {
-            // CSV opens in built-in viewer (clear PDF state)
+            appState.pdfDocument = nil
+        } else if isGerberFile(doc.path) {
             appState.pdfDocument = nil
         } else {
             NSWorkspace.shared.open(URL(fileURLWithPath: doc.path))
