@@ -7,7 +7,9 @@ struct ContentView: View {
         NavigationSplitView {
             DatasheetSidebarView()
         } detail: {
-            if appState.pdfDocument != nil {
+            if let eco = appState.selectedECO {
+                ECODetailView(document: eco)
+            } else if appState.pdfDocument != nil {
                 HSplitView {
                     PDFViewerContainer()
                         .frame(minWidth: 500)

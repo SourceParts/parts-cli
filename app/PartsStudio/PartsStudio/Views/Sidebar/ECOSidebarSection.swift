@@ -1,0 +1,90 @@
+import SwiftUI
+
+struct ECOSidebarSection: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        Section("ECO Tracker") {
+            ForEach(appState.ecoStore.documents) { doc in
+                ECODocumentRow(document: doc)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        appState.selectedECO = doc
+                        appState.selectedDatasheet = nil
+                        appState.pdfDocument = nil
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(appState.selectedECO?.id == doc.id ? Color.accentColor.opacity(0.15) : Color.clear)
+                    )
+            }
+        }
+    }
+}
+
+struct ECODocumentRow: View {
+    let document: ECODocument
+
+    private var typeColor: Color {
+        switch document.type {
+        case .eco: return .purple
+        case .ecr: return .blue
+        case .ecn: return .teal
+        }
+    }
+
+    private var severityColor: Color {
+        switch document.severity.uppercased() {
+        case "CRITICAL": return .red
+        case "HIGH": return .orange
+        case "MEDIUM": return .yellow
+        case "LOW": return .green
+        default: return .gray
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                // Type badge
+                Text(document.type.rawValue)
+                    .font(.caption2)
+                    .fontWeight(.bold)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(typeColor.opacity(0.2))
+                    .foregroundStyle(typeColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                Text(document.id)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+
+                Spacer()
+
+                // Severity badge (only if severity is set)
+                if !document.severity.isEmpty {
+                    Text(document.severity)
+                        .font(.system(size: 8, weight: .bold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(severityColor.opacity(0.15))
+                        .foregroundStyle(severityColor)
+                        .clipShape(Capsule())
+                }
+            }
+
+            Text(document.title)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+
+            Text(document.status)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 2)
+    }
+}

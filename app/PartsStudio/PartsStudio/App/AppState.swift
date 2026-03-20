@@ -62,11 +62,13 @@ class AppState: ObservableObject {
     @Published var showStripMetadata: Bool = false
     @Published var showExport: Bool = false
     @Published var sidebarSearchText: String = ""
+    @Published var selectedECO: ECODocument?
 
     let cacheService = CacheService()
     let annotationStore = AnnotationStoreContainer()
     let projectStore = ProjectStore()
     let dataLabelStore = DataLabelStore()
+    let ecoStore = ECOStore()
 
     @Published var iqcItems: [IQCItem] = [
         IQCItem(code: "SP-100234", status: "accepted", createdAt: "2026-03-18", inspectionNotes: "All parameters within spec"),
@@ -79,6 +81,7 @@ class AppState: ObservableObject {
 
     func selectDatasheet(_ datasheet: CachedDatasheet) {
         selectedDatasheet = datasheet
+        selectedECO = nil
         loadPDF(at: datasheet.path)
     }
 

@@ -109,6 +109,11 @@ struct DatasheetSidebarView: View {
                     if !appState.iqcItems.isEmpty {
                         IQCSidebarSection()
                     }
+
+                    // ECO Tracker
+                    if !appState.ecoStore.documents.isEmpty {
+                        ECOSidebarSection()
+                    }
                 }
             }
             .searchable(text: $appState.sidebarSearchText, prompt: "Filter datasheets")
