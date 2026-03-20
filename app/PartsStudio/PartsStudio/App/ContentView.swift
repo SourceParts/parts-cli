@@ -7,7 +7,15 @@ struct ContentView: View {
         NavigationSplitView {
             DatasheetSidebarView()
         } detail: {
-            if let eco = appState.selectedECO {
+            if let iqc = appState.selectedIQCItem {
+                HSplitView {
+                    IQCDetailView(item: iqc)
+                        .frame(minWidth: 500)
+
+                    ECOChatView(document: ECODocument(id: iqc.code, type: .ecn, title: "IQC Report", severity: "", status: iqc.status, filePath: "", body: ""))
+                        .frame(width: 280)
+                }
+            } else if let eco = appState.selectedECO {
                 HSplitView {
                     ECODetailView(document: eco)
                         .frame(minWidth: 500)

@@ -63,6 +63,7 @@ class AppState: ObservableObject {
     @Published var showExport: Bool = false
     @Published var sidebarSearchText: String = ""
     @Published var selectedECO: ECODocument?
+    @Published var selectedIQCItem: IQCItem?
 
     let cacheService = CacheService()
     let annotationStore = AnnotationStoreContainer()
@@ -83,6 +84,7 @@ class AppState: ObservableObject {
     func selectDatasheet(_ datasheet: CachedDatasheet) {
         selectedDatasheet = datasheet
         selectedECO = nil
+        selectedIQCItem = nil
         loadPDF(at: datasheet.path)
     }
 

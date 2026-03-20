@@ -6,9 +6,13 @@ struct IQCSidebarSection: View {
     var body: some View {
         Section("IQC Reports") {
             ForEach(appState.iqcItems) { item in
-                IQCItemRow(item: item)
+                IQCItemRow(item: item, isSelected: appState.selectedIQCItem?.id == item.id)
+                    .contentShape(Rectangle())
                     .onTapGesture {
-                        print("Selected IQC item: \(item.code)")
+                        appState.selectedIQCItem = item
+                        appState.selectedECO = nil
+                        appState.selectedDatasheet = nil
+                        appState.pdfDocument = nil
                     }
             }
         }
@@ -17,6 +21,7 @@ struct IQCSidebarSection: View {
 
 struct IQCItemRow: View {
     let item: IQCItem
+    var isSelected: Bool = false
 
     private var badgeColor: Color {
         switch item.status {
