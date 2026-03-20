@@ -73,6 +73,8 @@ class AppState: ObservableObject {
     let ecoStore = ECOStore()
     let ecoChatStore = ECOChatStore()
     let updater = Updater()
+    let assemblyStore = AssemblyStore()
+    @Published var selectedAssemblyDoc: AssemblyDocument?
 
     @Published var iqcItems: [IQCItem] = [
         IQCItem(code: "SP-100234", status: "accepted", createdAt: "2026-03-18",
@@ -133,6 +135,7 @@ class AppState: ObservableObject {
         selectedDatasheet = datasheet
         selectedECO = nil
         selectedIQCItem = nil
+        selectedAssemblyDoc = nil
         showCredits = false
         loadPDF(at: datasheet.path)
     }

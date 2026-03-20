@@ -6,9 +6,10 @@ struct DatasheetSidebarView: View {
     @State private var showNewProject: Bool = false
     @State private var renamingProjectId: String?
     @State private var renameText: String = ""
-    @State private var datasheetsExpanded: Bool = true
-    @State private var iqcExpanded: Bool = true
-    @State private var ecoExpanded: Bool = true
+    @AppStorage("sidebar.datasheetsExpanded") private var datasheetsExpanded: Bool = true
+    @AppStorage("sidebar.iqcExpanded") private var iqcExpanded: Bool = true
+    @AppStorage("sidebar.ecoExpanded") private var ecoExpanded: Bool = true
+    @AppStorage("sidebar.assemblyExpanded") private var assemblyExpanded: Bool = true
 
     private var projectStore: ProjectStore { appState.projectStore }
 
@@ -118,6 +119,17 @@ struct DatasheetSidebarView: View {
                             IQCSidebarSection()
                         } label: {
                             Label("IQC Reports (\(appState.iqcItems.count))", systemImage: "checkmark.shield")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
+                    }
+
+                    // Assembly Documents
+                    if !appState.assemblyStore.documents.isEmpty {
+                        DisclosureGroup(isExpanded: $assemblyExpanded) {
+                            AssemblySidebarSection()
+                        } label: {
+                            Label("Assembly (\(appState.assemblyStore.documents.count))", systemImage: "hammer")
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }
