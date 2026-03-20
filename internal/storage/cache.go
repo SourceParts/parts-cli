@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	net_http "net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -315,20 +316,17 @@ func ParsePageSpec(spec string) (PageSpec, error) {
 }
 
 // ReadPages renders specified pages from a cached PDF as PNG images.
+// Tries the API first (GET /v1/datasheets/<alias>/pages/<page>/image),
+// falls back to local pdftoppm if the API is unavailable.
 // Returns paths to the rendered PNG files.
 func ReadPages(contentHash, filename string, spec PageSpec, outputDir string) ([]string, error) {
-	pdfPath, ok := GetCachedDatasheet(contentHash, filename)
+	_, ok := GetCachedDatasheet(contentHash, filename)
 	if !ok {
 		return nil, fmt.Errorf("datasheet sha256_%s/%s not found in cache", contentHash, filename)
 	}
 
-	// Check pdftoppm is available
-	pdftoppmPath, err := exec.LookPath("pdftoppm")
-	if err != nil {
-		return nil, fmt.Errorf("pdftoppm not found in PATH — install poppler:\n  brew install poppler")
-	}
-
 	// Create output directory
+	var err error
 	if outputDir == "" {
 		outputDir, err = os.MkdirTemp("", "parts-datasheet-*")
 		if err != nil {
@@ -340,9 +338,87 @@ func ReadPages(contentHash, filename string, spec PageSpec, outputDir string) ([
 		}
 	}
 
-	var paths []string
 	prefix := strings.TrimSuffix(filename, filepath.Ext(filename))
 
+	// Try API first
+	paths, apiErr := readPagesFromAPI(contentHash, filename, spec, outputDir, prefix)
+	if apiErr == nil {
+		return paths, nil
+	}
+
+	// Fall back to local pdftoppm
+	return readPagesLocal(contentHash, filename, spec, outputDir, prefix)
+}
+
+// readPagesFromAPI fetches rendered page images from the Source Parts API.
+func readPagesFromAPI(contentHash, filename string, spec PageSpec, outputDir, prefix string) ([]string, error) {
+	apiBase := os.Getenv("PARTS_API_URL")
+	if apiBase == "" {
+		apiBase = "https://api.source.parts"
+	}
+
+	apiKey := os.Getenv("PARTS_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("no API key available")
+	}
+
+	// Use content hash as the SKU identifier for the API
+	sku := contentHash
+
+	var paths []string
+	client := &net_http.Client{Timeout: 30 * time.Second}
+
+	for _, page := range spec.Pages {
+		url := fmt.Sprintf("%s/v1/datasheets/%s/pages/%d/image?dpi=200", apiBase, sku, page)
+		req, err := net_http.NewRequest("GET", url, nil)
+		if err != nil {
+			return paths, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return paths, fmt.Errorf("API request failed: %w", err)
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return paths, fmt.Errorf("API returned %d for page %d", resp.StatusCode, page)
+		}
+
+		outPath := filepath.Join(outputDir, fmt.Sprintf("%s_p%d.png", prefix, page))
+		outFile, err := os.Create(outPath)
+		if err != nil {
+			resp.Body.Close()
+			return paths, fmt.Errorf("create output file: %w", err)
+		}
+
+		_, err = io.Copy(outFile, resp.Body)
+		resp.Body.Close()
+		outFile.Close()
+		if err != nil {
+			return paths, fmt.Errorf("save page %d: %w", page, err)
+		}
+
+		paths = append(paths, outPath)
+	}
+
+	return paths, nil
+}
+
+// readPagesLocal renders pages using local pdftoppm (poppler).
+func readPagesLocal(contentHash, filename string, spec PageSpec, outputDir, prefix string) ([]string, error) {
+	pdfPath, ok := GetCachedDatasheet(contentHash, filename)
+	if !ok {
+		return nil, fmt.Errorf("datasheet sha256_%s/%s not found in cache", contentHash, filename)
+	}
+
+	pdftoppmPath, err := exec.LookPath("pdftoppm")
+	if err != nil {
+		return nil, fmt.Errorf("pdftoppm not found in PATH — install poppler:\n  brew install poppler\n\nOr set PARTS_API_KEY to use the API instead.")
+	}
+
+	var paths []string
 	for _, page := range spec.Pages {
 		outPrefix := filepath.Join(outputDir, fmt.Sprintf("%s_p%d", prefix, page))
 		cmd := exec.Command(pdftoppmPath, "-png", "-r", "200",
@@ -352,8 +428,6 @@ func ReadPages(contentHash, filename string, spec PageSpec, outputDir string) ([
 			return paths, fmt.Errorf("pdftoppm page %d: %w\n%s", page, err, string(out))
 		}
 
-		// pdftoppm appends page numbers to the prefix: prefix-01.png or prefix-1.png
-		// Find the actual output file
 		matches, _ := filepath.Glob(outPrefix + "*.png")
 		if len(matches) == 0 {
 			return paths, fmt.Errorf("pdftoppm produced no output for page %d", page)
