@@ -68,6 +68,8 @@ func main() {
 		// Manufacturing
 		commands.DFM,
 		commands.Fab,
+		// EDA
+		commands.EDA,
 		commands.AOI,
 		commands.QC,
 		commands.Publish,
