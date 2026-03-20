@@ -233,6 +233,14 @@ struct IQCDocumentationView: View {
 struct LocalImageView: View {
     let path: String
     @State private var image: NSImage?
+    @State private var loadError: String?
+
+    private var resolvedPath: String {
+        if path.hasPrefix("~/") {
+            return FileManager.default.homeDirectoryForCurrentUser.path + String(path.dropFirst(1))
+        }
+        return path
+    }
 
     var body: some View {
         Group {
@@ -244,14 +252,14 @@ struct LocalImageView: View {
                     .shadow(color: .black.opacity(0.1), radius: 2)
                     .contextMenu {
                         Button("Reveal in Finder") {
-                            NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+                            NSWorkspace.shared.selectFile(resolvedPath, inFileViewerRootedAtPath: "")
                         }
                         Button("Open in Preview") {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                            NSWorkspace.shared.open(URL(fileURLWithPath: resolvedPath))
                         }
                         Button("Copy Path") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(path, forType: .string)
+                            NSPasteboard.general.setString(resolvedPath, forType: .string)
                         }
                     }
             } else {
@@ -265,14 +273,43 @@ struct LocalImageView: View {
                             Text(URL(fileURLWithPath: path).lastPathComponent)
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
+                            if let err = loadError {
+                                Text(err)
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                            }
                         }
                     )
             }
         }
-        .onAppear {
-            image = NSImage(contentsOfFile: path)
-        }
+        .onAppear { loadImage() }
         .help(URL(fileURLWithPath: path).lastPathComponent)
+    }
+
+    private func loadImage() {
+        let fullPath = resolvedPath
+        let url = URL(fileURLWithPath: fullPath)
+
+        guard FileManager.default.fileExists(atPath: fullPath) else {
+            loadError = "File not found"
+            return
+        }
+
+        // Try NSImage directly first
+        if let img = NSImage(contentsOf: url) {
+            image = img
+            return
+        }
+
+        // Fallback: load via CGImageSource for large/unusual BMPs
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            loadError = "Cannot decode"
+            return
+        }
+
+        let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        image = nsImage
     }
 }
 
