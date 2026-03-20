@@ -32,17 +32,7 @@ struct ContentView: View {
                         .frame(width: 280)
                 }
             } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "doc.richtext")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.secondary)
-                    Text("Select a datasheet from the sidebar")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                    Text("or import a PDF with Cmd+I")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
+                QuarterMasterView()
             }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
