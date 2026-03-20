@@ -5,6 +5,11 @@ import Combine
 class ECOStore: ObservableObject {
     @Published var documents: [ECODocument] = []
 
+    static var defaultECOPath: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Work/Consulting/nRF54H20-Main-Board/ECO")
+    }
+
     private let directoryPath: String
 
     init(directoryPath: String? = nil) {

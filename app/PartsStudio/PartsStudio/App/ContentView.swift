@@ -8,7 +8,13 @@ struct ContentView: View {
             DatasheetSidebarView()
         } detail: {
             if let eco = appState.selectedECO {
-                ECODetailView(document: eco)
+                HSplitView {
+                    ECODetailView(document: eco)
+                        .frame(minWidth: 500)
+
+                    ECOChatView(document: eco)
+                        .frame(width: 280)
+                }
             } else if appState.pdfDocument != nil {
                 HSplitView {
                     PDFViewerContainer()
@@ -31,7 +37,7 @@ struct ContentView: View {
                 }
             }
         }
-        .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+        .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
         .fileImporter(
             isPresented: $appState.showImportPanel,
             allowedContentTypes: [.pdf],

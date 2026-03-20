@@ -69,6 +69,7 @@ class AppState: ObservableObject {
     let projectStore = ProjectStore()
     let dataLabelStore = DataLabelStore()
     let ecoStore = ECOStore()
+    let ecoChatStore = ECOChatStore()
 
     @Published var iqcItems: [IQCItem] = [
         IQCItem(code: "SP-100234", status: "accepted", createdAt: "2026-03-18", inspectionNotes: "All parameters within spec"),
