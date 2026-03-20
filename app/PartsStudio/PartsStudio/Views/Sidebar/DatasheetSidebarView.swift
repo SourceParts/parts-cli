@@ -133,6 +133,25 @@ struct DatasheetSidebarView: View {
                                 .fontWeight(.semibold)
                         }
                     }
+
+                    // Credits & Services
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Button(action: {
+                        appState.showCredits = true
+                        appState.selectedDatasheet = nil
+                        appState.selectedECO = nil
+                        appState.selectedIQCItem = nil
+                        appState.pdfDocument = nil
+                    }) {
+                        Label("Credits & Services", systemImage: "creditcard")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(appState.showCredits ? Color.accentColor : .primary)
                 }
             }
             .searchable(text: $appState.sidebarSearchText, prompt: "Filter datasheets")

@@ -64,6 +64,7 @@ class AppState: ObservableObject {
     @Published var sidebarSearchText: String = ""
     @Published var selectedECO: ECODocument?
     @Published var selectedIQCItem: IQCItem?
+    @Published var showCredits: Bool = false
 
     let cacheService = CacheService()
     let annotationStore = AnnotationStoreContainer()
@@ -131,6 +132,7 @@ class AppState: ObservableObject {
         selectedDatasheet = datasheet
         selectedECO = nil
         selectedIQCItem = nil
+        showCredits = false
         loadPDF(at: datasheet.path)
     }
 

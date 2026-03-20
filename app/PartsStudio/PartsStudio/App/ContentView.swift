@@ -7,7 +7,9 @@ struct ContentView: View {
         NavigationSplitView {
             DatasheetSidebarView()
         } detail: {
-            if let iqc = appState.selectedIQCItem {
+            if appState.showCredits {
+                CreditsView()
+            } else if let iqc = appState.selectedIQCItem {
                 HSplitView {
                     IQCDetailView(item: iqc)
                         .frame(minWidth: 500)
