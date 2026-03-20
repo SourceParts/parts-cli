@@ -34,9 +34,11 @@ var datasheetInfo = &cobra.Command{
 }
 
 var (
-	dsAlias   string
-	dsTeam    string
-	dsProject string
+	dsAlias    string
+	dsTeam     string
+	dsProject  string
+	dsReadPages  string
+	dsReadOutput string
 )
 
 var datasheetUpload = &cobra.Command{
@@ -135,6 +137,73 @@ Accepts:
 		}
 
 		return fmt.Errorf("datasheet %q not found in cache", args[0])
+	},
+}
+
+var datasheetRead = &cobra.Command{
+	Use:   "read <alias-or-hash>",
+	Short: "Render pages from a cached datasheet PDF as PNG",
+	Long: `Render one or more pages from a cached datasheet PDF as PNG images
+using pdftoppm (poppler). Requires poppler to be installed.
+
+Page specification supports:
+  - Single page: --pages 29
+  - Multiple pages: --pages 29,143
+  - Ranges: --pages 1-5
+  - Combinations: --pages 1-3,7,10-12
+
+Install poppler: brew install poppler`,
+	Args:    cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` datasheet read pmic --pages 29`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ref := args[0]
+
+		// Parse page spec
+		spec, err := storage.ParsePageSpec(dsReadPages)
+		if err != nil {
+			return fmt.Errorf("invalid --pages: %w", err)
+		}
+
+		// Resolve alias or hash
+		var contentHash, filename string
+		if ch, fn, ok := storage.ResolveAlias(ref); ok {
+			contentHash, filename = ch, fn
+		} else {
+			// Try as hash/filename
+			ref = strings.TrimPrefix(ref, "sha256_")
+			parts := strings.SplitN(ref, "/", 2)
+			contentHash = parts[0]
+			if len(parts) == 2 {
+				filename = parts[1]
+			} else {
+				// Search by hash
+				cached, err := storage.ListCachedDatasheets()
+				if err != nil {
+					return err
+				}
+				for _, c := range cached {
+					if c.ContentHash == contentHash {
+						filename = c.Filename
+						break
+					}
+				}
+			}
+		}
+
+		if filename == "" {
+			return fmt.Errorf("datasheet %q not found in cache", args[0])
+		}
+
+		// Render pages
+		paths, err := storage.ReadPages(contentHash, filename, spec, dsReadOutput)
+		if err != nil {
+			return err
+		}
+
+		for _, p := range paths {
+			fmt.Println(p)
+		}
+		return nil
 	},
 }
 
@@ -247,6 +316,10 @@ func init() {
 	datasheetUpload.Flags().StringVar(&dsTeam, "team", "", "Team name (for scoped remote paths)")
 	datasheetUpload.Flags().StringVar(&dsProject, "project", "", "Project ID (for scoped remote paths)")
 
+	datasheetRead.Flags().StringVar(&dsReadPages, "pages", "", "Page(s) to render (e.g., 29, 1-5, 29,143)")
+	datasheetRead.MarkFlagRequired("pages")
+	datasheetRead.Flags().StringVar(&dsReadOutput, "output", "", "Output directory (default: temp dir)")
+
 	datasheetAlias.AddCommand(datasheetAliasList)
 	datasheetAlias.AddCommand(datasheetAliasSet)
 	datasheetAlias.AddCommand(datasheetAliasRm)
@@ -255,6 +328,7 @@ func init() {
 	Datasheet.AddCommand(datasheetUpload)
 	Datasheet.AddCommand(datasheetGet)
 	Datasheet.AddCommand(datasheetList)
+	Datasheet.AddCommand(datasheetRead)
 	Datasheet.AddCommand(datasheetAlias)
 }
 

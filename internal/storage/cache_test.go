@@ -83,3 +83,43 @@ func TestValidateAliasName(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePageSpec(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    []int
+		wantErr bool
+	}{
+		{"29", []int{29}, false},
+		{"1-5", []int{1, 2, 3, 4, 5}, false},
+		{"29,143", []int{29, 143}, false},
+		{"1-3,7,10-12", []int{1, 2, 3, 7, 10, 11, 12}, false},
+		{"5,3,1", []int{1, 3, 5}, false},        // sorted output
+		{"1,1,2,2", []int{1, 2}, false},          // deduplicated
+		{"", nil, true},                           // empty
+		{"abc", nil, true},                        // non-numeric
+		{"5-3", nil, true},                        // reversed range
+		{"0", nil, true},                          // page 0
+		{"-1", nil, true},                         // negative
+	}
+
+	for _, tt := range tests {
+		spec, err := ParsePageSpec(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ParsePageSpec(%q): err=%v, wantErr=%v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		if len(spec.Pages) != len(tt.want) {
+			t.Errorf("ParsePageSpec(%q): got %v, want %v", tt.input, spec.Pages, tt.want)
+			continue
+		}
+		for i, p := range spec.Pages {
+			if p != tt.want[i] {
+				t.Errorf("ParsePageSpec(%q)[%d]: got %d, want %d", tt.input, i, p, tt.want[i])
+			}
+		}
+	}
+}
