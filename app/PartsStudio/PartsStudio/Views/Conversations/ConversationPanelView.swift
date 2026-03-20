@@ -97,6 +97,26 @@ struct ThreadView: View {
     var body: some View {
         if let thread = thread {
             VStack(alignment: .leading, spacing: 8) {
+                // Selected text quote
+                if let quote = thread.selectedText, !quote.isEmpty {
+                    HStack(spacing: 6) {
+                        Rectangle()
+                            .fill(Color.accentColor)
+                            .frame(width: 3)
+                        Text(quote)
+                            .font(.caption)
+                            .italic()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .textSelection(.enabled)
+                    }
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.accentColor.opacity(0.06))
+                    )
+                }
+
                 ForEach(thread.comments) { comment in
                     CommentView(comment: comment)
                 }

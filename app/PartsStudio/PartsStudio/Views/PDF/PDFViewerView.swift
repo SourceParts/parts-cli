@@ -99,7 +99,7 @@ struct PDFViewerView: NSViewRepresentable {
             }
         }
 
-        func addComment(page: PDFPage, point: CGPoint) {
+        func addComment(page: PDFPage, point: CGPoint, selectedText: String?) {
             let doc = parent.document
             let pageIndex = doc.index(for: page)
 
@@ -107,7 +107,8 @@ struct PDFViewerView: NSViewRepresentable {
                 page: pageIndex,
                 anchorX: point.x,
                 anchorY: point.y,
-                text: "New thread"
+                text: selectedText != nil ? "Re: \"\(selectedText!)\"" : "New thread",
+                selectedText: selectedText
             )
             DispatchQueue.main.async {
                 self.parent.onCommentAdded?()
@@ -161,7 +162,10 @@ class AnnotatingPDFView: PDFView {
         case .text:
             handleTextClick(page: page, point: pagePoint)
         case .comment:
-            coordinator?.addComment(page: page, point: pagePoint)
+            // Grab any currently selected text from the PDF
+            let selectedText = currentSelection?.string
+            coordinator?.addComment(page: page, point: pagePoint, selectedText: selectedText)
+            clearSelection()
         case .redact, .highlight:
             // Start drag
             dragStart = pagePoint

@@ -21,20 +21,23 @@ struct ConversationThread: Codable, Identifiable {
     let anchorY: CGFloat
     var resolved: Bool
     var comments: [Comment]
+    var selectedText: String?  // Text selected from the PDF when creating the thread
 
     enum CodingKeys: String, CodingKey {
         case id, page, resolved, comments
         case anchorX = "anchor_x"
         case anchorY = "anchor_y"
+        case selectedText = "selected_text"
     }
 
-    init(page: Int, anchorX: CGFloat, anchorY: CGFloat, initialComment: Comment) {
+    init(page: Int, anchorX: CGFloat, anchorY: CGFloat, initialComment: Comment, selectedText: String? = nil) {
         self.id = UUID().uuidString
         self.page = page
         self.anchorX = anchorX
         self.anchorY = anchorY
         self.resolved = false
         self.comments = [initialComment]
+        self.selectedText = selectedText
     }
 
     mutating func addReply(author: String, text: String) {

@@ -55,10 +55,10 @@ class ConversationStore: ObservableObject {
 
     // MARK: - Mutate
 
-    func addThread(page: Int, anchorX: CGFloat, anchorY: CGFloat, text: String) {
+    func addThread(page: Int, anchorX: CGFloat, anchorY: CGFloat, text: String, selectedText: String? = nil) {
         let author = NSUserName()
         let comment = Comment(author: author, text: text)
-        let thread = ConversationThread(page: page, anchorX: anchorX, anchorY: anchorY, initialComment: comment)
+        let thread = ConversationThread(page: page, anchorX: anchorX, anchorY: anchorY, initialComment: comment, selectedText: selectedText)
         threads.append(thread)
         save()
     }
