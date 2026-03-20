@@ -62,6 +62,9 @@ type Client interface {
 	Expense(ctx context.Context, input string, w io.Writer) error
 	Price(ctx context.Context, partNumber string, opts types.PriceOptions, w io.Writer) error
 
+	// Credits
+	CreditsBalance(ctx context.Context, jsonOutput bool, w io.Writer) error
+
 	// Workflow
 	Note(ctx context.Context, note string, w io.Writer) error
 	Todo(ctx context.Context, todoItem string, w io.Writer) error

@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 
 struct DataLabel: Codable, Identifiable {
     let id: String
@@ -25,6 +26,42 @@ struct DataLabel: Codable, Identifiable {
         self.value = value
         self.unit = unit
         self.created = ISO8601DateFormatter().string(from: Date())
+    }
+
+    var categoryColor: NSColor {
+        switch category {
+        case "pin": return NSColor.systemBlue
+        case "voltage": return NSColor.systemRed
+        case "current": return NSColor.systemOrange
+        case "package": return NSColor.systemPurple
+        case "temperature": return NSColor.systemBrown
+        case "frequency": return NSColor.systemTeal
+        default: return NSColor.systemGray
+        }
+    }
+
+    var displayText: String {
+        if let unit = unit, !unit.isEmpty {
+            return "\(key): \(value) \(unit)"
+        }
+        return "\(key): \(value)"
+    }
+
+    func toPDFAnnotation() -> PDFAnnotation {
+        let rect = CGRect(x: x, y: y, width: width, height: height)
+        let annotation = PDFAnnotation(bounds: rect, forType: .freeText, withProperties: nil)
+        annotation.contents = displayText
+        annotation.font = NSFont.boldSystemFont(ofSize: 9)
+        annotation.fontColor = categoryColor
+        annotation.color = categoryColor.withAlphaComponent(0.08)
+
+        let border = PDFBorder()
+        border.lineWidth = 1.5
+        border.style = .dashed
+        border.dashPattern = [NSNumber(value: 4), NSNumber(value: 2)]
+        annotation.border = border
+
+        return annotation
     }
 }
 

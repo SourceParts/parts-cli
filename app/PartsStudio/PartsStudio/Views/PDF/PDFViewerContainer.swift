@@ -16,10 +16,14 @@ struct PDFViewerContainer: View {
                     toolMode: appState.currentTool,
                     annotationStore: appState.annotationStore.annotations,
                     conversationStore: appState.annotationStore.conversations,
+                    dataLabelStore: appState.dataLabelStore,
                     onAnnotationAdded: {
                         annotationRefresh = UUID()
                     },
                     onCommentAdded: {
+                        annotationRefresh = UUID()
+                    },
+                    onLabelAdded: {
                         annotationRefresh = UUID()
                     }
                 )
@@ -110,6 +114,17 @@ struct PDFToolbarView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Capsule().fill(Color.secondary.opacity(0.15)))
+            }
+
+            // Data label count for current page
+            let pageLabels = appState.dataLabelStore.labelsForPage(appState.currentPage)
+            if !pageLabels.isEmpty {
+                Text("\(pageLabels.count) label\(pageLabels.count == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.teal.opacity(0.15)))
             }
 
             // Datasheet name

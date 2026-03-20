@@ -7,6 +7,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
     case text
     case highlight
     case comment
+    case label
 
     var id: String { rawValue }
 
@@ -17,6 +18,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
         case .text: return "Text"
         case .highlight: return "Highlight"
         case .comment: return "Comment"
+        case .label: return "Label"
         }
     }
 
@@ -27,6 +29,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
         case .text: return "textformat"
         case .highlight: return "highlighter"
         case .comment: return "bubble.left"
+        case .label: return "tag"
         }
     }
 
@@ -37,6 +40,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
         case .text: return "3"
         case .highlight: return "4"
         case .comment: return "5"
+        case .label: return "6"
         }
     }
 
@@ -47,6 +51,7 @@ enum ToolMode: String, CaseIterable, Identifiable {
         case .text: return "Text (Cmd+3) — click to place editable text on the page"
         case .highlight: return "Highlight (Cmd+4) — drag to highlight areas of interest"
         case .comment: return "Comment (Cmd+5) — click to pin a conversation thread to a location"
+        case .label: return "Label (Cmd+6) — drag to mark a region with structured data (pin, voltage, etc.)"
         }
     }
 }
@@ -153,6 +158,7 @@ class AppState: ObservableObject {
             annotationStore.conversations.load(for: ds)
             dataLabelStore.load(for: ds)
             applyAnnotations()
+            applyDataLabels()
         }
     }
 
@@ -167,6 +173,16 @@ class AppState: ObservableObject {
             guard annotation.page >= 0, annotation.page < doc.pageCount else { continue }
             guard let pdfPage = doc.page(at: annotation.page) else { continue }
             let pdfAnnotation = annotation.toPDFAnnotation()
+            pdfPage.addAnnotation(pdfAnnotation)
+        }
+    }
+
+    func applyDataLabels() {
+        guard let doc = pdfDocument else { return }
+        for label in dataLabelStore.labels {
+            guard label.page >= 0, label.page < doc.pageCount else { continue }
+            guard let pdfPage = doc.page(at: label.page) else { continue }
+            let pdfAnnotation = label.toPDFAnnotation()
             pdfPage.addAnnotation(pdfAnnotation)
         }
     }

@@ -13,8 +13,10 @@ struct PDFViewerView: NSViewRepresentable {
     var toolMode: ToolMode = .view
     var annotationStore: AnnotationStore?
     var conversationStore: ConversationStore?
+    var dataLabelStore: DataLabelStore?
     var onAnnotationAdded: (() -> Void)?
     var onCommentAdded: (() -> Void)?
+    var onLabelAdded: (() -> Void)?
 
     func makeNSView(context: Context) -> AnnotatingPDFView {
         let pdfView = AnnotatingPDFView()
@@ -185,7 +187,7 @@ class AnnotatingPDFView: PDFView {
             let selectedText = currentSelection?.string
             coordinator?.addComment(page: page, point: pagePoint, selectedText: selectedText)
             clearSelection()
-        case .redact, .highlight:
+        case .redact, .highlight, .label:
             // Start drag
             dragStart = pagePoint
             dragPage = page
@@ -263,6 +265,8 @@ class AnnotatingPDFView: PDFView {
             coordinator?.addAnnotation(type: .redaction, page: page, bounds: rect)
         case .highlight:
             coordinator?.addAnnotation(type: .highlight, page: page, bounds: rect)
+        case .label:
+            handleLabelCreation(page: page, rect: rect)
         default:
             break
         }
@@ -301,16 +305,108 @@ class AnnotatingPDFView: PDFView {
         }
     }
 
+    // MARK: - Label creation
+
+    private func handleLabelCreation(page: PDFPage, rect: CGRect) {
+        let categories = ["pin", "voltage", "current", "package", "temperature", "frequency", "custom"]
+
+        let alert = NSAlert()
+        alert.messageText = "Add Data Label"
+        alert.informativeText = "Annotate this region with structured data:"
+        alert.addButton(withTitle: "Add Label")
+        alert.addButton(withTitle: "Cancel")
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 140))
+
+        // Category dropdown
+        let categoryLabel = NSTextField(labelWithString: "Category:")
+        categoryLabel.frame = NSRect(x: 0, y: 112, width: 80, height: 20)
+        container.addSubview(categoryLabel)
+
+        let categoryPopup = NSPopUpButton(frame: NSRect(x: 85, y: 108, width: 230, height: 28))
+        categoryPopup.addItems(withTitles: categories)
+        container.addSubview(categoryPopup)
+
+        // Key field
+        let keyLabel = NSTextField(labelWithString: "Key:")
+        keyLabel.frame = NSRect(x: 0, y: 80, width: 80, height: 20)
+        container.addSubview(keyLabel)
+
+        let keyField = NSTextField(frame: NSRect(x: 85, y: 78, width: 230, height: 24))
+        keyField.placeholderString = "e.g. VDD, Pin 12, Max rating"
+        container.addSubview(keyField)
+
+        // Value field
+        let valueLabel = NSTextField(labelWithString: "Value:")
+        valueLabel.frame = NSRect(x: 0, y: 48, width: 80, height: 20)
+        container.addSubview(valueLabel)
+
+        let valueField = NSTextField(frame: NSRect(x: 85, y: 46, width: 230, height: 24))
+        valueField.placeholderString = "e.g. 3.3V, GPIO, 125C"
+        container.addSubview(valueField)
+
+        // Unit field
+        let unitLabel = NSTextField(labelWithString: "Unit (opt):")
+        unitLabel.frame = NSRect(x: 0, y: 16, width: 80, height: 20)
+        container.addSubview(unitLabel)
+
+        let unitField = NSTextField(frame: NSRect(x: 85, y: 14, width: 230, height: 24))
+        unitField.placeholderString = "e.g. V, A, MHz, C"
+        container.addSubview(unitField)
+
+        alert.accessoryView = container
+        alert.window.initialFirstResponder = keyField
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            let key = keyField.stringValue
+            let value = valueField.stringValue
+            guard !key.isEmpty, !value.isEmpty else { return }
+
+            let category = categories[categoryPopup.indexOfSelectedItem]
+            let unit = unitField.stringValue.isEmpty ? nil : unitField.stringValue
+
+            guard let doc = coordinator?.parent.document else { return }
+            let pageIndex = doc.index(for: page)
+
+            let dataLabel = DataLabel(
+                page: pageIndex,
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.width,
+                height: rect.height,
+                category: category,
+                key: key,
+                value: value,
+                unit: unit
+            )
+
+            // Add visual annotation to page
+            let pdfAnnotation = dataLabel.toPDFAnnotation()
+            page.addAnnotation(pdfAnnotation)
+
+            // Persist via store
+            coordinator?.parent.dataLabelStore?.addLabel(dataLabel)
+            DispatchQueue.main.async {
+                self.coordinator?.parent.onLabelAdded?()
+            }
+        }
+    }
+
     // MARK: - Drag overlay
 
     private func showDragOverlay(at point: NSPoint) {
         let overlay = NSView(frame: NSRect(origin: point, size: NSSize(width: 1, height: 1)))
         overlay.wantsLayer = true
 
-        if toolMode == .redact {
+        switch toolMode {
+        case .redact:
             overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.3).cgColor
             overlay.layer?.borderColor = NSColor.black.cgColor
-        } else {
+        case .label:
+            overlay.layer?.backgroundColor = NSColor.systemTeal.withAlphaComponent(0.15).cgColor
+            overlay.layer?.borderColor = NSColor.systemTeal.cgColor
+        default:
             overlay.layer?.backgroundColor = NSColor.yellow.withAlphaComponent(0.2).cgColor
             overlay.layer?.borderColor = NSColor.orange.cgColor
         }

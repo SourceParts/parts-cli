@@ -184,6 +184,13 @@ const Endpoint_Expense = V1Prefix + `/costs/expense`
 const Endpoint_Balance = V1Prefix + `/costs/balance`
 
 // =============================================================================
+// CREDITS
+// =============================================================================
+
+// Endpoint_CreditsBalance gets the current sourcing credit balance
+const Endpoint_CreditsBalance = V1Prefix + `/credits/balance`
+
+// =============================================================================
 // DOCUMENTATION
 // =============================================================================
 
