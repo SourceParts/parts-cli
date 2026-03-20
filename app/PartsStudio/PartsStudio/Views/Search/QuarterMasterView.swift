@@ -16,10 +16,8 @@ struct PartsQView: View {
                     .font(.title2)
                     .foregroundStyle(.secondary)
 
-                TextField("Search parts, paste URLs, decode SMD codes...", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(.title3)
-                    .onSubmit { runQuery() }
+                SearchField(text: $query, placeholder: "Search parts, paste URLs, decode SMD codes...", onSubmit: runQuery)
+                    .frame(height: 28)
 
                 if isLoading {
                     ProgressView()
@@ -31,7 +29,6 @@ struct PartsQView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
-                    .keyboardShortcut(.return, modifiers: [])
                 }
             }
             .padding(16)
@@ -356,5 +353,64 @@ struct QueryError {
         }
 
         return nil
+    }
+}
+
+// MARK: - Native Search Field
+
+/// NSTextField wrapper that reliably accepts keyboard input in the main content area.
+struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    var onSubmit: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.delegate = context.coordinator
+        field.font = NSFont.systemFont(ofSize: 16)
+        field.placeholderString = placeholder
+        field.isBordered = false
+        field.backgroundColor = .clear
+        field.focusRingType = .none
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.isScrollable = true
+
+        // Claim focus on appear
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            field.window?.makeFirstResponder(field)
+        }
+
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        if field.stringValue != text {
+            field.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: SearchField
+
+        init(_ parent: SearchField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                parent.onSubmit()
+                return true
+            }
+            return false
+        }
     }
 }
