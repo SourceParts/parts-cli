@@ -66,6 +66,16 @@ class AppState: ObservableObject {
     let cacheService = CacheService()
     let annotationStore = AnnotationStoreContainer()
     let projectStore = ProjectStore()
+    let dataLabelStore = DataLabelStore()
+
+    @Published var iqcItems: [IQCItem] = [
+        IQCItem(code: "SP-100234", status: "accepted", createdAt: "2026-03-18", inspectionNotes: "All parameters within spec"),
+        IQCItem(code: "SP-100235", status: "pending_inspection", createdAt: "2026-03-19"),
+        IQCItem(code: "SP-100236", status: "rejected", createdAt: "2026-03-17", inspectionNotes: "Moisture sensitivity level exceeded"),
+        IQCItem(code: "SP-100237", status: "inspected", createdAt: "2026-03-18", inspectionNotes: "Visual inspection passed, awaiting electrical test"),
+        IQCItem(code: "SP-100238", status: "accepted", createdAt: "2026-03-16"),
+        IQCItem(code: "SP-100239", status: "pending_inspection", createdAt: "2026-03-19", inspectionNotes: "Batch of 500 units received"),
+    ]
 
     func selectDatasheet(_ datasheet: CachedDatasheet) {
         selectedDatasheet = datasheet
@@ -82,6 +92,7 @@ class AppState: ObservableObject {
         if let ds = selectedDatasheet {
             annotationStore.annotations.load(for: ds)
             annotationStore.conversations.load(for: ds)
+            dataLabelStore.load(for: ds)
             applyAnnotations()
         }
     }

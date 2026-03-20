@@ -26,49 +26,88 @@ struct DatasheetSidebarView: View {
         return filteredDatasheets.filter { !allAssigned.contains($0.id) }
     }
 
+    /// Navigation title changes based on selected project
+    private var navigationTitle: String {
+        if let project = projectStore.selectedProject {
+            return "Parts Studio \u{2014} \(project.name)"
+        }
+        return "Parts Studio"
+    }
+
+    /// Datasheets visible in the sidebar based on selected project filter
+    private var visibleDatasheets: [CachedDatasheet] {
+        if let project = projectStore.selectedProject {
+            return projectStore.datasheetsForProject(project, allDatasheets: filteredDatasheets)
+        }
+        return filteredDatasheets
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             List(selection: $appState.selectedDatasheet) {
-                // Projects section
-                ForEach(projectStore.projects) { project in
-                    projectSection(project)
-                }
-
-                // New project row
-                if showNewProject {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder.badge.plus")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                        TextField("Project name", text: $newProjectName)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.caption)
-                            .onSubmit { createProject() }
-                        Button(action: createProject) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
+                // When a project is selected, show a "Show All" button and only that project's datasheets
+                if let selectedProject = projectStore.selectedProject {
+                    Button(action: { projectStore.selectedProject = nil }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.caption)
+                            Text("Show All")
+                                .font(.caption)
+                                .fontWeight(.medium)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(newProjectName.isEmpty)
-                        Button(action: { showNewProject = false; newProjectName = "" }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
                     }
-                    .padding(.vertical, 2)
-                }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 4)
 
-                // Unassigned datasheets
-                if !unassignedDatasheets.isEmpty {
-                    Section("All Datasheets") {
-                        ForEach(unassignedDatasheets) { datasheet in
-                            DatasheetRowView(datasheet: datasheet)
-                                .tag(datasheet)
-                                .contextMenu {
-                                    datasheetContextMenu(datasheet)
-                                }
+                    projectSection(selectedProject)
+                } else {
+                    // Projects section
+                    ForEach(projectStore.projects) { project in
+                        projectSection(project)
+                    }
+
+                    // New project row
+                    if showNewProject {
+                        HStack(spacing: 4) {
+                            Image(systemName: "folder.badge.plus")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                            TextField("Project name", text: $newProjectName)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+                                .onSubmit { createProject() }
+                            Button(action: createProject) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(newProjectName.isEmpty)
+                            Button(action: { showNewProject = false; newProjectName = "" }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
                         }
+                        .padding(.vertical, 2)
+                    }
+
+                    // Unassigned datasheets
+                    if !unassignedDatasheets.isEmpty {
+                        Section("All Datasheets") {
+                            ForEach(unassignedDatasheets) { datasheet in
+                                DatasheetRowView(datasheet: datasheet)
+                                    .tag(datasheet)
+                                    .contextMenu {
+                                        datasheetContextMenu(datasheet)
+                                    }
+                            }
+                        }
+                    }
+
+                    // IQC Reports
+                    if !appState.iqcItems.isEmpty {
+                        IQCSidebarSection()
                     }
                 }
             }
@@ -79,7 +118,7 @@ struct DatasheetSidebarView: View {
                 }
             }
         }
-        .navigationTitle("Datasheets")
+        .navigationTitle(navigationTitle)
         .toolbar {
             ToolbarItemGroup {
                 Button(action: { showNewProject = true }) {
@@ -155,7 +194,14 @@ struct DatasheetSidebarView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                projectStore.selectedProject = project
+            }
             .contextMenu {
+                Button("Open Project") {
+                    projectStore.selectedProject = project
+                }
                 Button("Rename") {
                     renameText = project.name
                     renamingProjectId = project.id

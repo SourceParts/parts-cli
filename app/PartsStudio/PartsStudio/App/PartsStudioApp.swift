@@ -20,7 +20,7 @@ struct PartsStudioApp: App {
     @StateObject private var appState = AppState()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Parts Studio") {
             ContentView()
                 .environmentObject(appState)
         }
