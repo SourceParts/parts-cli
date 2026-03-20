@@ -34,6 +34,7 @@ struct PartsStudioApp: App {
                 .keyboardShortcut("i", modifiers: [.command])
             }
             ToolCommands(appState: appState)
+            UpdateCommands(updater: appState.updater)
         }
     }
 }
@@ -63,6 +64,42 @@ struct ToolCommands: Commands {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(appState.selectedDatasheet == nil)
+        }
+    }
+}
+
+struct UpdateCommands: Commands {
+    @ObservedObject var updater: Updater
+
+    var body: some Commands {
+        CommandMenu("Update") {
+            Button("Check for Updates...") {
+                updater.checkForUpdates()
+            }
+            .keyboardShortcut("u", modifiers: [.command, .shift])
+            .disabled(updater.isChecking || updater.isUpdating)
+
+            if updater.hasUpdate {
+                Button("Install Update (\(updater.latestCommit))") {
+                    updater.performUpdate()
+                }
+                .disabled(updater.isUpdating)
+            }
+
+            if updater.status.contains("Restart") {
+                Button("Restart Parts Studio") {
+                    updater.relaunch()
+                }
+            }
+
+            Divider()
+
+            if !updater.status.isEmpty {
+                Text(updater.status)
+            }
+            if !updater.currentCommit.isEmpty {
+                Text("Current: \(updater.currentCommit)")
+            }
         }
     }
 }
