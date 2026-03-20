@@ -38,15 +38,31 @@ struct USBDevice: Identifiable {
             case 0x6015: return "FT-X (FTDI)"
             default: return "FTDI (unknown)"
             }
+        case 0x1F3A: // Allwinner
+            switch productId {
+            case 0xEFE8: return "Allwinner A64 FEL (sunxi boot)"
+            case 0x1010: return "Allwinner A64 (ADB)"
+            default: return "Allwinner SoC"
+            }
         case 0x2341: return "Arduino"
-        case 0x1D6B: return "Linux USB"
+        case 0x1D6B: return "Linux USB (gadget)"
+        case 0x0525: // Linux USB gadget (common for CDC-ECM)
+            switch productId {
+            case 0xA4A2: return "Linux CDC-ECM (Ethernet)"
+            case 0xA4A1: return "Linux CDC-ACM (Serial)"
+            default: return "Linux USB Gadget"
+            }
         case 0x05AC: return "Apple"
         default: return ""
         }
     }
 
     var isSerial: Bool { serialPort != nil }
+    var isFEL: Bool { vendorId == 0x1F3A && productId == 0xEFE8 }
+    var isAllwinner: Bool { vendorId == 0x1F3A }
+    var isCDCEthernet: Bool { vendorId == 0x0525 || name.lowercased().contains("ethernet") || name.lowercased().contains("cdc") }
     var isKnownDebugChip: Bool { [0x1A86, 0x10C4, 0x0403].contains(vendorId) }
+    var isInteresting: Bool { isKnownDebugChip || isAllwinner || isCDCEthernet }
 }
 
 struct SerialSession: Identifiable {
@@ -60,13 +76,16 @@ struct SerialSession: Identifiable {
 struct USBMonitorView: View {
     @EnvironmentObject var appState: AppState
     @State private var devices: [USBDevice] = []
+    @State private var deviceLog: [(Date, USBDevice)] = []  // History of seen devices
     @State private var serialSessions: [SerialSession] = []
     @State private var selectedDevice: USBDevice?
-    @State private var serialOutput: [String: String] = [:]  // port -> output
+    @State private var serialOutput: [String: String] = [:]
     @State private var serialInput: String = ""
     @State private var baudRate: Int = 115200
     @State private var activePort: String?
     @State private var fileHandles: [String: FileHandle] = [:]
+    @State private var autoScan: Bool = true
+    @State private var scanTimer: Timer?
 
     let baudRates = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
 
@@ -82,6 +101,18 @@ struct USBMonitorView: View {
                 Text("\(devices.count) device\(devices.count == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle(isOn: $autoScan) {
+                    Text("Auto")
+                        .font(.caption2)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help("Auto-scan every 2 seconds to catch FEL mode devices")
+                .onChange(of: autoScan) { _, on in
+                    if on { startAutoScan() } else { stopAutoScan() }
+                }
+
                 Button(action: scanDevices) {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -116,6 +147,44 @@ struct USBMonitorView: View {
                             }
                             .padding(40)
                         }
+
+                        // Device event log
+                        if !deviceLog.isEmpty {
+                            Divider().padding(.vertical, 4)
+                            HStack {
+                                Text("Event Log")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Clear") { deviceLog.removeAll() }
+                                    .font(.caption2)
+                                    .buttonStyle(.link)
+                            }
+
+                            ForEach(Array(deviceLog.enumerated()), id: \.offset) { _, entry in
+                                let (date, dev) = entry
+                                HStack(spacing: 6) {
+                                    Image(systemName: dev.isFEL ? "bolt.fill" : "circle.fill")
+                                        .font(.system(size: 6))
+                                        .foregroundStyle(dev.isFEL ? .yellow : .green)
+                                    Text(dev.name)
+                                        .font(.caption2)
+                                        .fontWeight(dev.isFEL ? .bold : .regular)
+                                    if !dev.chipType.isEmpty {
+                                        Text(dev.chipType)
+                                            .font(.caption2)
+                                            .foregroundStyle(dev.isFEL ? .yellow : .blue)
+                                    }
+                                    Spacer()
+                                    Text(timeFormatter.string(from: date))
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .padding(.vertical, 2)
+                                .background(dev.isFEL ? Color.yellow.opacity(0.05) : Color.clear)
+                            }
+                        }
                     }
                     .padding(12)
                 }
@@ -141,7 +210,26 @@ struct USBMonitorView: View {
                 }
             }
         }
-        .onAppear { scanDevices() }
+        .onAppear { scanDevices(); if autoScan { startAutoScan() } }
+        .onDisappear { stopAutoScan() }
+    }
+
+    private var timeFormatter: DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f
+    }
+
+    private func startAutoScan() {
+        stopAutoScan()
+        scanTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            scanDevices()
+        }
+    }
+
+    private func stopAutoScan() {
+        scanTimer?.invalidate()
+        scanTimer = nil
     }
 
     // MARK: - USB Scanning
@@ -212,6 +300,13 @@ struct USBMonitorView: View {
             if a.isSerial && !b.isSerial { return true }
             if !a.isSerial && b.isSerial { return false }
             return a.name < b.name
+        }
+
+        // Log new interesting devices (especially FEL)
+        let oldIds = Set(devices.map { $0.id })
+        for dev in result where dev.isInteresting && !oldIds.contains(dev.id) {
+            deviceLog.insert((Date(), dev), at: 0)
+            if deviceLog.count > 50 { deviceLog = Array(deviceLog.prefix(50)) }
         }
 
         devices = result
