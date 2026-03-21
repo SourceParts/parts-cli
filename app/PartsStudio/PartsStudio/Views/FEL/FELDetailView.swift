@@ -1202,8 +1202,8 @@ struct FELDetailView: View {
         }
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let splPath = "\(home)/Work/PocketPC-Uboot/spl/sunxi-spl.bin"
-        let ubootPath = "\(home)/Work/PocketPC-Uboot/u-boot.bin"
+        let splPath = "\(home)/Work/fel.js/assets/PocketPC/u-boot-sunxi-with-spl.bin"
+        let ubootPath = "\(home)/Work/fel.js/assets/PocketPC/u-boot-sunxi-with-spl.bin"
 
         guard let splData = try? Data(contentsOf: URL(fileURLWithPath: splPath)) else {
             bootError = "Cannot read \(splPath)"

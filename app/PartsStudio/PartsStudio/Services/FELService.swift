@@ -1106,6 +1106,8 @@ class FELService: ObservableObject {
     }
 
     /// Full boot sequence: load SPL, wait for DRAM, write U-Boot, start boot.
+    /// Boot using a combined u-boot-sunxi-with-spl.bin (SPL + U-Boot in one file).
+    /// If splData is the combined binary (>32KB), splits it automatically.
     func bootPocketPC(splData: Data, ubootData: Data? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let socInfo = deviceInfo?.socInfo else {
             completion(.failure(FELError.deviceNotFound))
@@ -1114,8 +1116,24 @@ class FELService: ObservableObject {
 
         usbQueue.async { [weak self] in
             guard let self = self else { return }
+            var bootUBootData: Data? = nil
             do {
                 self.appendLogSync("=== FEL Boot Sequence ===")
+
+                // Split combined binary if needed (u-boot-sunxi-with-spl.bin)
+                let splLenLimit: Int = 0x8000 // 32KB
+                let actualSPL: Data
+                let actualUBoot: Data?
+                if splData.count > splLenLimit {
+                    actualSPL = Data(splData.prefix(splLenLimit))
+                    actualUBoot = Data(splData.suffix(from: splLenLimit))
+                    bootUBootData = actualUBoot
+                    self.appendLogSync("Combined binary: \(splData.count) bytes (SPL=\(splLenLimit), U-Boot=\(splData.count - splLenLimit))")
+                } else {
+                    actualSPL = splData
+                    actualUBoot = ubootData
+                    bootUBootData = actualUBoot
+                }
 
                 // Connect serial before boot so we capture all output
                 if !self.serialActive {
@@ -1129,8 +1147,8 @@ class FELService: ObservableObject {
                 }
 
                 // Step 1: Write and execute SPL
-                self.appendLogSync("[1/4] Loading SPL (\(splData.count) bytes)...")
-                try self.writeSPLSync(data: splData, socInfo: socInfo)
+                self.appendLogSync("[1/4] Loading SPL (\(actualSPL.count) bytes)...")
+                try self.writeSPLSync(data: actualSPL, socInfo: socInfo)
                 self.appendLogSync("[1/4] SPL loaded and executing")
 
                 // Step 2: Wait for FEL to come back after SPL
@@ -1179,16 +1197,16 @@ class FELService: ObservableObject {
                 self.usbQueue.async {
                     do {
                         // Step 3: Write U-Boot
-                        if let ubootData = ubootData, ubootData.count > 0 {
-                            self.appendLogSync("[3/4] Writing U-Boot (\(ubootData.count) bytes)...")
-                            try self.writeRawToAddress(data: ubootData, address: 0x4a000000)
+                        if let ub = bootUBootData, ub.count > 0 {
+                            self.appendLogSync("[3/4] Writing U-Boot (\(ub.count) bytes)...")
+                            try self.writeRawToAddress(data: ub, address: 0x4a000000)
                             self.appendLogSync("[3/4] U-Boot written to 0x4a000000")
                         } else {
                             self.appendLogSync("[3/4] No U-Boot image, skipping")
                         }
 
                         // Step 4: Execute U-Boot
-                        if let ubootData = ubootData, ubootData.count > 0 {
+                        if let ub = bootUBootData, ub.count > 0 {
                             self.appendLogSync("[4/4] Executing U-Boot at 0x4a000000...")
                             try self.awFELExecute(offset: 0x4a000000)
                             self.appendLogSync("[4/4] U-Boot executing")
