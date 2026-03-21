@@ -1131,10 +1131,25 @@ class FELService: ObservableObject {
                 try self.writeSPLSync(data: splData, socInfo: socInfo)
                 self.appendLogSync("[1/4] SPL loaded and executing")
 
-                // Step 2: Wait for DRAM init
-                self.appendLogSync("[2/4] Waiting for DRAM init (1.5s)...")
-                Thread.sleep(forTimeInterval: 1.5)
-                self.appendLogSync("[2/4] DRAM should be ready")
+                // Step 2: Wait for DRAM init + FEL USB reconnect
+                // SPL causes USB disconnect during DRAM init. Wait for device
+                // to come back before writing U-Boot.
+                self.appendLogSync("[2/4] Waiting for DRAM init + USB reconnect...")
+                var felReady = false
+                for wait in 1...15 {
+                    Thread.sleep(forTimeInterval: 1.0)
+                    do {
+                        _ = try self.getVersionSync()
+                        self.appendLogSync("[2/4] FEL ready after \(wait)s")
+                        felReady = true
+                        break
+                    } catch {
+                        self.appendLogSync("[2/4] Waiting... (\(wait)s)")
+                    }
+                }
+                if !felReady {
+                    self.appendLogSync("[2/4] WARNING: FEL not responding, attempting write anyway")
+                }
 
                 // Step 3: Write U-Boot if provided
                 if let ubootData = ubootData, ubootData.count > 0 {

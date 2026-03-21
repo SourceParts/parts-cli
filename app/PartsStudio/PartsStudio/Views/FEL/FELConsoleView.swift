@@ -41,26 +41,16 @@ struct FELConsoleView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array(log.enumerated()), id: \.offset) { index, entry in
-                            Text(entry)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(textColor)
-                                .textSelection(.enabled)
-                                .id(index)
-                        }
-                    }
+            ScrollView {
+                Text(log.joined(separator: "\n"))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(textColor)
+                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
-                }
-                .onChange(of: log.count) { _, _ in
-                    if let last = log.indices.last {
-                        proxy.scrollTo(last, anchor: .bottom)
-                    }
-                }
+                    .id("consoleBottom")
             }
+            .defaultScrollAnchor(.bottom)
             .background(bgColor)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .topTrailing) {
