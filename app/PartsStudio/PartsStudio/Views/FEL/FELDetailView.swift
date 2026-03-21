@@ -129,7 +129,7 @@ struct FELDetailView: View {
             HStack(spacing: 4) {
                 Image(systemName: appState.deviceTracker.state.icon)
                     .font(.system(size: 9))
-                Text(appState.deviceTracker.state.rawValue)
+                Text(appState.deviceTracker.state.displayName(for: appState.userSession.role))
                     .font(.system(size: 9, weight: .medium))
             }
             .foregroundStyle(deviceStateColor)
@@ -571,7 +571,21 @@ struct FELDetailView: View {
 
         switch command {
         case "help":
-            felService.appendLog("Commands: help, status, info, read <addr> [len], watch <addr> [len], stop, scratch, sram, boot, clear")
+            felService.appendLog("Commands:")
+            felService.appendLog("  help                   Show commands")
+            felService.appendLog("  status                 Connection state")
+            felService.appendLog("  info                   Device info")
+            felService.appendLog("  read <addr> [len]      Read memory")
+            felService.appendLog("  watch <addr> [len]     Live memory watch")
+            felService.appendLog("  stop                   Stop watch")
+            felService.appendLog("  scratch                Read scratch memory")
+            felService.appendLog("  sram                   Read SRAM A")
+            felService.appendLog("  boot                   Boot PocketPC")
+            felService.appendLog("  gpio <port>            Read GPIO port (B-H)")
+            felService.appendLog("  gpio <port> <pin> <0|1> Set GPIO pin")
+            felService.appendLog("  uart <0-4>             Read UART status")
+            felService.appendLog("  reg <addr>             Read 32-bit register")
+            felService.appendLog("  clear                  Clear console")
         case "status":
             let state = felService.connectionState.rawValue
             let soc = felService.deviceInfo?.displayName ?? "none"
@@ -614,6 +628,81 @@ struct FELDetailView: View {
             felService.stopWatch()
         case "boot":
             bootPocketPCDefault()
+        case "gpio":
+            if parts.count == 2 {
+                // Read GPIO port
+                let portName = parts[1].uppercased()
+                guard let portIndex = FELService.gpioPorts.firstIndex(of: portName) else {
+                    felService.appendLog("ERROR: Unknown port \(portName). Use B-H.")
+                    return
+                }
+                felService.readGPIOPort(port: portIndex) { result in
+                    switch result {
+                    case .success(let state):
+                        felService.appendLog("GPIO \(portName): data=0x\(String(format: "%08x", state.data))")
+                        for pin in 0..<32 {
+                            let fn = state.pinFunction(pin)
+                            if fn != 7 { // skip disabled pins
+                                let val = state.pinValue(pin) ? "1" : "0"
+                                felService.appendLog("  P\(portName)\(pin): \(GPIOPortState.functionName(fn)) = \(val)")
+                            }
+                        }
+                    case .failure(let err):
+                        felService.appendLog("ERROR: \(err.localizedDescription)")
+                    }
+                }
+            } else if parts.count == 4 {
+                // Set GPIO pin
+                let portName = parts[1].uppercased()
+                guard let portIndex = FELService.gpioPorts.firstIndex(of: portName),
+                      let pin = Int(parts[2]),
+                      let value = Int(parts[3]) else {
+                    felService.appendLog("ERROR: Usage: gpio <port> <pin> <0|1>")
+                    return
+                }
+                // Configure as output first
+                felService.configureGPIOPin(port: portIndex, pin: pin, function: 1) { _ in
+                    felService.setGPIOPin(port: portIndex, pin: pin, high: value != 0) { result in
+                        switch result {
+                        case .success:
+                            felService.appendLog("P\(portName)\(pin) = \(value)")
+                        case .failure(let err):
+                            felService.appendLog("ERROR: \(err.localizedDescription)")
+                        }
+                    }
+                }
+            } else {
+                felService.appendLog("ERROR: Usage: gpio <port> [pin] [0|1]")
+            }
+
+        case "uart":
+            guard parts.count >= 2, let num = Int(parts[1]) else {
+                felService.appendLog("ERROR: Usage: uart <0-4>")
+                return
+            }
+            felService.readUARTStatus(uart: num) { result in
+                switch result {
+                case .success(let status):
+                    felService.appendLog(status.summary)
+                case .failure(let err):
+                    felService.appendLog("ERROR: \(err.localizedDescription)")
+                }
+            }
+
+        case "reg":
+            guard parts.count >= 2, let addr = parseHexAddress(parts[1]) else {
+                felService.appendLog("ERROR: Usage: reg <addr>")
+                return
+            }
+            felService.readRegister(address: addr) { result in
+                switch result {
+                case .success(let value):
+                    felService.appendLog("0x\(String(format: "%08x", addr)) = 0x\(String(format: "%08x", value))")
+                case .failure(let err):
+                    felService.appendLog("ERROR: \(err.localizedDescription)")
+                }
+            }
+
         case "clear":
             felService.log.removeAll()
         default:

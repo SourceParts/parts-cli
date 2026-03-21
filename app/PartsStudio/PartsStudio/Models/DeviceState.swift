@@ -6,7 +6,7 @@ import IOKit.usb
 /// Monitors USB device changes and serial output to determine current state.
 enum PocketPCState: String, CaseIterable {
     case disconnected   = "Disconnected"
-    case fel            = "FEL Mode"
+    case fel            = "Recovery Mode"
     case splLoading     = "Loading SPL"
     case dramInit       = "DRAM Init"
     case uboot          = "U-Boot"
@@ -14,6 +14,14 @@ enum PocketPCState: String, CaseIterable {
     case login          = "Login Ready"
     case running        = "Running"
     case massStorage    = "Mass Storage"
+
+    /// Display name based on user role — engineers see "FEL Mode", others see "Recovery Mode".
+    func displayName(for role: UserRole) -> String {
+        if self == .fel {
+            return role.canSeeInternals ? "FEL Mode" : "Recovery Mode"
+        }
+        return rawValue
+    }
 
     var icon: String {
         switch self {

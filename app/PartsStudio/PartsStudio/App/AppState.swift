@@ -86,6 +86,10 @@ class AppState: ObservableObject {
     let felBridge = FELBridge()
     let felService = FELService()
     let deviceTracker = DeviceStateTracker()
+    let userSession = UserSession()
+    @AppStorage("userRole") var userRoleRaw: String = "admin" {
+        didSet { userSession.role = UserRole(rawValue: userRoleRaw) ?? .admin }
+    }
     @Published var showFEL: Bool = false {
         didSet { if showFEL { lastActiveView = "fel" } }
     }

@@ -1073,24 +1073,37 @@ class FELService: ObservableObject {
                 self.appendLogSync("=== FEL Boot Sequence ===")
 
                 // Step 1: Write and execute SPL
+                self.appendLogSync("[1/4] Loading SPL (\(splData.count) bytes)...")
                 try self.writeSPLSync(data: splData, socInfo: socInfo)
+                self.appendLogSync("[1/4] SPL loaded and executing")
 
                 // Step 2: Wait for DRAM init
-                self.appendLogSync("Waiting for DRAM init...")
+                self.appendLogSync("[2/4] Waiting for DRAM init (1.5s)...")
                 Thread.sleep(forTimeInterval: 1.5)
+                self.appendLogSync("[2/4] DRAM should be ready")
 
                 // Step 3: Write U-Boot if provided
-                if let ubootData = ubootData, ubootData.count > 64 {
-                    try self.writeUBootSync(data: ubootData)
+                if let ubootData = ubootData, ubootData.count > 0 {
+                    self.appendLogSync("[3/4] Writing U-Boot (\(ubootData.count) bytes)...")
+                    try self.writeRawToAddress(data: ubootData, address: 0x4a000000)
+                    self.appendLogSync("[3/4] U-Boot written to 0x4a000000")
+                } else {
+                    self.appendLogSync("[3/4] No U-Boot image, skipping")
                 }
 
-                // Step 4: Start boot
-                if socInfo.rvbarReg != 0 {
-                    try self.rmrRequest(entryPoint: DRAM_BASE, socInfo: socInfo)
+                // Step 4: Execute U-Boot
+                if let ubootData = ubootData, ubootData.count > 0 {
+                    self.appendLogSync("[4/4] Executing U-Boot at 0x4a000000...")
+                    try self.awFELExecute(offset: 0x4a000000)
+                    self.appendLogSync("[4/4] U-Boot executing")
+                } else if socInfo.rvbarReg != 0 {
+                    self.appendLogSync("[4/4] RMR boot to 0x4a000000...")
+                    try self.rmrRequest(entryPoint: 0x4a000000, socInfo: socInfo)
+                    self.appendLogSync("[4/4] RMR request sent")
                 }
 
                 DispatchQueue.main.async {
-                    self.appendLog("Boot sequence complete")
+                    self.appendLog("=== Boot sequence complete ===")
                     completion(.success(()))
                 }
             } catch {
@@ -1099,6 +1112,25 @@ class FELService: ObservableObject {
                     completion(.failure(error))
                 }
             }
+        }
+    }
+
+    /// Write raw binary data to an address in chunks with progress.
+    private func writeRawToAddress(data: Data, address: UInt32) throws {
+        let chunkSize = 65536 // 64KB chunks
+        var offset = 0
+        let total = data.count
+
+        while offset < total {
+            let remaining = total - offset
+            let thisChunk = min(chunkSize, remaining)
+            let chunk = Data(data[offset..<offset + thisChunk])
+            let addr = address + UInt32(offset)
+            try awFELWrite(data: chunk, offset: addr)
+
+            offset += thisChunk
+            let pct = (offset * 100) / total
+            appendLogSync("  \(offset)/\(total) bytes (\(pct)%)")
         }
     }
 
