@@ -3,7 +3,11 @@ import SwiftUI
 struct FELConsoleView: View {
     let log: [String]
     var onClear: () -> Void
+    var onCommand: ((String) -> Void)? = nil
     @State private var copied = false
+    @State private var commandText = ""
+    @State private var cursorVisible = false
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -13,6 +17,14 @@ struct FELConsoleView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(log.joined(separator: "\n"), forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                }
+                .font(.caption2)
+                .buttonStyle(.link)
                 Button("Clear", action: onClear)
                     .font(.caption2)
                     .buttonStyle(.link)
@@ -42,13 +54,6 @@ struct FELConsoleView: View {
             }
             .background(Color.black)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(log.joined(separator: "\n"), forType: .string)
-                copied = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
-            }
             .overlay(alignment: .topTrailing) {
                 if copied {
                     Text("Copied")
@@ -62,6 +67,47 @@ struct FELConsoleView: View {
                         .padding(6)
                         .transition(.opacity)
                         .animation(.easeOut(duration: 0.2), value: copied)
+                }
+            }
+
+            // Input line with blinking block cursor
+            if onCommand != nil {
+                HStack(spacing: 0) {
+                    Text("> ")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.green)
+                    ZStack(alignment: .leading) {
+                        // Blinking block cursor positioned after text
+                        HStack(spacing: 0) {
+                            Text(commandText)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.clear)
+                            Rectangle()
+                                .fill(.green)
+                                .frame(width: 7, height: 14)
+                                .opacity(cursorVisible ? 1 : 0)
+                        }
+                        TextField("", text: $commandText)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.green)
+                            .textFieldStyle(.plain)
+                            .focused($inputFocused)
+                            .onSubmit {
+                                let cmd = commandText.trimmingCharacters(in: .whitespaces)
+                                guard !cmd.isEmpty else { return }
+                                onCommand?(cmd)
+                                commandText = ""
+                            }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color(white: 0.08))
+                .onAppear {
+                    inputFocused = true
+                    withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) {
+                        cursorVisible = true
+                    }
                 }
             }
         }
@@ -121,6 +167,23 @@ struct HexDumpView: View {
                 .padding(.vertical, 2)
             }
             .background(Color.black)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                copyHex()
+            }
+            .overlay(alignment: .center) {
+                if copied {
+                    Text("Copied")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.green.opacity(0.85))
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .transition(.opacity)
+                        .animation(.easeOut(duration: 0.2), value: copied)
+                }
+            }
         }
     }
 

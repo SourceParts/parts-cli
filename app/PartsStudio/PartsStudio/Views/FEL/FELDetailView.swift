@@ -56,9 +56,11 @@ struct FELDetailView: View {
                 case .boot:
                     bootPanel
                 case .console:
-                    FELConsoleView(log: felService.log) {
+                    FELConsoleView(log: felService.log, onClear: {
                         felService.log.removeAll()
-                    }
+                    }, onCommand: { cmd in
+                        handleConsoleCommand(cmd)
+                    })
                 }
             } else {
                 disconnectedView
@@ -123,7 +125,20 @@ struct FELDetailView: View {
                     .padding(.trailing, 4)
             }
 
-            // Device badge
+            // Device lifecycle state
+            HStack(spacing: 4) {
+                Image(systemName: appState.deviceTracker.state.icon)
+                    .font(.system(size: 9))
+                Text(appState.deviceTracker.state.rawValue)
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .foregroundStyle(deviceStateColor)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(deviceStateColor.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+
+            // SoC badge
             HStack(spacing: 4) {
                 Circle()
                     .fill(.green)
@@ -251,6 +266,22 @@ struct FELDetailView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
 
+                Divider().frame(height: 14)
+
+                // Live watch toggle
+                Button(action: { toggleWatch() }) {
+                    HStack(spacing: 2) {
+                        Circle()
+                            .fill(felService.watchActive ? .red : .secondary)
+                            .frame(width: 6, height: 6)
+                        Text(felService.watchActive ? "Stop" : "Live")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .tint(felService.watchActive ? .red : nil)
+
                 Spacer()
 
                 if isReading {
@@ -270,8 +301,10 @@ struct FELDetailView: View {
 
             Divider()
 
-            // Hex dump
-            if let data = readData {
+            // Hex dump — show live watch data or one-shot read
+            if felService.watchActive, let data = felService.watchData {
+                HexDumpView(data: data, baseAddress: felService.watchAddress)
+            } else if let data = readData {
                 HexDumpView(data: data, baseAddress: readBaseAddr) { addr, bytes in
                     felService.writeMemory(address: addr, data: bytes) { result in
                         if case .success = result {
@@ -528,6 +561,90 @@ struct FELDetailView: View {
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
 
+    // MARK: - Console Commands
+
+    private func handleConsoleCommand(_ cmd: String) {
+        let parts = cmd.split(separator: " ", maxSplits: 3).map(String.init)
+        let command = parts[0].lowercased()
+
+        felService.appendLog("> \(cmd)")
+
+        switch command {
+        case "help":
+            felService.appendLog("Commands: help, status, info, read <addr> [len], watch <addr> [len], stop, scratch, sram, boot, clear")
+        case "status":
+            let state = felService.connectionState.rawValue
+            let soc = felService.deviceInfo?.displayName ?? "none"
+            felService.appendLog("state: \(state)  soc: \(soc)")
+        case "info":
+            guard let info = felService.deviceInfo else {
+                felService.appendLog("ERROR: No device connected")
+                return
+            }
+            felService.appendLog("SoC: \(info.socInfo.name) (0x\(info.version.socIdHex))")
+            felService.appendLog("SID: \(info.sid ?? "reading...")")
+            felService.appendLog("SPL: 0x\(String(format: "%08x", info.socInfo.splAddr))  Scratch: 0x\(String(format: "%08x", info.socInfo.scratchAddr))")
+        case "read":
+            guard parts.count >= 2, let addr = parseHexAddress(parts[1]) else {
+                felService.appendLog("ERROR: Usage: read <addr> [length]")
+                return
+            }
+            let len = parts.count >= 3 ? (UInt32(parts[2]) ?? 256) : 256
+            readAddress = "0x\(String(format: "%x", addr))"
+            readLength = "\(len)"
+            selectedTab = .memory
+            readMemory()
+        case "scratch":
+            readScratch()
+            selectedTab = .memory
+        case "sram":
+            readSRAM()
+            selectedTab = .memory
+        case "watch":
+            guard parts.count >= 2, let addr = parseHexAddress(parts[1]) else {
+                felService.appendLog("ERROR: Usage: watch <addr> [length]")
+                return
+            }
+            let len = parts.count >= 3 ? (UInt32(parts[2]) ?? 256) : 256
+            readAddress = "0x\(String(format: "%x", addr))"
+            readLength = "\(len)"
+            selectedTab = .memory
+            felService.startWatch(address: addr, length: min(len, 4096))
+        case "stop":
+            felService.stopWatch()
+        case "boot":
+            bootPocketPCDefault()
+        case "clear":
+            felService.log.removeAll()
+        default:
+            felService.appendLog("ERROR: Unknown command: \(command). Type 'help'.")
+        }
+    }
+
+    private var deviceStateColor: Color {
+        switch appState.deviceTracker.state {
+        case .disconnected: return .secondary
+        case .fel: return .yellow
+        case .splLoading, .dramInit: return .orange
+        case .uboot: return .blue
+        case .kernel: return .purple
+        case .login, .running: return .green
+        case .massStorage: return .cyan
+        }
+    }
+
+    // MARK: - Live Watch
+
+    private func toggleWatch() {
+        if felService.watchActive {
+            felService.stopWatch()
+        } else {
+            guard let addr = parseHexAddress(readAddress),
+                  let len = UInt32(readLength) else { return }
+            felService.startWatch(address: addr, length: min(len, 4096))
+        }
+    }
+
     // MARK: - Actions
 
     private func parseHexAddress(_ s: String) -> UInt32? {
@@ -641,6 +758,11 @@ struct FELDetailView: View {
     }
 
     private func bootPocketPCDefault() {
+        guard felService.connectionState == .connected else {
+            bootError = "No FEL device connected"
+            return
+        }
+
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let splPath = "\(home)/Work/PocketPC-Uboot/spl/sunxi-spl.bin"
         let ubootPath = "\(home)/Work/PocketPC-Uboot/u-boot.bin"

@@ -107,6 +107,9 @@ class FELService: ObservableObject {
     private var removedIterator: io_iterator_t = 0
 
     init() {
+        appendLog("Parts Studio FEL Console")
+        appendLog("Commands: help, status, info, read, watch, stop, scratch, sram, boot, clear")
+        appendLog("Waiting for device (VID 0x1F3A / PID 0xEFE8)...")
         startDeviceWatcher()
     }
 
@@ -239,6 +242,9 @@ class FELService: ObservableObject {
 
             // Read SID in background
             readSIDAsync(socInfo: socInfo)
+
+            // Read scratch on connect
+            readScratchAsync(socInfo: socInfo)
 
         } catch {
             DispatchQueue.main.async { [weak self] in
@@ -547,6 +553,24 @@ class FELService: ObservableObject {
         }
     }
 
+    /// Read scratch memory on connect and log a hex summary.
+    private func readScratchAsync(socInfo: SoCInfo) {
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let data = try self.awFELRead(offset: socInfo.scratchAddr, length: 256)
+                let preview = data.prefix(12).map { String(format: "%02x", $0) }.joined(separator: " ")
+                DispatchQueue.main.async {
+                    self.appendLog("Scratch @ 0x\(String(format: "%x", socInfo.scratchAddr)): \(preview) ...")
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.appendLog("Scratch read failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     /// Read the 128-bit Serial ID from SID registers.
     private func readSID(socInfo: SoCInfo) throws -> String {
         guard socInfo.sidBase != 0 else { return "unavailable" }
@@ -739,14 +763,14 @@ class FELService: ObservableObject {
         for swap in swapBuffers {
             if len > 0 && curAddr < swap.buf1 {
                 let tmp = min(Int(swap.buf1 - curAddr), len)
-                try awFELWrite(data: splData[buf..<buf + tmp], offset: curAddr)
+                try awFELWrite(data: Data(splData[buf..<buf + tmp]), offset: curAddr)
                 curAddr += UInt32(tmp)
                 buf += tmp
                 len -= tmp
             }
             if len > 0 && curAddr == swap.buf1 {
                 let tmp = min(Int(swap.size), len)
-                try awFELWrite(data: splData[buf..<buf + tmp], offset: swap.buf2)
+                try awFELWrite(data: Data(splData[buf..<buf + tmp]), offset: swap.buf2)
                 curAddr += UInt32(tmp)
                 buf += tmp
                 len -= tmp
@@ -755,7 +779,7 @@ class FELService: ObservableObject {
 
         // Write remaining SPL data
         if len > 0 {
-            try awFELWrite(data: splData[buf..<buf + len], offset: curAddr)
+            try awFELWrite(data: Data(splData[buf..<buf + len]), offset: curAddr)
         }
 
         // Build and write thunk code
@@ -1073,6 +1097,59 @@ class FELService: ObservableObject {
                 DispatchQueue.main.async {
                     self.appendLog("Boot failed: \(error.localizedDescription)")
                     completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    // MARK: - Live Memory Watch
+
+    private var watchTimer: Timer?
+    @Published var watchAddress: UInt32 = 0
+    @Published var watchLength: UInt32 = 256
+    @Published var watchData: Data?
+    @Published var watchActive: Bool = false
+
+    func startWatch(address: UInt32, length: UInt32, interval: TimeInterval = 1.0) {
+        stopWatch()
+        watchAddress = address
+        watchLength = length
+        watchActive = true
+        appendLog("Watch started: 0x\(String(format: "%x", address)) (\(length) bytes, \(interval)s)")
+
+        // Immediate first read
+        pollWatch()
+
+        watchTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.pollWatch()
+        }
+    }
+
+    func stopWatch() {
+        watchTimer?.invalidate()
+        watchTimer = nil
+        if watchActive {
+            watchActive = false
+            appendLog("Watch stopped")
+        }
+    }
+
+    private func pollWatch() {
+        guard connectionState == .connected else {
+            stopWatch()
+            return
+        }
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let data = try self.awFELRead(offset: self.watchAddress, length: self.watchLength)
+                DispatchQueue.main.async {
+                    self.watchData = data
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.appendLog("Watch read failed: \(error.localizedDescription)")
+                    self.stopWatch()
                 }
             }
         }

@@ -160,6 +160,7 @@ struct DatasheetSidebarView: View {
                         appState.selectedECO = nil
                         appState.selectedIQCItem = nil
                         appState.pdfDocument = nil
+                        appState.lastActiveView = "credits"
                     }) {
                         Label("Credits & Services", systemImage: "creditcard")
                             .font(.caption)
@@ -176,6 +177,7 @@ struct DatasheetSidebarView: View {
                         appState.selectedECO = nil
                         appState.selectedIQCItem = nil
                         appState.pdfDocument = nil
+                        appState.lastActiveView = "usb"
                     }) {
                         Label("USB Monitor", systemImage: "cable.connector")
                             .font(.caption)

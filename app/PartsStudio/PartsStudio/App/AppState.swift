@@ -73,6 +73,7 @@ class AppState: ObservableObject {
     @Published var showCredits: Bool = false
     @Published var showUSBMonitor: Bool = false
     @AppStorage("showRightPanel") var showRightPanel: Bool = true
+    @AppStorage("lastActiveView") var lastActiveView: String = ""
 
     let cacheService = CacheService()
     let annotationStore = AnnotationStoreContainer()
@@ -84,7 +85,10 @@ class AppState: ObservableObject {
     let assemblyStore = AssemblyStore()
     let felBridge = FELBridge()
     let felService = FELService()
-    @Published var showFEL: Bool = false
+    let deviceTracker = DeviceStateTracker()
+    @Published var showFEL: Bool = false {
+        didSet { if showFEL { lastActiveView = "fel" } }
+    }
     @Published var selectedAssemblyDoc: AssemblyDocument?
 
     let iqcService = IQCService()
@@ -104,6 +108,21 @@ class AppState: ObservableObject {
             felServiceCancellable = felService.objectWillChange.sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
+            restoreLastView()
+        }
+    }
+
+    /// Restore the last active view on launch.
+    private func restoreLastView() {
+        switch lastActiveView {
+        case "fel":
+            showFEL = true
+        case "usb":
+            showUSBMonitor = true
+        case "credits":
+            showCredits = true
+        default:
+            break // default: datasheet/home view
         }
     }
 
@@ -115,6 +134,7 @@ class AppState: ObservableObject {
         showCredits = false
         showUSBMonitor = false
         showFEL = false
+        lastActiveView = "datasheet"
         loadPDF(at: datasheet.path)
     }
 
