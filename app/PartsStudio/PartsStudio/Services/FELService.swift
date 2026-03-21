@@ -118,6 +118,8 @@ class FELService: ObservableObject {
     private var notificationPort: IONotificationPortRef?
     private var addedIterator: io_iterator_t = 0
     private var removedIterator: io_iterator_t = 0
+    private var lastConnectAttempt: Date = .distantPast
+    private var connectCooldown: TimeInterval = 2.0
 
     init() {
         appendLog("Parts Studio FEL Console")
@@ -183,15 +185,23 @@ class FELService: ObservableObject {
     }
 
     private func handleDeviceAdded(_ iterator: io_iterator_t) {
+        var found = false
         var service = IOIteratorNext(iterator)
         while service != 0 {
-            appendLog("FEL device detected (VID 0x1F3A)")
-            // Try to connect on background queue
-            usbQueue.async { [weak self] in
-                self?.connectToDevice()
-            }
+            found = true
             IOObjectRelease(service)
             service = IOIteratorNext(iterator)
+        }
+        guard found else { return }
+
+        // Cooldown: don't spam reconnect during device reset
+        let now = Date()
+        guard now.timeIntervalSince(lastConnectAttempt) >= connectCooldown else { return }
+        lastConnectAttempt = now
+
+        appendLog("FEL device detected (VID 0x1F3A)")
+        usbQueue.async { [weak self] in
+            self?.connectToDevice()
         }
     }
 
@@ -261,8 +271,13 @@ class FELService: ObservableObject {
 
         } catch {
             DispatchQueue.main.async { [weak self] in
-                self?.connectionState = .error
-                self?.appendLog("Connection failed: \(error.localizedDescription)")
+                self?.connectionState = .disconnected
+                self?.appendLog("Reconnecting... (\(error.localizedDescription))")
+            }
+            // Retry after cooldown
+            Thread.sleep(forTimeInterval: connectCooldown)
+            if connectionState != .connected {
+                connectToDevice()
             }
         }
     }
