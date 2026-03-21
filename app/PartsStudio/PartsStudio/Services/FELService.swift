@@ -439,6 +439,29 @@ class FELService: ObservableObject {
         }
     }
 
+    /// Force USB device reset via IOKit. This makes macOS re-enumerate
+    /// the device, which is needed after A64 DRAM init corrupts USB PHY state.
+    private func resetUSBDevice() {
+        if let dev = deviceInterface {
+            appendLogSync("USB: Resetting device...")
+            // Close interface first
+            if let iface = interfaceInterface {
+                iface.pointee.pointee.USBInterfaceClose(iface)
+                iface.pointee.pointee.Release(iface)
+                interfaceInterface = nil
+            }
+            pipeIn = 0
+            pipeOut = 0
+
+            // Reset the device — this triggers macOS re-enumeration
+            dev.pointee.pointee.ResetDevice(dev)
+            dev.pointee.pointee.USBDeviceClose(dev)
+            dev.pointee.pointee.Release(dev)
+            deviceInterface = nil
+            appendLogSync("USB: Device reset complete")
+        }
+    }
+
     private func closeDevice() {
         if let iface = interfaceInterface {
             iface.pointee.pointee.USBInterfaceClose(iface)
@@ -1173,89 +1196,67 @@ class FELService: ObservableObject {
                 try self.writeSPLSync(data: actualSPL, socInfo: socInfo)
                 self.appendLogSync("[1/4] SPL loaded and executing")
 
-                // Step 2: Wait for FEL to come back after SPL
-                // SPL resets USB. Release the USB queue so the IOKit watcher
-                // can run connectToDevice(). Continue boot on a global queue.
-                self.appendLogSync("[2/4] Waiting for FEL reconnect...")
-                self.closeDevice()
-                DispatchQueue.main.async { [weak self] in
-                    self?.connectionState = .disconnected
+                // Step 2: USB reset + reconnect
+                // After SPL, the A64 USB PHY is corrupted by DRAM PLL reconfig.
+                // Force a USB device reset so macOS re-enumerates cleanly.
+                self.appendLogSync("[2/4] USB reset after SPL...")
+                self.resetUSBDevice()
+
+                // Wait then reopen with retries
+                var felReady = false
+                for wait in 1...30 {
+                    Thread.sleep(forTimeInterval: 2.0)
+                    do {
+                        try self.openUSBDevice()
+                        try self.findAndOpenInterface()
+                        _ = try self.getVersionSync()
+                        self.appendLogSync("[2/4] FEL ready after \(wait * 2)s")
+                        felReady = true
+                        break
+                    } catch {
+                        self.closeDevice()
+                        if wait <= 3 || wait % 5 == 0 {
+                            self.appendLogSync("[2/4] Waiting... (\(wait * 2)s)")
+                        }
+                    }
+                }
+
+                guard felReady else {
+                    throw FELError.protocolError("FEL did not reconnect after SPL")
+                }
+
+                // Step 3: Write U-Boot to DRAM
+                if let ub = bootUBootData, ub.count > 0 {
+                    self.appendLogSync("[3/4] Writing U-Boot (\(ub.count) bytes) to 0x4a000000...")
+                    try self.writeRawToAddress(data: ub, address: 0x4a000000)
+                    self.appendLogSync("[3/4] U-Boot written")
+                } else {
+                    self.appendLogSync("[3/4] No U-Boot image, skipping")
+                }
+
+                // Step 4: Start U-Boot
+                // A64 uses RMR warm reset — entry at 0x44000 (ATF BL31 in FIT)
+                // or direct execute at 0x4a000000 for raw U-Boot
+                if socInfo.rvbarReg != 0 && bootUBootData != nil {
+                    self.appendLogSync("[4/4] Executing at 0x4a000000...")
+                    try self.awFELExecute(offset: 0x4a000000)
+                    self.appendLogSync("[4/4] U-Boot started")
+                }
+
+                // Auto-connect serial
+                if !self.serialActive {
+                    self.autoConnectSerial()
+                }
+
+                DispatchQueue.main.async {
+                    self.appendLog("=== Boot sequence complete ===")
+                    completion(.success(()))
                 }
 
             } catch {
                 DispatchQueue.main.async {
                     self.appendLog("Boot failed: \(error.localizedDescription)")
                     completion(.failure(error))
-                }
-                return
-            }
-
-            // Continue on global queue — USB queue is now free for reconnect
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                guard let self = self else { return }
-
-                var felReady = false
-                for wait in 1...45 {
-                    Thread.sleep(forTimeInterval: 1.0)
-                    if self.connectionState == .connected {
-                        self.appendLogSync("[2/4] FEL ready after \(wait)s")
-                        felReady = true
-                        break
-                    }
-                    if wait <= 3 || wait % 5 == 0 {
-                        self.appendLogSync("[2/4] Waiting... (\(wait)s)")
-                    }
-                }
-
-                guard felReady else {
-                    DispatchQueue.main.async {
-                        self.appendLog("Boot failed: FEL did not reconnect after SPL (45s)")
-                        completion(.failure(FELError.protocolError("FEL did not reconnect (45s)")))
-                    }
-                    return
-                }
-
-                // Steps 3-4 run on USB queue now that device is reconnected
-                self.usbQueue.async {
-                    do {
-                        // Step 3: Write U-Boot
-                        if let ub = bootUBootData, ub.count > 0 {
-                            self.appendLogSync("[3/4] Writing U-Boot (\(ub.count) bytes)...")
-                            try self.writeRawToAddress(data: ub, address: 0x4a000000)
-                            self.appendLogSync("[3/4] U-Boot written to 0x4a000000")
-                        } else {
-                            self.appendLogSync("[3/4] No U-Boot image, skipping")
-                        }
-
-                        // Step 4: Execute U-Boot
-                        if let ub = bootUBootData, ub.count > 0 {
-                            self.appendLogSync("[4/4] Executing U-Boot at 0x4a000000...")
-                            try self.awFELExecute(offset: 0x4a000000)
-                            self.appendLogSync("[4/4] U-Boot executing")
-                        } else if socInfo.rvbarReg != 0 {
-                            self.appendLogSync("[4/4] RMR boot to 0x4a000000...")
-                            try self.rmrRequest(entryPoint: 0x4a000000, socInfo: socInfo)
-                            self.appendLogSync("[4/4] RMR request sent")
-                        }
-
-                        // Auto-connect serial
-                        if !self.serialActive {
-                            self.autoConnectSerial()
-                        } else {
-                            self.appendLogSync("Serial already attached — monitoring boot output")
-                            DispatchQueue.main.async { self.onBootComplete?() }
-                        }
-
-                        DispatchQueue.main.async {
-                            self.appendLog("=== Boot sequence complete ===")
-                            completion(.success(()))
-                        }
-                    } catch {
-                        DispatchQueue.main.async {
-                            self.appendLog("Boot failed: \(error.localizedDescription)")
-                            completion(.failure(error))
-                        }
-                    }
                 }
             }
         }
