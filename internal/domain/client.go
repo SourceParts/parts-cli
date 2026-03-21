@@ -51,6 +51,7 @@ type Client interface {
 	ERC(ctx context.Context, fileName string, opts types.ERCOptions, w io.Writer) error
 	DRC(ctx context.Context, fileName string, opts types.DRCOptions, w io.Writer) error
 	ImportAltium(ctx context.Context, fileName string, outputPath string, w io.Writer) error
+	ImportAltiumBytes(ctx context.Context, fileName string) ([]byte, error)
 
 	// Inventory & Supply Chain
 	Inventory(ctx context.Context, partNumber string, w io.Writer) error

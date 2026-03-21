@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -143,12 +145,20 @@ var edaImport = &cobra.Command{
 
 var edaImportAltium = &cobra.Command{
 	Use:   "altium <file.SchDoc>",
-	Short: "Convert Altium .SchDoc to KiCad .kicad_sch",
-	Long: `Upload an Altium Designer .SchDoc schematic file and convert it to
-KiCad .kicad_sch format. The converted file is saved alongside the
-original or to the path specified by --output.`,
-	Args:    cobra.ExactArgs(1),
-	Example: domain.BinaryName + ` eda import altium TopSheet.SchDoc`,
+	Short: "Convert Altium .SchDoc and scaffold a Parts Studio project",
+	Long: `Upload an Altium Designer .SchDoc schematic file, convert it to KiCad
+format, and scaffold a complete Parts Studio project directory.
+
+The project directory includes the converted schematic, a minimal KiCad
+project file, Parts Studio configuration, and the standard directory
+structure (ECO, BOM, PCB, Datasheets, etc.).
+
+If --output is set to a .kicad_sch path, falls back to legacy mode:
+just convert and save the file without scaffolding.`,
+	Args: cobra.ExactArgs(1),
+	Example: `  ` + domain.BinaryName + ` eda import altium TopSheet.SchDoc
+  ` + domain.BinaryName + ` eda import altium TopSheet.SchDoc --name "My Board" --revision DVT1
+  ` + domain.BinaryName + ` eda import altium TopSheet.SchDoc -o output.kicad_sch`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -162,12 +172,29 @@ original or to the path specified by --output.`,
 		}
 
 		output, _ := cmd.Flags().GetString("output")
-		if output == "" {
-			base := strings.TrimSuffix(filepath.Base(schDoc), filepath.Ext(schDoc))
-			output = filepath.Join(filepath.Dir(schDoc), base+".kicad_sch")
+		name, _ := cmd.Flags().GetString("name")
+		revision, _ := cmd.Flags().GetString("revision")
+		noGit, _ := cmd.Flags().GetBool("no-git")
+
+		// Legacy mode: if --output ends in .kicad_sch, just convert and save
+		if strings.HasSuffix(strings.ToLower(output), ".kicad_sch") {
+			return Client.ImportAltium(ctx, schDoc, output, os.Stdout)
 		}
 
-		return Client.ImportAltium(ctx, schDoc, output, os.Stdout)
+		// Derive project name from filename if not provided
+		if name == "" {
+			name = strings.TrimSuffix(filepath.Base(schDoc), filepath.Ext(schDoc))
+		}
+
+		// Convert
+		schBytes, err := Client.ImportAltiumBytes(ctx, schDoc)
+		if err != nil {
+			return err
+		}
+
+		// Scaffold
+		dir := name
+		return scaffoldProject(dir, revision, schBytes, name, noGit, os.Stdout)
 	},
 }
 
@@ -312,6 +339,176 @@ func printDRCReport(data []byte) {
 }
 
 // =============================================================================
+// Project Scaffolding
+// =============================================================================
+
+func scaffoldProject(dir, revision string, schBytes []byte, name string, noGit bool, w io.Writer) error {
+	if _, err := os.Stat(dir); err == nil {
+		return fmt.Errorf("directory already exists: %s", dir)
+	}
+
+	absPath, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving absolute path: %w", err)
+	}
+
+	// Create directory tree
+	dirs := []string{
+		".parts",
+		"ECO",
+		filepath.Join("BOM", revision),
+		filepath.Join("PCB", revision),
+		"Datasheets",
+		"IQC",
+		"DFT",
+		"DRC",
+		"ERC",
+		"Reports",
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0755); err != nil {
+			return fmt.Errorf("creating directory %s: %w", d, err)
+		}
+	}
+
+	// Write converted schematic
+	schPath := filepath.Join(dir, "PCB", revision, name+".kicad_sch")
+	if err := os.WriteFile(schPath, schBytes, 0644); err != nil {
+		return fmt.Errorf("writing schematic: %w", err)
+	}
+
+	// Write minimal KiCad project file
+	if err := writeMinimalKicadPro(filepath.Join(dir, "PCB", revision), name); err != nil {
+		return err
+	}
+
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+
+	// Write .parts/config.yaml
+	if err := writeProjectConfig(filepath.Join(dir, ".parts"), name, timestamp); err != nil {
+		return err
+	}
+
+	// Write PARTS.md
+	if err := writePartsMD(dir, name, revision); err != nil {
+		return err
+	}
+
+	// Update ~/.parts/config.yml
+	if err := writeUserConfig(name, absPath, revision); err != nil {
+		return err
+	}
+
+	// Git init
+	if !noGit {
+		gitCmd := exec.Command("git", "init", dir)
+		if out, err := gitCmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(w, "Warning: git init failed: %s\n", strings.TrimSpace(string(out)))
+		}
+	}
+
+	// Summary
+	fmt.Fprintf(w, "Created project: %s\n", absPath)
+	fmt.Fprintf(w, "  Schematic: PCB/%s/%s.kicad_sch\n", revision, name)
+	fmt.Fprintf(w, "  Revision:  %s\n", revision)
+	fmt.Fprintf(w, "  Config:    .parts/config.yaml\n")
+	if !noGit {
+		fmt.Fprintf(w, "  Git:       initialized\n")
+	}
+	return nil
+}
+
+func writeProjectConfig(partsDir, name, timestamp string) error {
+	content := fmt.Sprintf(`version: "1.0"
+
+project:
+  name: %q
+  type: "pcb"
+  created_at: %q
+
+fabrication:
+  board_name: %q
+  prefix: %q
+`, name, timestamp, name, name)
+
+	return os.WriteFile(filepath.Join(partsDir, "config.yaml"), []byte(content), 0644)
+}
+
+func writeUserConfig(name, absPath, revision string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolving home directory: %w", err)
+	}
+
+	partsHome := filepath.Join(homeDir, ".parts")
+	if err := os.MkdirAll(partsHome, 0755); err != nil {
+		return fmt.Errorf("creating ~/.parts: %w", err)
+	}
+
+	content := fmt.Sprintf(`project:
+  name: %q
+  path: %q
+  revision: %q
+
+directories:
+  eco: "ECO"
+  bom: "BOM"
+  pcb: "PCB"
+  iqc: "IQC"
+  datasheets: "Datasheets"
+  assembly: "PCB/%s/pdf_output"
+  fab_release: "PCB/%s/fab_release"
+
+api:
+  url: "https://api.source.parts"
+`, name, absPath, revision, revision, revision)
+
+	return os.WriteFile(filepath.Join(partsHome, "config.yml"), []byte(content), 0644)
+}
+
+func writePartsMD(dir, name, revision string) error {
+	content := fmt.Sprintf(`# PARTS.md
+
+This file provides guidance to PARTS CLI when working with this repository.
+
+## Project Overview
+
+This is a **PCB hardware design repository** for **%s**.
+
+## Repository Structure
+
+- **PCB/%s/** — KiCad schematic and project files
+- **BOM/%s/** — Bill of Materials
+- **ECO/** — Engineering Change Orders
+- **Datasheets/** — Component datasheets
+- **IQC/** — Incoming Quality Control
+- **DFT/** — Design for Test
+- **DRC/** — Design Rule Check reports
+- **ERC/** — Electrical Rule Check reports
+- **Reports/** — Analysis and review reports
+`, name, revision, revision)
+
+	return os.WriteFile(filepath.Join(dir, "PARTS.md"), []byte(content), 0644)
+}
+
+func writeMinimalKicadPro(dir, name string) error {
+	content := `{
+  "meta": {
+    "filename": "` + name + `.kicad_pro",
+    "version": 1
+  },
+  "schematic": {
+    "drawing": {},
+    "meta": {
+      "version": 1
+    }
+  }
+}
+`
+	return os.WriteFile(filepath.Join(dir, name+".kicad_pro"), []byte(content), 0644)
+}
+
+// =============================================================================
 // init — Register subcommands and flags
 // =============================================================================
 
@@ -327,7 +524,10 @@ func init() {
 	edaDRC.Flags().BoolP("json", "j", false, "Output raw JSON")
 
 	// Import altium flags
-	edaImportAltium.Flags().StringP("output", "o", "", "Output .kicad_sch path (default: alongside input)")
+	edaImportAltium.Flags().StringP("output", "o", "", "Output .kicad_sch path (legacy: just convert and save)")
+	edaImportAltium.Flags().String("name", "", "Project name (default: derived from filename)")
+	edaImportAltium.Flags().String("revision", "EVT1", "Revision label for directory structure")
+	edaImportAltium.Flags().Bool("no-git", false, "Skip git init")
 
 	// Wire up subcommands
 	edaImport.AddCommand(edaImportAltium)
