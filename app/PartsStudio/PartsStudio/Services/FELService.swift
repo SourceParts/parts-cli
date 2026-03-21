@@ -90,7 +90,11 @@ enum FELError: LocalizedError {
 class FELService: ObservableObject {
     @Published var connectionState: FELConnectionState = .disconnected
     @Published var deviceInfo: FELDeviceInfo?
+    @Published var registeredDevice: RegisteredDevice?
     @Published var log: [String] = []
+
+    /// Called when a device is identified by SID. Set by AppState to register in DeviceRegistry.
+    var onDeviceIdentified: ((String, String) -> RegisteredDevice?)? = nil
 
     private var deviceInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOUSBDeviceInterface>>?
     private var interfaceInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOUSBInterfaceInterface>>?
@@ -544,6 +548,12 @@ class FELService: ObservableObject {
                 DispatchQueue.main.async {
                     self.deviceInfo?.sid = sid
                     self.appendLog("SID: \(sid)")
+
+                    // Auto-register in device registry
+                    if let reg = self.onDeviceIdentified?(sid, self.deviceInfo?.socInfo.name ?? "Unknown") {
+                        self.registeredDevice = reg
+                        self.appendLog("Device: \(reg.name)" + (reg.owner.isEmpty ? "" : " (\(reg.owner))"))
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {

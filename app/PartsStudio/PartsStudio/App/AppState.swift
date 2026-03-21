@@ -87,6 +87,7 @@ class AppState: ObservableObject {
     let felService = FELService()
     let deviceTracker = DeviceStateTracker()
     let userSession = UserSession()
+    let deviceRegistry = DeviceRegistry()
     @AppStorage("userRole") var userRoleRaw: String = "admin" {
         didSet { userSession.role = UserRole(rawValue: userRoleRaw) ?? .admin }
     }
@@ -112,6 +113,12 @@ class AppState: ObservableObject {
             felServiceCancellable = felService.objectWillChange.sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
+
+            // Auto-register devices when SID is read
+            felService.onDeviceIdentified = { [weak self] sid, socName in
+                self?.deviceRegistry.register(sid: sid, socName: socName)
+            }
+
             restoreLastView()
         }
     }

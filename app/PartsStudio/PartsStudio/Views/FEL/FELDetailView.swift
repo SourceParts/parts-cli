@@ -585,6 +585,9 @@ struct FELDetailView: View {
             felService.appendLog("  gpio <port> <pin> <0|1> Set GPIO pin")
             felService.appendLog("  uart <0-4>             Read UART status")
             felService.appendLog("  reg <addr>             Read 32-bit register")
+            felService.appendLog("  device                 Show device identity")
+            felService.appendLog("  name <name>            Name this device")
+            felService.appendLog("  owner <name>           Set device owner")
             felService.appendLog("  clear                  Clear console")
         case "status":
             let state = felService.connectionState.rawValue
@@ -701,6 +704,47 @@ struct FELDetailView: View {
                 case .failure(let err):
                     felService.appendLog("ERROR: \(err.localizedDescription)")
                 }
+            }
+
+        case "device":
+            if let reg = felService.registeredDevice {
+                felService.appendLog("Name:     \(reg.name)")
+                felService.appendLog("Owner:    \(reg.owner.isEmpty ? "(unset)" : reg.owner)")
+                felService.appendLog("SID:      \(reg.sid)")
+                felService.appendLog("SoC:      \(reg.hardware.soc)")
+                felService.appendLog("Board:    \(reg.boardRevision.isEmpty ? "(unset)" : reg.boardRevision)")
+                felService.appendLog("Serial:   \(reg.boardSerial.isEmpty ? "(unset)" : reg.boardSerial)")
+                felService.appendLog("Boots:    \(reg.bootCount)")
+                felService.appendLog("First:    \(reg.firstSeen.formatted())")
+                felService.appendLog("Last:     \(reg.lastSeen.formatted())")
+                if !reg.notes.isEmpty { felService.appendLog("Notes:    \(reg.notes)") }
+                if !reg.tags.isEmpty { felService.appendLog("Tags:     \(reg.tags.joined(separator: ", "))") }
+            } else {
+                felService.appendLog("No device registered. Connect a device first.")
+            }
+
+        case "name":
+            guard parts.count >= 2 else {
+                felService.appendLog("ERROR: Usage: name <device name>")
+                return
+            }
+            let newName = parts[1...].joined(separator: " ")
+            if let sid = felService.deviceInfo?.sid {
+                appState.deviceRegistry.rename(sid: sid, name: newName)
+                felService.registeredDevice = appState.deviceRegistry.lookup(sid: sid)
+                felService.appendLog("Device renamed: \(newName)")
+            }
+
+        case "owner":
+            guard parts.count >= 2 else {
+                felService.appendLog("ERROR: Usage: owner <owner name>")
+                return
+            }
+            let ownerName = parts[1...].joined(separator: " ")
+            if let sid = felService.deviceInfo?.sid {
+                appState.deviceRegistry.setOwner(sid: sid, owner: ownerName)
+                felService.registeredDevice = appState.deviceRegistry.lookup(sid: sid)
+                felService.appendLog("Owner set: \(ownerName)")
             }
 
         case "clear":
