@@ -81,6 +81,8 @@ class AppState: ObservableObject {
     let ecoChatStore = ECOChatStore()
     let updater = Updater()
     let assemblyStore = AssemblyStore()
+    let felBridge = FELBridge()
+    @Published var showFEL: Bool = false
     @Published var selectedAssemblyDoc: AssemblyDocument?
 
     let iqcService = IQCService()
