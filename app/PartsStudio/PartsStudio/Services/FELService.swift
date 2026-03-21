@@ -1120,6 +1120,17 @@ class FELService: ObservableObject {
             do {
                 self.appendLogSync("=== FEL Boot Sequence ===")
 
+                // Connect serial before boot so we capture all output
+                if !self.serialActive {
+                    DispatchQueue.main.async {
+                        if let port = self.findSerialPort() {
+                            self.connectSerial(port: port)
+                            self.appendLog("Serial attached for boot monitoring")
+                        }
+                    }
+                    Thread.sleep(forTimeInterval: 0.3)
+                }
+
                 // Step 1: Write and execute SPL
                 self.appendLogSync("[1/4] Loading SPL (\(splData.count) bytes)...")
                 try self.writeSPLSync(data: splData, socInfo: socInfo)
@@ -1150,8 +1161,13 @@ class FELService: ObservableObject {
                     self.appendLogSync("[4/4] RMR request sent")
                 }
 
-                // Auto-connect to serial console
-                self.autoConnectSerial()
+                // Auto-connect serial if not already attached
+                if !self.serialActive {
+                    self.autoConnectSerial()
+                } else {
+                    self.appendLogSync("Serial already attached — monitoring boot output")
+                    DispatchQueue.main.async { self.onBootComplete?() }
+                }
 
                 DispatchQueue.main.async {
                     self.appendLog("=== Boot sequence complete ===")
