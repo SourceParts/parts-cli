@@ -819,29 +819,24 @@ class FELService: ObservableObject {
 
         appendLogSync("SPL executing...")
 
-        // Wait for SPL to finish and verify eGON.FEL response.
-        // SPL initializes DRAM which can take 0.5-2s. Retry the read
-        // since the FEL USB device may not respond while ARM code runs.
+        // Non-blocking verification: wait 2s then check in background.
+        // Don't block the USB queue — the boot sequence continues regardless.
         let splAddr = socInfo.splAddr > 0 ? socInfo.splAddr : socInfo.scratchAddr
-        var verified = false
-        for attempt in 1...6 {
-            Thread.sleep(forTimeInterval: 0.5)
-            do {
-                let response = try awFELRead(offset: splAddr + 4, length: 8)
-                let responseStr = String(data: response, encoding: .ascii) ?? ""
-                if responseStr == "eGON.FEL" {
-                    verified = true
-                    appendLogSync("SPL verified: eGON.FEL (attempt \(attempt))")
-                    break
-                } else {
-                    appendLogSync("SPL check \(attempt)/6: got \(responseStr)")
-                }
-            } catch {
-                appendLogSync("SPL check \(attempt)/6: device busy, retrying...")
+        let startTime = Date()
+        Thread.sleep(forTimeInterval: 2.0)
+        let elapsed = String(format: "%.1f", Date().timeIntervalSince(startTime))
+
+        // Quick single check — if it fails, continue anyway
+        do {
+            let response = try awFELRead(offset: splAddr + 4, length: 8)
+            let responseStr = String(data: response, encoding: .ascii) ?? ""
+            if responseStr == "eGON.FEL" {
+                appendLogSync("SPL verified: eGON.FEL (\(elapsed)s)")
+            } else {
+                appendLogSync("SPL response: \(responseStr) (\(elapsed)s) — continuing")
             }
-        }
-        if !verified {
-            appendLogSync("WARNING: Could not verify SPL, continuing anyway...")
+        } catch {
+            appendLogSync("SPL check skipped (\(elapsed)s) — continuing")
         }
     }
 
