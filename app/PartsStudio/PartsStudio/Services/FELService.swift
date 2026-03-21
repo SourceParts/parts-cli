@@ -477,7 +477,7 @@ class FELService: ObservableObject {
         pipeOut = 0
     }
 
-    private let usbTimeoutMS: UInt32 = 10000 // 10 second USB timeout
+    private var usbTimeoutMS: UInt32 = 10000 // 10 second USB timeout (adjustable for SPL)
 
     /// Send data to the OUT bulk endpoint.
     private func bulkSend(_ data: Data) throws {
@@ -866,9 +866,15 @@ class FELService: ObservableObject {
         // Build and write thunk code
         let thunkCode = buildSPLThunk(socInfo: socInfo)
         try awFELWrite(data: thunkCode, offset: socInfo.thunkAddr)
-        try awFELExecute(offset: socInfo.thunkAddr)
 
-        appendLogSync("SPL executing...")
+        // Increase USB timeout for SPL execution — DRAM init can take 5-30s
+        let savedTimeout = usbTimeoutMS
+        usbTimeoutMS = 60000 // 60 second timeout for SPL
+        appendLogSync("SPL executing (60s timeout)...")
+        try awFELExecute(offset: socInfo.thunkAddr)
+        usbTimeoutMS = savedTimeout
+
+        appendLogSync("SPL returned to FEL")
 
         // Non-blocking verification: wait 2s then check in background.
         // Don't block the USB queue — the boot sequence continues regardless.
@@ -1196,34 +1202,10 @@ class FELService: ObservableObject {
                 try self.writeSPLSync(data: actualSPL, socInfo: socInfo)
                 self.appendLogSync("[1/4] SPL loaded and executing")
 
-                // Step 2: USB reset + reconnect
-                // After SPL, the A64 USB PHY is corrupted by DRAM PLL reconfig.
-                // Force a USB device reset so macOS re-enumerates cleanly.
-                self.appendLogSync("[2/4] USB reset after SPL...")
-                self.resetUSBDevice()
-
-                // Wait then reopen with retries
-                var felReady = false
-                for wait in 1...30 {
-                    Thread.sleep(forTimeInterval: 2.0)
-                    do {
-                        try self.openUSBDevice()
-                        try self.findAndOpenInterface()
-                        _ = try self.getVersionSync()
-                        self.appendLogSync("[2/4] FEL ready after \(wait * 2)s")
-                        felReady = true
-                        break
-                    } catch {
-                        self.closeDevice()
-                        if wait <= 3 || wait % 5 == 0 {
-                            self.appendLogSync("[2/4] Waiting... (\(wait * 2)s)")
-                        }
-                    }
-                }
-
-                guard felReady else {
-                    throw FELError.protocolError("FEL did not reconnect after SPL")
-                }
+                // Step 2: SPL should have returned — verify FEL is still alive
+                self.appendLogSync("[2/4] Verifying FEL connection...")
+                let ver = try self.getVersionSync()
+                self.appendLogSync("[2/4] FEL alive: \(ver.socIdHex)")
 
                 // Step 3: Write U-Boot to DRAM
                 if let ub = bootUBootData, ub.count > 0 {
