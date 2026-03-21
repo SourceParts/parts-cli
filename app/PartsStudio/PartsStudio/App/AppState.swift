@@ -114,6 +114,11 @@ class AppState: ObservableObject {
             registry.register(sid: sid, socName: socName)
         }
 
+        // Auto-switch to FEL console tab after boot
+        felService.onBootComplete = { [weak felService] in
+            felService?.appendLog("Serial console ready — switched to Console tab")
+        }
+
         Task { @MainActor in
             await iqcService.fetchItems()
             // Forward FELService changes to AppState so SwiftUI picks them up

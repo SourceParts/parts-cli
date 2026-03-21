@@ -8,6 +8,11 @@ struct FELConsoleView: View {
     @State private var commandText = ""
     @State private var cursorVisible = false
     @FocusState private var inputFocused: Bool
+    @AppStorage("consoleTextColor") private var consoleTextColor = "green"
+    @AppStorage("consoleBackgroundColor") private var consoleBackgroundColor = "black"
+
+    private var textColor: Color { ConsoleTheme.textColor(from: consoleTextColor) }
+    private var bgColor: Color { ConsoleTheme.backgroundColor(from: consoleBackgroundColor) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -28,6 +33,10 @@ struct FELConsoleView: View {
                 Button("Clear", action: onClear)
                     .font(.caption2)
                     .buttonStyle(.link)
+
+                Divider().frame(height: 10)
+
+                ConsoleColorPicker(selectedName: $consoleTextColor)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -38,7 +47,7 @@ struct FELConsoleView: View {
                         ForEach(Array(log.enumerated()), id: \.offset) { index, entry in
                             Text(entry)
                                 .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.green)
+                                .foregroundStyle(textColor)
                                 .textSelection(.enabled)
                                 .id(index)
                         }
@@ -52,7 +61,7 @@ struct FELConsoleView: View {
                     }
                 }
             }
-            .background(Color.black)
+            .background(bgColor)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .topTrailing) {
                 if copied {
@@ -75,7 +84,7 @@ struct FELConsoleView: View {
                 HStack(spacing: 0) {
                     Text("> ")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(textColor)
                     ZStack(alignment: .leading) {
                         // Blinking block cursor positioned after text
                         HStack(spacing: 0) {
@@ -83,13 +92,13 @@ struct FELConsoleView: View {
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.clear)
                             Rectangle()
-                                .fill(.green)
+                                .fill(textColor)
                                 .frame(width: 7, height: 14)
                                 .opacity(cursorVisible ? 1 : 0)
                         }
                         TextField("", text: $commandText)
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(textColor)
                             .textFieldStyle(.plain)
                             .focused($inputFocused)
                             .onSubmit {

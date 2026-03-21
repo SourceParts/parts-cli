@@ -18,6 +18,7 @@ enum FELTab: String, CaseIterable {
 
 struct FELDetailView: View {
     @EnvironmentObject var appState: AppState
+    @State private var hasAPIKey: Bool = APIKeychain.loadAPIKey() != nil
 
     @State private var selectedTab: FELTab = .info
     @State private var readAddress: String = "0x11000"
@@ -56,11 +57,15 @@ struct FELDetailView: View {
                 case .boot:
                     bootPanel
                 case .console:
-                    FELConsoleView(log: felService.log, onClear: {
-                        felService.log.removeAll()
-                    }, onCommand: { cmd in
-                        handleConsoleCommand(cmd)
-                    })
+                    if felService.serialActive {
+                        serialConsoleView
+                    } else {
+                        FELConsoleView(log: felService.log, onClear: {
+                            felService.log.removeAll()
+                        }, onCommand: { cmd in
+                            handleConsoleCommand(cmd)
+                        })
+                    }
                 }
             } else {
                 disconnectedView
@@ -124,6 +129,21 @@ struct FELDetailView: View {
                     .lineLimit(1)
                     .padding(.trailing, 4)
             }
+
+            // source.parts account indicator
+            HStack(spacing: 3) {
+                Image(systemName: "person.fill")
+                    .font(.system(size: 8))
+                Text(hasAPIKey ? "Connected" : "No Account")
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .foregroundStyle(hasAPIKey ? .green : .secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background((hasAPIKey ? Color.green : Color.secondary).opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .help(hasAPIKey ? "source.parts API key configured" : "No source.parts API key found")
+            .onAppear { hasAPIKey = APIKeychain.loadAPIKey() != nil }
 
             // Device lifecycle state
             HStack(spacing: 4) {
@@ -490,6 +510,21 @@ struct FELDetailView: View {
 
                 Spacer()
 
+                // source.parts account indicator
+                HStack(spacing: 3) {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 8))
+                    Text(hasAPIKey ? "Connected" : "No Account")
+                        .font(.system(size: 9, weight: .medium))
+                }
+                .foregroundStyle(hasAPIKey ? .green : .secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background((hasAPIKey ? Color.green : Color.secondary).opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .help(hasAPIKey ? "source.parts API key configured" : "No source.parts API key found")
+                .onAppear { hasAPIKey = APIKeychain.loadAPIKey() != nil }
+
                 HStack(spacing: 4) {
                     Circle()
                         .fill(Color.secondary)
@@ -585,6 +620,7 @@ struct FELDetailView: View {
             felService.appendLog("  gpio <port> <pin> <0|1> Set GPIO pin")
             felService.appendLog("  uart <0-4>             Read UART status")
             felService.appendLog("  reg <addr>             Read 32-bit register")
+            felService.appendLog("  serial                 Connect serial console")
             felService.appendLog("  device                 Show device identity")
             felService.appendLog("  name <name>            Name this device")
             felService.appendLog("  owner <name>           Set device owner")
@@ -706,6 +742,9 @@ struct FELDetailView: View {
                 }
             }
 
+        case "serial":
+            felService.connectSerial()
+
         case "device":
             if let reg = felService.registeredDevice {
                 felService.appendLog("Name:     \(reg.name)")
@@ -751,6 +790,80 @@ struct FELDetailView: View {
             felService.log.removeAll()
         default:
             felService.appendLog("ERROR: Unknown command: \(command). Type 'help'.")
+        }
+    }
+
+    // MARK: - Serial Console View
+
+    @State private var serialInput = ""
+
+    @ViewBuilder
+    private var serialConsoleView: some View {
+        VStack(spacing: 0) {
+            // Serial header bar
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 6, height: 6)
+                Text(felService.serialPort ?? "Serial")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.green)
+                Text("115200")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("FEL Log") {
+                    felService.disconnectSerial()
+                }
+                .font(.caption2)
+                .buttonStyle(.link)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(felService.serialOutput, forType: .string)
+                }
+                .font(.caption2)
+                .buttonStyle(.link)
+                Button("Clear") {
+                    felService.serialOutput = ""
+                }
+                .font(.caption2)
+                .buttonStyle(.link)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(white: 0.05))
+
+            // Serial output
+            ScrollView {
+                Text(felService.serialOutput.isEmpty ? "Waiting for serial data..." : felService.serialOutput)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.green)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            }
+            .background(Color.black)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Serial input
+            HStack(spacing: 4) {
+                Text(">")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.green)
+                TextField("", text: $serialInput)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.green)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        let cmd = serialInput
+                        guard !cmd.isEmpty else { return }
+                        felService.sendSerial(cmd)
+                        serialInput = ""
+                    }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color(white: 0.08))
         }
     }
 

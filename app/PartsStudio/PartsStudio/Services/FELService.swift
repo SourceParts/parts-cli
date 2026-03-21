@@ -96,6 +96,15 @@ class FELService: ObservableObject {
     /// Called when a device is identified by SID. Set by AppState to register in DeviceRegistry.
     var onDeviceIdentified: ((String, String) -> RegisteredDevice?)? = nil
 
+    /// Called after boot completes — use to auto-switch to serial console.
+    var onBootComplete: (() -> Void)? = nil
+
+    /// Serial console state after boot
+    @Published var serialPort: String?
+    @Published var serialOutput: String = ""
+    @Published var serialActive: Bool = false
+    private var serialHandle: FileHandle?
+
     private var deviceInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOUSBDeviceInterface>>?
     private var interfaceInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOUSBInterfaceInterface>>?
     private var pipeIn: UInt8 = 0
@@ -1112,6 +1121,9 @@ class FELService: ObservableObject {
                     self.appendLogSync("[4/4] RMR request sent")
                 }
 
+                // Auto-connect to serial console
+                self.autoConnectSerial()
+
                 DispatchQueue.main.async {
                     self.appendLog("=== Boot sequence complete ===")
                     completion(.success(()))
@@ -1121,6 +1133,92 @@ class FELService: ObservableObject {
                     self.appendLog("Boot failed: \(error.localizedDescription)")
                     completion(.failure(error))
                 }
+            }
+        }
+    }
+
+    // MARK: - Serial Console (post-boot)
+
+    /// Find the WCH serial port.
+    func findSerialPort() -> String? {
+        let devEntries = (try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? []
+        return devEntries.first(where: { $0.hasPrefix("cu.usbserial") }).map { "/dev/\($0)" }
+    }
+
+    /// Connect to serial port for U-Boot / Linux console.
+    func connectSerial(port: String? = nil, baudRate: Int = 115200) {
+        disconnectSerial()
+
+        guard let port = port ?? findSerialPort() else {
+            appendLog("No serial port found")
+            return
+        }
+
+        // Configure baud rate
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/stty")
+        process.arguments = ["-f", port, String(baudRate)]
+        try? process.run()
+        process.waitUntilExit()
+
+        guard let fh = FileHandle(forReadingAtPath: port) else {
+            appendLog("Cannot open \(port)")
+            return
+        }
+
+        serialHandle = fh
+        serialPort = port
+        serialActive = true
+        appendLog("Serial connected: \(port) @ \(baudRate)")
+
+        fh.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if !data.isEmpty, let text = String(data: data, encoding: .utf8) {
+                DispatchQueue.main.async {
+                    self?.serialOutput += text
+                    self?.appendLog(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                    // Keep bounded
+                    if let len = self?.serialOutput.count, len > 65536 {
+                        self?.serialOutput = String(self!.serialOutput.suffix(32768))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Send text to serial port.
+    func sendSerial(_ text: String) {
+        guard let port = serialPort,
+              let fh = FileHandle(forWritingAtPath: port),
+              let data = (text + "\r\n").data(using: .utf8) else { return }
+        fh.write(data)
+        fh.closeFile()
+    }
+
+    /// Disconnect serial.
+    func disconnectSerial() {
+        serialHandle?.readabilityHandler = nil
+        serialHandle?.closeFile()
+        serialHandle = nil
+        if serialActive {
+            serialActive = false
+            serialPort = nil
+            appendLog("Serial disconnected")
+        }
+    }
+
+    /// Auto-connect to serial after boot (called after boot completes).
+    private func autoConnectSerial() {
+        appendLogSync("Waiting for serial port (2s)...")
+        Thread.sleep(forTimeInterval: 2.0)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if let port = self.findSerialPort() {
+                self.connectSerial(port: port)
+                self.onBootComplete?()
+            } else {
+                self.appendLog("No serial port detected — connect manually")
             }
         }
     }

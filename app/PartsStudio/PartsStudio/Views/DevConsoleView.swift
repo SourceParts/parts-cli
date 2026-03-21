@@ -10,6 +10,11 @@ struct DevConsoleView: View {
     @State private var commandHistory: [String] = []
     @State private var historyIndex: Int = -1
     @FocusState private var isFocused: Bool
+    @AppStorage("consoleTextColor") private var consoleTextColor = "green"
+    @AppStorage("consoleBackgroundColor") private var consoleBackgroundColor = "black"
+
+    private var textColor: Color { ConsoleTheme.textColor(from: consoleTextColor) }
+    private var bgColor: Color { ConsoleTheme.backgroundColor(from: consoleBackgroundColor) }
 
     struct ConsoleLine: Identifiable {
         let id = UUID()
@@ -33,7 +38,7 @@ struct DevConsoleView: View {
                             ForEach(appState.felService.log.indices, id: \.self) { i in
                                 Text(appState.felService.log[i])
                                     .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.green.opacity(0.7))
+                                    .foregroundStyle(textColor.opacity(0.7))
                             }
                             // Console history
                             ForEach(history) { line in
@@ -59,10 +64,10 @@ struct DevConsoleView: View {
                 HStack(spacing: 4) {
                     Text(">")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(textColor)
                     TextField("", text: $commandText)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(textColor)
                         .textFieldStyle(.plain)
                         .focused($isFocused)
                         .onSubmit { executeCommand() }
@@ -80,14 +85,14 @@ struct DevConsoleView: View {
                 .background(Color(white: 0.08))
             }
             .background(.ultraThinMaterial.opacity(0.85))
-            .background(Color.black.opacity(0.75))
+            .background(bgColor.opacity(0.75))
         }
         .onAppear { isFocused = true }
     }
 
     private func lineColor(_ style: ConsoleLine.LineStyle) -> Color {
         switch style {
-        case .input: return .green
+        case .input: return textColor
         case .output: return .white
         case .error: return .red
         case .info: return .yellow

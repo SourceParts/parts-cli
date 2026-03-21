@@ -5,10 +5,10 @@ import Foundation
 /// Get log via: curl localhost:9801/log
 /// Get device info via: curl localhost:9801/device
 class FELConsoleServer {
-    private var listener: FileHandle?
     private var serverSocket: Int32 = -1
     private let port: UInt16 = 9801
-    private let queue = DispatchQueue(label: "parts.studio.console.server", qos: .utility)
+    private let acceptQueue = DispatchQueue(label: "parts.studio.console.server.accept", qos: .utility)
+    private var running = false
 
     var onCommand: ((String) -> String)?
     var getLog: (() -> [String])?
@@ -17,26 +17,37 @@ class FELConsoleServer {
     init() {}
 
     func start() {
-        queue.async { [weak self] in
+        guard !running else { return }
+        running = true
+        acceptQueue.async { [weak self] in
             self?.listen()
         }
     }
 
     func stop() {
-        if serverSocket >= 0 {
-            close(serverSocket)
-            serverSocket = -1
+        running = false
+        let fd = serverSocket
+        serverSocket = -1
+        if fd >= 0 {
+            // Shutting down the socket unblocks the blocking accept() call
+            shutdown(fd, SHUT_RDWR)
+            close(fd)
         }
     }
 
     private func listen() {
         serverSocket = socket(AF_INET, SOCK_STREAM, 0)
-        guard serverSocket >= 0 else { return }
+        guard serverSocket >= 0 else {
+            running = false
+            return
+        }
 
         var opt: Int32 = 1
         setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &opt, socklen_t(MemoryLayout<Int32>.size))
 
         var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         addr.sin_addr.s_addr = UInt32(0x7F000001).bigEndian // 127.0.0.1
@@ -49,23 +60,46 @@ class FELConsoleServer {
         guard bindResult == 0 else {
             close(serverSocket)
             serverSocket = -1
+            running = false
             return
         }
 
-        Darwin.listen(serverSocket, 5)
+        guard Darwin.listen(serverSocket, 5) == 0 else {
+            close(serverSocket)
+            serverSocket = -1
+            running = false
+            return
+        }
 
-        while serverSocket >= 0 {
-            let client = accept(serverSocket, nil, nil)
-            guard client >= 0 else { continue }
+        while running && serverSocket >= 0 {
+            var clientAddr = sockaddr_in()
+            var clientAddrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let client = withUnsafeMutablePointer(to: &clientAddr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                    accept(serverSocket, sockPtr, &clientAddrLen)
+                }
+            }
+            guard client >= 0 else {
+                // accept failed — if we're still supposed to be running, just retry;
+                // otherwise the socket was closed by stop(), so exit the loop.
+                continue
+            }
 
-            queue.async { [weak self] in
+            // Handle each client on a concurrent queue so the accept loop is never blocked
+            DispatchQueue.global(qos: .utility).async { [weak self] in
                 self?.handleClient(client)
             }
         }
+
+        running = false
     }
 
     private func handleClient(_ client: Int32) {
         defer { close(client) }
+
+        // Set a read timeout so a misbehaving client can't block this thread forever
+        var tv = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
         var buffer = [UInt8](repeating: 0, count: 4096)
         let bytesRead = recv(client, &buffer, buffer.count, 0)
@@ -77,8 +111,16 @@ class FELConsoleServer {
         let (status, contentType, body) = handleRoute(path)
         let response = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
 
-        _ = response.withCString { ptr in
-            send(client, ptr, strlen(ptr), 0)
+        // Send using the known byte count, not strlen, to handle the full response correctly
+        let data = Array(response.utf8)
+        data.withUnsafeBufferPointer { bufferPtr in
+            guard let base = bufferPtr.baseAddress else { return }
+            var totalSent = 0
+            while totalSent < data.count {
+                let sent = send(client, base + totalSent, data.count - totalSent, 0)
+                if sent <= 0 { break }
+                totalSent += sent
+            }
         }
     }
 
