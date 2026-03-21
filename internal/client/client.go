@@ -1649,3 +1649,11 @@ func (c *Client) ImportAltium(ctx context.Context, fileName string, outputPath s
 	_, err := io.Copy(w, &buf)
 	return err
 }
+
+func (c *Client) ImportAltiumBytes(ctx context.Context, fileName string) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := c.edaUpload(ctx, domain.Endpoint_ImportAltium, fileName, nil, nil, &buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
