@@ -270,14 +270,10 @@ class FELService: ObservableObject {
             readScratchAsync(socInfo: socInfo)
 
         } catch {
+            closeDevice()
             DispatchQueue.main.async { [weak self] in
                 self?.connectionState = .disconnected
-                self?.appendLog("Reconnecting... (\(error.localizedDescription))")
-            }
-            // Retry after cooldown
-            Thread.sleep(forTimeInterval: connectCooldown)
-            if connectionState != .connected {
-                connectToDevice()
+                self?.appendLog("Connection failed: \(error.localizedDescription)")
             }
         }
     }
