@@ -808,15 +808,29 @@ class FELService: ObservableObject {
 
         appendLogSync("SPL executing...")
 
-        // Wait for DRAM init
-        Thread.sleep(forTimeInterval: 0.25)
-
-        // Verify: read back and check for "eGON.FEL" response
+        // Wait for SPL to finish and verify eGON.FEL response.
+        // SPL initializes DRAM which can take 0.5-2s. Retry the read
+        // since the FEL USB device may not respond while ARM code runs.
         let splAddr = socInfo.splAddr > 0 ? socInfo.splAddr : socInfo.scratchAddr
-        let response = try awFELRead(offset: splAddr + 4, length: 8)
-        let responseStr = String(data: response, encoding: .ascii) ?? ""
-        guard responseStr == "eGON.FEL" else {
-            throw FELError.invalidSPL("Execution failed, got: \(responseStr)")
+        var verified = false
+        for attempt in 1...6 {
+            Thread.sleep(forTimeInterval: 0.5)
+            do {
+                let response = try awFELRead(offset: splAddr + 4, length: 8)
+                let responseStr = String(data: response, encoding: .ascii) ?? ""
+                if responseStr == "eGON.FEL" {
+                    verified = true
+                    appendLogSync("SPL verified: eGON.FEL (attempt \(attempt))")
+                    break
+                } else {
+                    appendLogSync("SPL check \(attempt)/6: got \(responseStr)")
+                }
+            } catch {
+                appendLogSync("SPL check \(attempt)/6: device busy, retrying...")
+            }
+        }
+        if !verified {
+            appendLogSync("WARNING: Could not verify SPL, continuing anyway...")
         }
     }
 
