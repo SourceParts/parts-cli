@@ -156,9 +156,21 @@ class AppState: ObservableObject {
                 case "connect":
                     self.felService.connect()
                     return "connecting..."
+                case "boot":
+                    guard self.felService.connectionState == .connected else { return "not connected" }
+                    let home = FileManager.default.homeDirectoryForCurrentUser.path
+                    let splPath = "\(home)/Work/PocketPC-Uboot/spl/sunxi-spl.bin"
+                    let ubootPath = "\(home)/Work/PocketPC-Uboot/u-boot.bin"
+                    guard let splData = try? Data(contentsOf: URL(fileURLWithPath: splPath)) else { return "cannot read SPL" }
+                    let ubootData = try? Data(contentsOf: URL(fileURLWithPath: ubootPath))
+                    self.felService.bootPocketPC(splData: splData, ubootData: ubootData) { _ in }
+                    return "boot sequence started"
+                case "serial":
+                    self.felService.connectSerial()
+                    return "serial connecting..."
                 default:
                     self.felService.appendLog("Remote: \(cmd)")
-                    return "queued"
+                    return "unknown command"
                 }
             }
             consoleServer.start()
