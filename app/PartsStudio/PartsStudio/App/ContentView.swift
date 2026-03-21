@@ -2,8 +2,10 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @State private var showDevConsole = false
 
     var body: some View {
+        ZStack(alignment: .top) {
         NavigationSplitView {
             DatasheetSidebarView()
         } detail: {
@@ -60,6 +62,19 @@ struct ContentView: View {
                 appState.showExport = false
                 PDFExporter.exportWithRedactions(from: appState.pdfDocument)
             }
+        }
+
+            // Dev console overlay — fills entire viewport
+            if showDevConsole {
+                DevConsoleView(isVisible: $showDevConsole)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(100)
+            }
+        } // ZStack
+        .onKeyPress("`") {
+            withAnimation(.easeOut(duration: 0.2)) { showDevConsole.toggle() }
+            return .handled
         }
     }
 

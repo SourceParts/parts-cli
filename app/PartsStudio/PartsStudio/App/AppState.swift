@@ -1,5 +1,6 @@
 import SwiftUI
 import PDFKit
+import Combine
 
 enum ToolMode: String, CaseIterable, Identifiable {
     case view
@@ -89,6 +90,8 @@ class AppState: ObservableObject {
     let iqcService = IQCService()
     @Published var iqcItems: [IQCItem] = IQCService.sampleItems
 
+    private var felServiceCancellable: Any?
+
     /// The effective list of IQC items: live data when available, sample data as fallback.
     var effectiveIQCItems: [IQCItem] {
         iqcService.items.isEmpty ? iqcItems : iqcService.items
@@ -97,6 +100,10 @@ class AppState: ObservableObject {
     nonisolated init() {
         Task { @MainActor in
             await iqcService.fetchItems()
+            // Forward FELService changes to AppState so SwiftUI picks them up
+            felServiceCancellable = felService.objectWillChange.sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
         }
     }
 
