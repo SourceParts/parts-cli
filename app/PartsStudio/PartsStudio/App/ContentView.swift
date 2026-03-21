@@ -7,7 +7,9 @@ struct ContentView: View {
         NavigationSplitView {
             DatasheetSidebarView()
         } detail: {
-            if appState.showUSBMonitor {
+            if appState.showFEL {
+                FELDetailView()
+            } else if appState.showUSBMonitor {
                 USBMonitorView()
             } else if appState.showCredits {
                 CreditsView()

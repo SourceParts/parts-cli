@@ -9,7 +9,14 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "PartsStudio",
-            path: "PartsStudio"
+            path: "PartsStudio",
+            resources: [
+                .process("Resources/soc_info_table.json"),
+                .copy("FEL"),
+            ],
+            linkerSettings: [
+                .linkedFramework("IOKit"),
+            ]
         )
     ]
 )

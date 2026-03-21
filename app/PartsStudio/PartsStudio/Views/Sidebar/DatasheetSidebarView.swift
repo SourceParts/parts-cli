@@ -144,6 +144,12 @@ struct DatasheetSidebarView: View {
                         }
                     }
 
+                    // FEL Device
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    FELSidebarSection()
+
                     // Credits & Services
                     Divider()
                         .padding(.vertical, 4)

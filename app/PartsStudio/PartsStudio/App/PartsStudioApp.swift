@@ -34,6 +34,7 @@ struct PartsStudioApp: App {
                 .keyboardShortcut("i", modifiers: [.command])
             }
             ToolCommands(appState: appState)
+            FELCommands(appState: appState)
             UpdateCommands(updater: appState.updater)
         }
     }
@@ -64,6 +65,36 @@ struct ToolCommands: Commands {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(appState.selectedDatasheet == nil)
+        }
+    }
+}
+
+struct FELCommands: Commands {
+    @ObservedObject var appState: AppState
+
+    var body: some Commands {
+        CommandMenu("FEL") {
+            Button("Show FEL Device") {
+                appState.showFEL = true
+                appState.selectedDatasheet = nil
+                appState.selectedECO = nil
+                appState.selectedIQCItem = nil
+                appState.selectedAssemblyDoc = nil
+                appState.showCredits = false
+                appState.showUSBMonitor = false
+                appState.pdfDocument = nil
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
+
+            Button("Connect FEL") {
+                appState.felService.connect()
+            }
+            .disabled(appState.felService.connectionState == .connected)
+
+            Button("Disconnect FEL") {
+                appState.felService.disconnect()
+            }
+            .disabled(appState.felService.connectionState != .connected)
         }
     }
 }

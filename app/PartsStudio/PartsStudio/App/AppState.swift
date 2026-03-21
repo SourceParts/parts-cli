@@ -82,6 +82,7 @@ class AppState: ObservableObject {
     let updater = Updater()
     let assemblyStore = AssemblyStore()
     let felBridge = FELBridge()
+    let felService = FELService()
     @Published var showFEL: Bool = false
     @Published var selectedAssemblyDoc: AssemblyDocument?
 
@@ -106,6 +107,7 @@ class AppState: ObservableObject {
         selectedAssemblyDoc = nil
         showCredits = false
         showUSBMonitor = false
+        showFEL = false
         loadPDF(at: datasheet.path)
     }
 
