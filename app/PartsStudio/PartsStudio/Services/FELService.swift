@@ -124,6 +124,7 @@ class FELService: ObservableObject {
     init() {
         appendLog("Parts Studio FEL Console")
         appendLog("Commands: help, status, info, read, watch, stop, scratch, sram, boot, clear")
+        appendLog("")
         appendLog("Waiting for device (VID 0x1F3A / PID 0xEFE8)...")
         startDeviceWatcher()
     }
@@ -259,6 +260,7 @@ class FELService: ObservableObject {
                 self.deviceInfo = info
                 self.connectionState = .connected
                 self.consecutiveErrors = 0
+                self.appendLog("")
                 self.appendLog("Connected: \(socInfo.name) (0x\(version.socIdHex))")
                 self.startHeartbeat()
             }

@@ -41,16 +41,25 @@ struct FELConsoleView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
 
-            ScrollView {
-                Text(log.joined(separator: "\n"))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(textColor)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
-                    .id("consoleBottom")
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(log.joined(separator: "\n"))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(textColor)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                        .id("bottom")
+                }
+                .onChange(of: log.count) { _, _ in
+                    withAnimation(.none) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+                .onAppear {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
             }
-            .defaultScrollAnchor(.bottom)
             .background(bgColor)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .topTrailing) {
@@ -103,12 +112,21 @@ struct FELConsoleView: View {
                 .padding(.vertical, 6)
                 .background(Color(white: 0.08))
                 .onAppear {
-                    inputFocused = true
+                    // Delay focus so the view is fully laid out first
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        inputFocused = true
+                    }
                     withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) {
                         cursorVisible = true
                     }
                 }
+                .onTapGesture {
+                    inputFocused = true
+                }
             }
+        }
+        .onTapGesture {
+            inputFocused = true
         }
     }
 }

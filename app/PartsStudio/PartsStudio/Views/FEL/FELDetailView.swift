@@ -794,7 +794,11 @@ struct FELDetailView: View {
             }
 
         case "serial":
-            felService.connectSerial()
+            if felService.connectionState == .connected {
+                felService.appendLog("Cannot open serial while FEL is active — boot first")
+            } else {
+                felService.connectSerial()
+            }
 
         case "device":
             if let reg = felService.registeredDevice {
@@ -967,9 +971,12 @@ struct FELDetailView: View {
     }
 
     private func sendUBoot(_ cmd: String) {
+        if felService.connectionState == .connected {
+            felService.appendLog("Cannot send serial while FEL is active — boot first")
+            return
+        }
         if !felService.serialActive {
             felService.connectSerial()
-            // Wait a moment for serial to connect
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 felService.sendSerial(cmd)
             }
