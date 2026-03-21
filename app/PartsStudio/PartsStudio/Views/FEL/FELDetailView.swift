@@ -4,6 +4,7 @@ enum FELTab: String, CaseIterable {
     case info = "Info"
     case memory = "Memory"
     case boot = "Boot"
+    case uboot = "U-Boot"
     case console = "Console"
 
     var icon: String {
@@ -11,6 +12,7 @@ enum FELTab: String, CaseIterable {
         case .info: return "cpu"
         case .memory: return "memorychip"
         case .boot: return "power"
+        case .uboot: return "terminal.fill"
         case .console: return "terminal"
         }
     }
@@ -56,6 +58,8 @@ struct FELDetailView: View {
                     memoryPanel
                 case .boot:
                     bootPanel
+                case .uboot:
+                    ubootPanel
                 case .console:
                     if felService.serialActive {
                         serialConsoleView
@@ -790,6 +794,140 @@ struct FELDetailView: View {
             felService.log.removeAll()
         default:
             felService.appendLog("ERROR: Unknown command: \(command). Type 'help'.")
+        }
+    }
+
+    // MARK: - U-Boot Panel
+
+    @State private var ubootCommand = ""
+
+    @ViewBuilder
+    private var ubootPanel: some View {
+        VStack(spacing: 0) {
+            // Quick command bar
+            HStack(spacing: 6) {
+                Button(action: { sendUBoot("version") }) {
+                    Text("version")
+                        .font(.system(size: 9, design: .monospaced))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+
+                Button(action: { sendUBoot("bdinfo") }) {
+                    Text("bdinfo")
+                        .font(.system(size: 9, design: .monospaced))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+
+                Button(action: { sendUBoot("printenv") }) {
+                    Text("env")
+                        .font(.system(size: 9, design: .monospaced))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+
+                Button(action: { sendUBoot("mmc info") }) {
+                    Text("mmc")
+                        .font(.system(size: 9, design: .monospaced))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+
+                Button(action: { sendUBoot("usb info") }) {
+                    Text("usb")
+                        .font(.system(size: 9, design: .monospaced))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+
+                Button(action: { sendUBoot("boot") }) {
+                    Text("boot")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                }
+                .buttonStyle(.bordered)
+                .tint(.orange)
+                .controlSize(.mini)
+
+                Button(action: { sendUBoot("reset") }) {
+                    Text("reset")
+                        .font(.system(size: 9, design: .monospaced))
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .controlSize(.mini)
+
+                Divider().frame(height: 14)
+
+                if !felService.serialActive {
+                    Button(action: { felService.connectSerial() }) {
+                        HStack(spacing: 3) {
+                            Circle().fill(.orange).frame(width: 5, height: 5)
+                            Text("Connect Serial")
+                                .font(.system(size: 9))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                } else {
+                    HStack(spacing: 3) {
+                        Circle().fill(.green).frame(width: 5, height: 5)
+                        Text(felService.serialPort ?? "Serial")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.green)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            // Serial output
+            ScrollView {
+                Text(felService.serialOutput.isEmpty ? "Connect serial or boot device to see U-Boot output..." : felService.serialOutput)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.green)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            }
+            .background(Color.black)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Command input
+            HStack(spacing: 4) {
+                Text("=>")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.yellow)
+                TextField("U-Boot command...", text: $ubootCommand)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.green)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        guard !ubootCommand.isEmpty else { return }
+                        sendUBoot(ubootCommand)
+                        ubootCommand = ""
+                    }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color(white: 0.08))
+        }
+    }
+
+    private func sendUBoot(_ cmd: String) {
+        if !felService.serialActive {
+            felService.connectSerial()
+            // Wait a moment for serial to connect
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                felService.sendSerial(cmd)
+            }
+        } else {
+            felService.sendSerial(cmd)
         }
     }
 
