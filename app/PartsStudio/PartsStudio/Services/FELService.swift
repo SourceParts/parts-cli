@@ -430,6 +430,8 @@ class FELService: ObservableObject {
         pipeOut = 0
     }
 
+    private let usbTimeoutMS: UInt32 = 10000 // 10 second USB timeout
+
     /// Send data to the OUT bulk endpoint.
     private func bulkSend(_ data: Data) throws {
         guard let iface = interfaceInterface else { throw FELError.deviceNotFound }
@@ -439,10 +441,11 @@ class FELService: ObservableObject {
             let chunkSize = min(AW_USB_MAX_BULK_SEND, data.count - offset)
             let chunk = data[offset..<offset + chunkSize]
             let kr = chunk.withUnsafeBytes { ptr in
-                iface.pointee.pointee.WritePipe(
+                iface.pointee.pointee.WritePipeTO(
                     iface, pipeOut,
                     UnsafeMutableRawPointer(mutating: ptr.baseAddress!),
-                    UInt32(chunkSize)
+                    UInt32(chunkSize),
+                    usbTimeoutMS, usbTimeoutMS
                 )
             }
             guard kr == KERN_SUCCESS else { throw FELError.sendFailed(kr) }
@@ -450,17 +453,18 @@ class FELService: ObservableObject {
         }
     }
 
-    /// Receive data from the IN bulk endpoint.
+    /// Receive data from the IN bulk endpoint (with timeout).
     private func bulkRecv(_ length: Int) throws -> Data {
         guard let iface = interfaceInterface else { throw FELError.deviceNotFound }
 
         var buffer = Data(count: length)
         var actualLength = UInt32(length)
         let kr = buffer.withUnsafeMutableBytes { ptr in
-            iface.pointee.pointee.ReadPipe(
+            iface.pointee.pointee.ReadPipeTO(
                 iface, pipeIn,
                 ptr.baseAddress!,
-                &actualLength
+                &actualLength,
+                usbTimeoutMS, usbTimeoutMS
             )
         }
         guard kr == KERN_SUCCESS else { throw FELError.recvFailed(kr) }
@@ -1374,8 +1378,7 @@ class FELService: ObservableObject {
             } catch {
                 DispatchQueue.main.async {
                     self.consecutiveErrors += 1
-                    if self.consecutiveErrors >= self.maxConsecutiveErrors {
-                        self.appendLog("Heartbeat lost (\(self.consecutiveErrors) errors)")
+                    if self.consecutiveErrors == self.maxConsecutiveErrors {
                         self.connectionState = .disconnected
                         self.deviceInfo = nil
                         self.stopHeartbeat()
