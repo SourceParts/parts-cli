@@ -156,6 +156,8 @@ struct DatasheetSidebarView: View {
 
                     Button(action: {
                         appState.showCredits = true
+                        appState.showFEL = false
+                        appState.showUSBMonitor = false
                         appState.selectedDatasheet = nil
                         appState.selectedECO = nil
                         appState.selectedIQCItem = nil
@@ -173,6 +175,7 @@ struct DatasheetSidebarView: View {
                     Button(action: {
                         appState.showUSBMonitor = true
                         appState.showCredits = false
+                        appState.showFEL = false
                         appState.selectedDatasheet = nil
                         appState.selectedECO = nil
                         appState.selectedIQCItem = nil

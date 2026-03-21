@@ -88,6 +88,7 @@ class AppState: ObservableObject {
     let deviceTracker = DeviceStateTracker()
     let userSession = UserSession()
     let deviceRegistry = DeviceRegistry()
+    let consoleServer = FELConsoleServer()
     @AppStorage("userRole") var userRoleRaw: String = "admin" {
         didSet { userSession.role = UserRole(rawValue: userRoleRaw) ?? .admin }
     }
@@ -107,17 +108,55 @@ class AppState: ObservableObject {
     }
 
     nonisolated init() {
+        // Wire up device registry callback immediately (before FEL connects)
+        let registry = deviceRegistry
+        felService.onDeviceIdentified = { sid, socName in
+            registry.register(sid: sid, socName: socName)
+        }
+
         Task { @MainActor in
             await iqcService.fetchItems()
             // Forward FELService changes to AppState so SwiftUI picks them up
             felServiceCancellable = felService.objectWillChange.sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
-
-            // Auto-register devices when SID is read
-            felService.onDeviceIdentified = { [weak self] sid, socName in
-                self?.deviceRegistry.register(sid: sid, socName: socName)
+            // Start console server on localhost:9801
+            consoleServer.getLog = { [weak self] in self?.felService.log ?? [] }
+            consoleServer.getDeviceJSON = { [weak self] in
+                guard let info = self?.felService.deviceInfo else { return "{\"connected\":false}" }
+                let sid = info.sid ?? "unknown"
+                let reg = self?.felService.registeredDevice
+                return "{\"connected\":true,\"soc\":\"\(info.socInfo.name)\",\"sid\":\"\(sid)\",\"name\":\"\(reg?.name ?? "")\",\"owner\":\"\(reg?.owner ?? "")\"}"
             }
+            consoleServer.onCommand = { [weak self] cmd in
+                guard let self = self else { return "no app state" }
+                self.felService.appendLog("> \(cmd)")
+                // Execute command and return last log line as result
+                let beforeCount = self.felService.log.count
+                // Commands are handled by posting to the service log
+                let parts = cmd.split(separator: " ", maxSplits: 1).map(String.init)
+                let command = parts[0].lowercased()
+                switch command {
+                case "status":
+                    let state = self.felService.connectionState.rawValue
+                    let soc = self.felService.deviceInfo?.displayName ?? "none"
+                    let result = "state: \(state)  soc: \(soc)"
+                    self.felService.appendLog(result)
+                    return result
+                case "info":
+                    guard let info = self.felService.deviceInfo else { return "not connected" }
+                    let result = "\(info.socInfo.name) (0x\(info.version.socIdHex)) SID: \(info.sid ?? "?")"
+                    self.felService.appendLog(result)
+                    return result
+                case "connect":
+                    self.felService.connect()
+                    return "connecting..."
+                default:
+                    self.felService.appendLog("Remote: \(cmd)")
+                    return "queued"
+                }
+            }
+            consoleServer.start()
 
             restoreLastView()
         }
