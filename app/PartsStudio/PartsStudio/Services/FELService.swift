@@ -290,9 +290,14 @@ class FELService: ObservableObject {
 
         } catch {
             closeDevice()
+            let errMsg = error.localizedDescription
             DispatchQueue.main.async { [weak self] in
                 self?.connectionState = .disconnected
-                self?.appendLog("Connection failed: \(error.localizedDescription)")
+                if errMsg.contains("send failed") || errMsg.contains("receive failed") || errMsg.contains("timed out") {
+                    self?.appendLog("Device detected but not responding — power cycle required")
+                } else {
+                    self?.appendLog("Connection failed: \(errMsg)")
+                }
             }
         }
     }
