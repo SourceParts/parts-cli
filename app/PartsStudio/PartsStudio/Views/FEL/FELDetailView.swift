@@ -560,14 +560,14 @@ struct FELDetailView: View {
 
         func readChunk(_ index: UInt32) {
             let offset = index * chunkSize
-            let remaining = cappedLen - offset
-            if remaining <= 0 {
+            if offset >= cappedLen {
                 isReading = false
                 readData = accumulated
                 readBaseAddr = addr
                 felService.appendLog("Read \(accumulated.count) bytes @ 0x\(String(format: "%x", addr))")
                 return
             }
+            let remaining = cappedLen - offset
             let thisLen = min(chunkSize, remaining)
             felService.readMemory(address: addr + offset, length: thisLen) { result in
                 switch result {
