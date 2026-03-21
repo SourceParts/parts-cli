@@ -1134,67 +1134,88 @@ class FELService: ObservableObject {
                 self.appendLogSync("[1/4] SPL loaded and executing")
 
                 // Step 2: Wait for FEL to come back after SPL
-                // SPL resets USB. Close stale handles and reopen.
-                self.appendLogSync("[2/4] Closing USB, waiting for FEL reconnect...")
+                // SPL resets USB. Release the USB queue so the IOKit watcher
+                // can run connectToDevice(). Continue boot on a global queue.
+                self.appendLogSync("[2/4] Waiting for FEL reconnect...")
                 self.closeDevice()
-                var felReady = false
-                for wait in 1...20 {
-                    Thread.sleep(forTimeInterval: 1.0)
-                    do {
-                        try self.openUSBDevice()
-                        try self.findAndOpenInterface()
-                        _ = try self.getVersionSync()
-                        self.appendLogSync("[2/4] FEL ready after \(wait)s")
-                        felReady = true
-                        break
-                    } catch {
-                        self.closeDevice()
-                        if wait <= 3 || wait % 5 == 0 {
-                            self.appendLogSync("[2/4] Waiting... (\(wait)s)")
-                        }
-                    }
+                DispatchQueue.main.async { [weak self] in
+                    self?.connectionState = .disconnected
                 }
 
-                guard felReady else {
-                    throw FELError.protocolError("FEL did not reconnect after SPL")
-                }
-
-                // Step 3: Write U-Boot if provided
-                if let ubootData = ubootData, ubootData.count > 0 {
-                    self.appendLogSync("[3/4] Writing U-Boot (\(ubootData.count) bytes)...")
-                    try self.writeRawToAddress(data: ubootData, address: 0x4a000000)
-                    self.appendLogSync("[3/4] U-Boot written to 0x4a000000")
-                } else {
-                    self.appendLogSync("[3/4] No U-Boot image, skipping")
-                }
-
-                // Step 4: Execute U-Boot
-                if let ubootData = ubootData, ubootData.count > 0 {
-                    self.appendLogSync("[4/4] Executing U-Boot at 0x4a000000...")
-                    try self.awFELExecute(offset: 0x4a000000)
-                    self.appendLogSync("[4/4] U-Boot executing")
-                } else if socInfo.rvbarReg != 0 {
-                    self.appendLogSync("[4/4] RMR boot to 0x4a000000...")
-                    try self.rmrRequest(entryPoint: 0x4a000000, socInfo: socInfo)
-                    self.appendLogSync("[4/4] RMR request sent")
-                }
-
-                // Auto-connect serial if not already attached
-                if !self.serialActive {
-                    self.autoConnectSerial()
-                } else {
-                    self.appendLogSync("Serial already attached — monitoring boot output")
-                    DispatchQueue.main.async { self.onBootComplete?() }
-                }
-
-                DispatchQueue.main.async {
-                    self.appendLog("=== Boot sequence complete ===")
-                    completion(.success(()))
-                }
             } catch {
                 DispatchQueue.main.async {
                     self.appendLog("Boot failed: \(error.localizedDescription)")
                     completion(.failure(error))
+                }
+                return
+            }
+
+            // Continue on global queue — USB queue is now free for reconnect
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else { return }
+
+                var felReady = false
+                for wait in 1...45 {
+                    Thread.sleep(forTimeInterval: 1.0)
+                    if self.connectionState == .connected {
+                        self.appendLogSync("[2/4] FEL ready after \(wait)s")
+                        felReady = true
+                        break
+                    }
+                    if wait <= 3 || wait % 5 == 0 {
+                        self.appendLogSync("[2/4] Waiting... (\(wait)s)")
+                    }
+                }
+
+                guard felReady else {
+                    DispatchQueue.main.async {
+                        self.appendLog("Boot failed: FEL did not reconnect after SPL (45s)")
+                        completion(.failure(FELError.protocolError("FEL did not reconnect (45s)")))
+                    }
+                    return
+                }
+
+                // Steps 3-4 run on USB queue now that device is reconnected
+                self.usbQueue.async {
+                    do {
+                        // Step 3: Write U-Boot
+                        if let ubootData = ubootData, ubootData.count > 0 {
+                            self.appendLogSync("[3/4] Writing U-Boot (\(ubootData.count) bytes)...")
+                            try self.writeRawToAddress(data: ubootData, address: 0x4a000000)
+                            self.appendLogSync("[3/4] U-Boot written to 0x4a000000")
+                        } else {
+                            self.appendLogSync("[3/4] No U-Boot image, skipping")
+                        }
+
+                        // Step 4: Execute U-Boot
+                        if let ubootData = ubootData, ubootData.count > 0 {
+                            self.appendLogSync("[4/4] Executing U-Boot at 0x4a000000...")
+                            try self.awFELExecute(offset: 0x4a000000)
+                            self.appendLogSync("[4/4] U-Boot executing")
+                        } else if socInfo.rvbarReg != 0 {
+                            self.appendLogSync("[4/4] RMR boot to 0x4a000000...")
+                            try self.rmrRequest(entryPoint: 0x4a000000, socInfo: socInfo)
+                            self.appendLogSync("[4/4] RMR request sent")
+                        }
+
+                        // Auto-connect serial
+                        if !self.serialActive {
+                            self.autoConnectSerial()
+                        } else {
+                            self.appendLogSync("Serial already attached — monitoring boot output")
+                            DispatchQueue.main.async { self.onBootComplete?() }
+                        }
+
+                        DispatchQueue.main.async {
+                            self.appendLog("=== Boot sequence complete ===")
+                            completion(.success(()))
+                        }
+                    } catch {
+                        DispatchQueue.main.async {
+                            self.appendLog("Boot failed: \(error.localizedDescription)")
+                            completion(.failure(error))
+                        }
+                    }
                 }
             }
         }
