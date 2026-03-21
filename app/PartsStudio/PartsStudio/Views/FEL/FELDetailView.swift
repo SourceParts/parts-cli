@@ -619,7 +619,10 @@ struct FELDetailView: View {
             felService.appendLog("  stop                   Stop watch")
             felService.appendLog("  scratch                Read scratch memory")
             felService.appendLog("  sram                   Read SRAM A")
-            felService.appendLog("  boot                   Boot PocketPC")
+            felService.appendLog("  boot                   Full boot (SPL+U-Boot)")
+            felService.appendLog("  spl                    Load SPL only (no U-Boot)")
+            felService.appendLog("  write-uboot            Write U-Boot to DRAM")
+            felService.appendLog("  exec <addr>            Execute at address")
             felService.appendLog("  gpio <port>            Read GPIO port (B-H)")
             felService.appendLog("  gpio <port> <pin> <0|1> Set GPIO pin")
             felService.appendLog("  uart <0-4>             Read UART status")
@@ -669,6 +672,50 @@ struct FELDetailView: View {
             felService.startWatch(address: addr, length: min(len, 4096))
         case "stop":
             felService.stopWatch()
+        case "spl":
+            // Load SPL only — no U-Boot, no auto-exec. Manual control.
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let splPath = "\(home)/Work/PocketPC-Uboot/spl/sunxi-spl.bin"
+            guard let splData = try? Data(contentsOf: URL(fileURLWithPath: splPath)) else {
+                felService.appendLog("ERROR: Cannot read \(splPath)")
+                return
+            }
+            felService.writeSPL(data: splData) { result in
+                switch result {
+                case .success: felService.appendLog("SPL loaded. Device will reset to FEL after DRAM init.")
+                case .failure(let err): felService.appendLog("ERROR: \(err.localizedDescription)")
+                }
+            }
+
+        case "write-uboot":
+            // Write U-Boot to DRAM (requires DRAM to be initialized via SPL first)
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let ubootPath = "\(home)/Work/PocketPC-Uboot/u-boot.bin"
+            guard let ubootData = try? Data(contentsOf: URL(fileURLWithPath: ubootPath)) else {
+                felService.appendLog("ERROR: Cannot read \(ubootPath)")
+                return
+            }
+            felService.appendLog("Writing U-Boot (\(ubootData.count) bytes) to 0x4a000000...")
+            felService.writeMemory(address: 0x4a000000, data: ubootData) { result in
+                switch result {
+                case .success: felService.appendLog("U-Boot written to 0x4a000000")
+                case .failure(let err): felService.appendLog("ERROR: \(err.localizedDescription)")
+                }
+            }
+
+        case "exec":
+            guard parts.count >= 2, let addr = parseHexAddress(parts[1]) else {
+                felService.appendLog("ERROR: Usage: exec <addr>")
+                return
+            }
+            felService.appendLog("Executing at 0x\(String(format: "%x", addr))...")
+            felService.executeAt(address: addr) { result in
+                switch result {
+                case .success: felService.appendLog("Execution started")
+                case .failure(let err): felService.appendLog("ERROR: \(err.localizedDescription)")
+                }
+            }
+
         case "boot":
             bootPocketPCDefault()
         case "gpio":

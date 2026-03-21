@@ -1131,24 +1131,30 @@ class FELService: ObservableObject {
                 try self.writeSPLSync(data: splData, socInfo: socInfo)
                 self.appendLogSync("[1/4] SPL loaded and executing")
 
-                // Step 2: Wait for DRAM init + FEL USB reconnect
-                // SPL causes USB disconnect during DRAM init. Wait for device
-                // to come back before writing U-Boot.
-                self.appendLogSync("[2/4] Waiting for DRAM init + USB reconnect...")
+                // Step 2: Wait for FEL to come back after SPL
+                // SPL resets USB. Close stale handles and reopen.
+                self.appendLogSync("[2/4] Closing USB, waiting for FEL reconnect...")
+                self.closeDevice()
                 var felReady = false
-                for wait in 1...15 {
+                for wait in 1...20 {
                     Thread.sleep(forTimeInterval: 1.0)
                     do {
+                        try self.openUSBDevice()
+                        try self.findAndOpenInterface()
                         _ = try self.getVersionSync()
                         self.appendLogSync("[2/4] FEL ready after \(wait)s")
                         felReady = true
                         break
                     } catch {
-                        self.appendLogSync("[2/4] Waiting... (\(wait)s)")
+                        self.closeDevice()
+                        if wait <= 3 || wait % 5 == 0 {
+                            self.appendLogSync("[2/4] Waiting... (\(wait)s)")
+                        }
                     }
                 }
-                if !felReady {
-                    self.appendLogSync("[2/4] WARNING: FEL not responding, attempting write anyway")
+
+                guard felReady else {
+                    throw FELError.protocolError("FEL did not reconnect after SPL")
                 }
 
                 // Step 3: Write U-Boot if provided
