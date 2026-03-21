@@ -240,6 +240,7 @@ class FELService: ObservableObject {
     // MARK: - USB Transport (Private)
 
     /// Connect to the FEL device, claim interface, identify pipes.
+    /// Retries getVersion up to 3 times with 2s delays for USB settling.
     private func connectToDevice() {
         DispatchQueue.main.async { self.connectionState = .connecting }
 
@@ -247,8 +248,24 @@ class FELService: ObservableObject {
             try openUSBDevice()
             try findAndOpenInterface()
 
-            // Read version to identify SoC
-            let version = try getVersionSync()
+            // Read version — retry if USB is still settling after reset
+            var version: FELVersion?
+            for attempt in 1...3 {
+                do {
+                    version = try getVersionSync()
+                    break
+                } catch {
+                    if attempt < 3 {
+                        closeDevice()
+                        Thread.sleep(forTimeInterval: 2.0)
+                        try openUSBDevice()
+                        try findAndOpenInterface()
+                    } else {
+                        throw error
+                    }
+                }
+            }
+            guard let version = version else { throw FELError.deviceNotFound }
             guard let socInfo = SoCInfoTable.lookup(socId: version.socId) else {
                 throw FELError.protocolError("Unknown SoC ID: 0x\(version.socIdHex)")
             }
