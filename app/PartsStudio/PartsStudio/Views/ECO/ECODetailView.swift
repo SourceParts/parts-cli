@@ -75,6 +75,7 @@ struct ECODetailView: View {
                 Text(document.id)
                     .font(.title2)
                     .fontWeight(.bold)
+                    .textSelection(.enabled)
 
                 Spacer()
 
@@ -102,31 +103,63 @@ struct ECODetailView: View {
             Text(document.title)
                 .font(.headline)
                 .foregroundStyle(.primary)
+                .textSelection(.enabled)
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor))
     }
 }
 
+// MARK: - Component Reference Navigation
+
+extension Notification.Name {
+    /// Posted when a component reference is clicked in an ECN. UserInfo: ["ref": "U5"]
+    static let navigateToComponent = Notification.Name("partsStudioNavigateToComponent")
+}
+
 /// Renders markdown as styled HTML using WKWebView.
+/// Component references (U5, R12, C3, etc.) are auto-linked and clickable.
 struct MarkdownView: NSViewRepresentable {
     let markdown: String
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
+        webView.navigationDelegate = context.coordinator
         loadMarkdown(into: webView)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.navigationDelegate = context.coordinator
         loadMarkdown(into: webView)
     }
 
     private func loadMarkdown(into webView: WKWebView) {
         let html = wrapMarkdownInHTML(markdown)
         webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    /// Coordinator intercepts parts:// links for component navigation.
+    class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            if let url = navigationAction.request.url, url.scheme == "parts" {
+                // parts://ref/U5 → navigate to component U5 in schematic
+                if url.host == "ref", let ref = url.pathComponents.last, ref != "/" {
+                    NotificationCenter.default.post(
+                        name: .navigateToComponent,
+                        object: nil,
+                        userInfo: ["ref": ref]
+                    )
+                }
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
     }
 
     /// Convert markdown to HTML with a basic parser, then wrap in a styled page.
@@ -154,7 +187,7 @@ struct MarkdownView: NSViewRepresentable {
                 line-height: 1.6;
                 color: \(textColor);
                 background: \(bgColor);
-                padding: 20px 24px;
+                padding: 20px 48px;
                 margin: 0;
                 -webkit-font-smoothing: antialiased;
             }
@@ -173,6 +206,20 @@ struct MarkdownView: NSViewRepresentable {
             em { font-style: italic; }
             a { color: \(linkColor); text-decoration: none; }
             a:hover { text-decoration: underline; }
+            a.ref {
+                color: \(isDark ? "#c792ea" : "#6f42c1");
+                font-family: "SF Mono", Menlo, monospace;
+                font-weight: 600;
+                font-size: 0.95em;
+                background: \(isDark ? "rgba(199,146,234,0.1)" : "rgba(111,66,193,0.08)");
+                padding: 1px 4px;
+                border-radius: 3px;
+                cursor: pointer;
+            }
+            a.ref:hover {
+                background: \(isDark ? "rgba(199,146,234,0.25)" : "rgba(111,66,193,0.18)");
+                text-decoration: none;
+            }
             code {
                 font-family: "SF Mono", Menlo, monospace;
                 font-size: 0.9em;
@@ -350,7 +397,7 @@ struct MarkdownView: NSViewRepresentable {
         return html.joined(separator: "\n")
     }
 
-    /// Process inline markdown: bold, italic, code, links.
+    /// Process inline markdown: bold, italic, code, links, component references.
     private func inlineMarkdown(_ text: String) -> String {
         var result = escapeHTML(text)
 
@@ -386,6 +433,14 @@ struct MarkdownView: NSViewRepresentable {
         result = result.replacingOccurrences(
             of: "\\[([^\\]]+)\\]\\(([^)]+)\\)",
             with: "<a href=\"$2\">$1</a>",
+            options: .regularExpression
+        )
+
+        // Component references: U5, R12, C3, L1, D2, Q1, J3, SW1, FB2, etc.
+        // Match designator letter(s) + number, not already inside an <a> tag or <code> block
+        result = result.replacingOccurrences(
+            of: "(?<![a-zA-Z/\"])\\b([A-Z]{1,3})(\\d{1,4})\\b(?![\"<])",
+            with: "<a href=\"parts://ref/$1$2\" class=\"ref\">$1$2</a>",
             options: .regularExpression
         )
 

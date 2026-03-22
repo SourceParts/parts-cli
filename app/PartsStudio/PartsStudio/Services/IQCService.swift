@@ -5,6 +5,7 @@ class IQCService: ObservableObject {
     @Published var items: [IQCItem] = []
     @Published var isLoading = false
     @Published var error: String?
+    @Published var usingLiveData = false
 
     func fetchItems() async {
         await MainActor.run { isLoading = true; error = nil }
@@ -33,7 +34,7 @@ class IQCService: ObservableObject {
 
             let apiResp = try JSONDecoder().decode(APIResponse.self, from: data)
             if let fetched = apiResp.data?.items, !fetched.isEmpty {
-                await MainActor.run { items = fetched; isLoading = false }
+                await MainActor.run { items = fetched; usingLiveData = true; isLoading = false }
                 return
             }
             await MainActor.run { isLoading = false }

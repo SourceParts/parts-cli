@@ -77,12 +77,16 @@ struct AssemblySidebarSection: View {
         appState.selectedECO = nil
         appState.selectedIQCItem = nil
         appState.showCredits = false
+        appState.showFEL = false
+        appState.showUSBMonitor = false
 
         if doc.path.lowercased().hasSuffix(".pdf") {
             appState.loadPDF(at: doc.path)
         } else if doc.path.lowercased().hasSuffix(".csv") {
             appState.pdfDocument = nil
         } else if isGerberFile(doc.path) {
+            appState.pdfDocument = nil
+        } else if doc.path.lowercased().hasSuffix(".md") {
             appState.pdfDocument = nil
         } else {
             NSWorkspace.shared.open(URL(fileURLWithPath: doc.path))

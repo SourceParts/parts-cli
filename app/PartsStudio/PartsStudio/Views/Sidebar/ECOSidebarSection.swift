@@ -11,7 +11,24 @@ struct ECOSidebarSection: View {
                     appState.selectedECO = doc
                     appState.selectedDatasheet = nil
                     appState.selectedIQCItem = nil
+                    appState.selectedAssemblyDoc = nil
                     appState.pdfDocument = nil
+                    appState.showFEL = false
+                    appState.showUSBMonitor = false
+                    appState.showCredits = false
+                }
+                .contextMenu {
+                    Button("Copy ID") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(doc.id, forType: .string)
+                    }
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.selectFile(doc.filePath, inFileViewerRootedAtPath: "")
+                    }
+                    Button("Copy Path") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(doc.filePath, forType: .string)
+                    }
                 }
                 .background(
                     RoundedRectangle(cornerRadius: 4)

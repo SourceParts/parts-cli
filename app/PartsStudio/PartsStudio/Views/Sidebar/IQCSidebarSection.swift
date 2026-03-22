@@ -15,7 +15,11 @@ struct IQCSidebarSection: View {
                     appState.selectedIQCItem = item
                     appState.selectedECO = nil
                     appState.selectedDatasheet = nil
+                    appState.selectedAssemblyDoc = nil
                     appState.pdfDocument = nil
+                    appState.showFEL = false
+                    appState.showUSBMonitor = false
+                    appState.showCredits = false
                 }
         }
     }

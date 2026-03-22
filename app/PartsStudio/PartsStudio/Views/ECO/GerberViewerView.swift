@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct GerberViewerView: View {
     let filePaths: [String]
@@ -6,6 +7,9 @@ struct GerberViewerView: View {
     @State private var isRendering = false
     @State private var error: String?
     @State private var selectedLayers: Set<Int> = []
+
+    // Zoom state (driven by NSScrollView magnification)
+    @State private var zoomLevel: CGFloat = 1.0
 
     private var layerNames: [(Int, String, Color)] {
         let colors: [Color] = [.red, .green, .yellow, .blue, .purple, .cyan, .orange, .pink]
@@ -38,6 +42,32 @@ struct GerberViewerView: View {
                 }
                 .help("Re-render")
                 .disabled(isRendering)
+
+                Divider()
+                    .frame(height: 20)
+
+                // Zoom controls
+                Button(action: { zoomLevel = max(0.1, zoomLevel * 0.8) }) {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .help("Zoom out (Cmd+scroll down)")
+                .keyboardShortcut("-", modifiers: [.command])
+
+                Text("\(Int(zoomLevel * 100))%")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 40)
+
+                Button(action: { zoomLevel = min(10.0, zoomLevel * 1.25) }) {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .help("Zoom in (Cmd+scroll up)")
+                .keyboardShortcut("+", modifiers: [.command])
+
+                Button(action: { zoomLevel = 0 }) { // 0 signals "fit"
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .help("Fit to window")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -46,21 +76,20 @@ struct GerberViewerView: View {
             Divider()
 
             HSplitView {
-                // Image view
+                // Image view with zoom
                 if let img = renderedImage {
-                    ScrollView([.horizontal, .vertical]) {
-                        Image(nsImage: img)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .contextMenu {
-                                Button("Copy Image") {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.writeObjects([img])
-                                }
-                                Button("Save PNG...") {
-                                    saveImage(img)
-                                }
-                            }
+                    ZoomableImageView(
+                        image: img,
+                        zoomLevel: $zoomLevel
+                    )
+                    .contextMenu {
+                        Button("Copy Image") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.writeObjects([img])
+                        }
+                        Button("Save PNG...") {
+                            saveImage(img)
+                        }
                     }
                 } else if let err = error {
                     VStack(spacing: 8) {
@@ -158,6 +187,8 @@ struct GerberViewerView: View {
         .onAppear { render() }
     }
 
+    // MARK: - Render
+
     private func render() {
         isRendering = true
         error = nil
@@ -177,6 +208,8 @@ struct GerberViewerView: View {
                 await MainActor.run {
                     renderedImage = img
                     isRendering = false
+                    // Signal fit-to-window on first render
+                    zoomLevel = 0
                 }
             } catch {
                 await MainActor.run {
@@ -237,6 +270,100 @@ struct GerberViewerView: View {
                let rep = NSBitmapImageRep(data: tiff),
                let png = rep.representation(using: .png, properties: [:]) {
                 try? png.write(to: url)
+            }
+        }
+    }
+}
+
+// MARK: - Zoomable Image View (NSScrollView-based)
+
+/// NSViewRepresentable wrapping NSScrollView with magnification support.
+/// Provides native macOS zoom (Cmd+scroll, trackpad pinch) and click-drag pan.
+struct ZoomableImageView: NSViewRepresentable {
+    let image: NSImage
+    @Binding var zoomLevel: CGFloat
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.allowsMagnification = true
+        scrollView.minMagnification = 0.1
+        scrollView.maxMagnification = 10.0
+        scrollView.backgroundColor = .black
+        scrollView.drawsBackground = true
+
+        let imageView = NSImageView()
+        imageView.image = image
+        imageView.imageScaling = .scaleNone
+        imageView.frame = NSRect(origin: .zero, size: image.size)
+
+        scrollView.documentView = imageView
+        context.coordinator.scrollView = scrollView
+
+        // Observe magnification changes to sync back to SwiftUI
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.magnificationDidChange(_:)),
+            name: NSScrollView.didEndLiveMagnifyNotification,
+            object: scrollView
+        )
+
+        // Fit to window on first display
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            context.coordinator.fitToWindow(scrollView)
+        }
+
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        // Update image if changed
+        if let imageView = scrollView.documentView as? NSImageView, imageView.image !== image {
+            imageView.image = image
+            imageView.frame = NSRect(origin: .zero, size: image.size)
+        }
+
+        // Handle zoom level changes from toolbar buttons
+        if zoomLevel == 0 {
+            // Signal to fit to window
+            context.coordinator.fitToWindow(scrollView)
+        } else if abs(scrollView.magnification - zoomLevel) > 0.01 {
+            scrollView.magnification = zoomLevel
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject {
+        var parent: ZoomableImageView
+        weak var scrollView: NSScrollView?
+
+        init(_ parent: ZoomableImageView) {
+            self.parent = parent
+        }
+
+        @objc func magnificationDidChange(_ notification: Notification) {
+            guard let sv = notification.object as? NSScrollView else { return }
+            DispatchQueue.main.async {
+                self.parent.zoomLevel = sv.magnification
+            }
+        }
+
+        func fitToWindow(_ scrollView: NSScrollView) {
+            let viewSize = scrollView.bounds.size
+            let imageSize = parent.image.size
+            guard viewSize.width > 0, viewSize.height > 0,
+                  imageSize.width > 0, imageSize.height > 0 else { return }
+
+            let scaleX = viewSize.width / imageSize.width
+            let scaleY = viewSize.height / imageSize.height
+            let fitScale = min(scaleX, scaleY)
+            scrollView.magnification = fitScale
+            DispatchQueue.main.async {
+                self.parent.zoomLevel = fitScale
             }
         }
     }

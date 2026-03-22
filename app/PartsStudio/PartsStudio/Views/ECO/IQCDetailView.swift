@@ -4,6 +4,7 @@ import WebKit
 enum IQCTab: String, CaseIterable {
     case report = "Report"
     case docs = "Documentation"
+    case xray = "X-Ray AOI"
 }
 
 struct IQCDetailView: View {
@@ -33,11 +34,28 @@ struct IQCDetailView: View {
 
             Divider()
 
+            // Sample data fallback notice
+            if !appState.iqcService.usingLiveData {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                    Text("Showing sample data — API unavailable or no API key configured")
+                        .font(.system(size: 10))
+                    Spacer()
+                }
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.1))
+            }
+
             switch selectedTab {
             case .report:
                 IQCEmailView(item: item)
             case .docs:
                 IQCDocumentationView(item: item)
+            case .xray:
+                IQCAOIReviewView(item: item)
             }
         }
     }

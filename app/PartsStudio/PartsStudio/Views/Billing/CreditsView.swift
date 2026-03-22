@@ -239,7 +239,7 @@ struct CreditsView: View {
     }
 
     private func openAPIKeys() {
-        if let url = URL(string: "https://source.parts/settings/api-keys") {
+        if let url = URL(string: "https://source.parts/dashboard/api-keys") {
             NSWorkspace.shared.open(url)
         }
     }

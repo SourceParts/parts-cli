@@ -9,6 +9,25 @@ enum PDFExporter {
     static func stripMetadata(from sourceDocument: PDFDocument?) {
         guard let sourceDocument else { return }
 
+        // Capture existing metadata before stripping
+        let oldAttrs = sourceDocument.documentAttributes ?? [:]
+        let knownKeys: [(String, PDFDocumentAttribute)] = [
+            ("Author", .authorAttribute),
+            ("Title", .titleAttribute),
+            ("Subject", .subjectAttribute),
+            ("Creator", .creatorAttribute),
+            ("Producer", .producerAttribute),
+            ("Keywords", .keywordsAttribute),
+            ("Creation Date", .creationDateAttribute),
+            ("Modification Date", .modificationDateAttribute),
+        ]
+        var removed: [String] = []
+        for (label, key) in knownKeys {
+            if let value = oldAttrs[key], "\(value)" != "" {
+                removed.append("\(label): \(value)")
+            }
+        }
+
         // Create a temporary copy so we don't mutate the in-view document
         guard let data = sourceDocument.dataRepresentation(),
               let cleanDoc = PDFDocument(data: data) else { return }
@@ -23,7 +42,10 @@ enum PDFExporter {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         if cleanDoc.write(to: url) {
-            showConfirmation("Metadata stripped and saved to\n\(url.lastPathComponent)")
+            let summary = removed.isEmpty
+                ? "No metadata fields were present."
+                : "Removed:\n" + removed.joined(separator: "\n")
+            showConfirmation("Metadata stripped and saved to \(url.lastPathComponent)\n\n\(summary)")
         } else {
             showConfirmation("Failed to save the PDF.")
         }
@@ -38,6 +60,7 @@ enum PDFExporter {
               let exportDoc = PDFDocument(data: data) else { return }
 
         let dpi: CGFloat = 300
+        var redactedPageCount = 0
 
         for pageIndex in 0..<exportDoc.pageCount {
             guard let page = exportDoc.page(at: pageIndex) else { continue }
@@ -47,6 +70,7 @@ enum PDFExporter {
             }
 
             guard hasRedactions else { continue }
+            redactedPageCount += 1
 
             // Render the page (with annotations baked in) to a bitmap at 300 DPI
             let mediaBox = page.bounds(for: .mediaBox)
@@ -92,7 +116,12 @@ enum PDFExporter {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         if exportDoc.write(to: url) {
-            showConfirmation("Redacted PDF saved to\n\(url.lastPathComponent)")
+            showConfirmation(
+                "Redacted PDF saved to \(url.lastPathComponent)\n\n" +
+                "\(redactedPageCount) of \(exportDoc.pageCount) page(s) flattened as 300 DPI images with redactions baked in.\n" +
+                "Original text under redaction areas is no longer selectable or searchable.\n\n" +
+                "Verify no sensitive data is recoverable before distribution."
+            )
         } else {
             showConfirmation("Failed to save the PDF.")
         }

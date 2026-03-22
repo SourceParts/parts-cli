@@ -113,6 +113,20 @@ struct DatasheetSidebarView: View {
                         }
                     }
 
+                    // No-results hint when filtering
+                    if filteredDatasheets.isEmpty && !appState.sidebarSearchText.isEmpty {
+                        VStack(spacing: 6) {
+                            Text("No matches for \"\(appState.sidebarSearchText)\"")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("Press Enter to search source.parts")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                    }
+
                     // IQC Reports
                     if !appState.effectiveIQCItems.isEmpty {
                         DisclosureGroup(isExpanded: $iqcExpanded) {
@@ -192,6 +206,18 @@ struct DatasheetSidebarView: View {
                 }
             }
             .searchable(text: $appState.sidebarSearchText, prompt: "Filter datasheets")
+            .onSubmit(of: .search) {
+                guard !appState.sidebarSearchText.isEmpty else { return }
+                // Navigate to Parts Q — clear all selections so ContentView falls through to PartsQView
+                appState.selectedDatasheet = nil
+                appState.selectedECO = nil
+                appState.selectedIQCItem = nil
+                appState.selectedAssemblyDoc = nil
+                appState.pdfDocument = nil
+                appState.showFEL = false
+                appState.showUSBMonitor = false
+                appState.showCredits = false
+            }
             .onChange(of: appState.selectedDatasheet) { _, newValue in
                 if let ds = newValue {
                     appState.selectDatasheet(ds)

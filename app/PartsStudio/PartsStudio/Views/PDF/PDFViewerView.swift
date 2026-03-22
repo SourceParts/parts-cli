@@ -5,6 +5,7 @@ extension Notification.Name {
     static let zoomIn = Notification.Name("partsStudioZoomIn")
     static let zoomOut = Notification.Name("partsStudioZoomOut")
     static let zoomFit = Notification.Name("partsStudioZoomFit")
+    static let pdfSearchResult = Notification.Name("partsStudioPDFSearchResult")
 }
 
 struct PDFViewerView: NSViewRepresentable {
@@ -46,6 +47,16 @@ struct PDFViewerView: NSViewRepresentable {
         NotificationCenter.default.addObserver(
             forName: .zoomFit, object: nil, queue: .main
         ) { _ in pdfView.autoScales = true }
+
+        // Search result navigation — scroll to selection and highlight
+        NotificationCenter.default.addObserver(
+            forName: .pdfSearchResult, object: nil, queue: .main
+        ) { notification in
+            if let selection = notification.userInfo?["selection"] as? PDFSelection {
+                pdfView.setCurrentSelection(selection, animate: true)
+                pdfView.scrollSelectionToVisible(nil)
+            }
+        }
 
         return pdfView
     }
