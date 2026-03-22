@@ -16,6 +16,9 @@ let package = Package(
             ],
             linkerSettings: [
                 .linkedFramework("IOKit"),
+                .linkedFramework("Speech"),
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreBluetooth"),
             ]
         )
     ]

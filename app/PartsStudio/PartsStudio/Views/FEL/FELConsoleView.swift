@@ -30,9 +30,12 @@ struct FELConsoleView: View {
                 }
                 .font(.caption2)
                 .buttonStyle(.link)
+                .help("Copy console log to clipboard")
                 Button("Clear", action: onClear)
                     .font(.caption2)
                     .buttonStyle(.link)
+                    .keyboardShortcut("k", modifiers: [.command])
+                    .help("Clear console (Cmd+K)")
 
                 Divider().frame(height: 10)
 

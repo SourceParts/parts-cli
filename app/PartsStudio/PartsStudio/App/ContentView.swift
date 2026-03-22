@@ -11,6 +11,8 @@ struct ContentView: View {
         } detail: {
             if appState.showFEL {
                 FELDetailView()
+            } else if appState.showBLE {
+                BLEView()
             } else if appState.showUSBMonitor {
                 USBMonitorView()
             } else if appState.showCredits {
@@ -29,8 +31,12 @@ struct ContentView: View {
                 }
             } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".csv") {
                 CSVViewerView(filePath: asmDoc.path)
+            } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".gbrjob") {
+                GerberJobView(filePath: asmDoc.path)
             } else if let asmDoc = appState.selectedAssemblyDoc, isGerberFile(asmDoc.path) {
                 GerberViewerView(filePaths: gerberFilesInSameDir(asmDoc.path))
+            } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".md") {
+                MarkdownFileView(filePath: asmDoc.path)
             } else if appState.pdfDocument != nil {
                 detailWithPanel {
                     PDFViewerContainer()
@@ -124,15 +130,23 @@ struct ContentView: View {
 
     private func isGerberFile(_ path: String) -> Bool {
         let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
-        return ["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"].contains(ext)
+        return isKnownGerberExt(ext)
+    }
+
+    /// Check if a file extension is a known Gerber/drill format (including inner layers g1-g999).
+    private func isKnownGerberExt(_ ext: String) -> Bool {
+        let fixed: Set<String> = ["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"]
+        if fixed.contains(ext) { return true }
+        // Inner copper layers: g1, g2, ..., g999
+        if ext.hasPrefix("g"), let num = Int(ext.dropFirst()), num >= 1 { return true }
+        return false
     }
 
     private func gerberFilesInSameDir(_ path: String) -> [String] {
         let dir = URL(fileURLWithPath: path).deletingLastPathComponent().path
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [path] }
-        let gerberExts = Set(["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"])
         return files
-            .filter { gerberExts.contains(URL(fileURLWithPath: $0).pathExtension.lowercased()) }
+            .filter { isKnownGerberExt(URL(fileURLWithPath: $0).pathExtension.lowercased()) }
             .sorted()
             .map { "\(dir)/\($0)" }
     }

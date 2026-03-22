@@ -4,7 +4,7 @@ enum FELTab: String, CaseIterable {
     case info = "Info"
     case memory = "Memory"
     case boot = "Boot"
-    case uboot = "U-Boot"
+    case uboot = "Serial"
     case console = "Console"
 
     var icon: String {
@@ -40,6 +40,12 @@ struct FELDetailView: View {
     @State private var showSPLPicker = false
     @State private var showUBootPicker = false
     @State private var showAdvancedInfo = false
+    @State private var showAPIKeyInfo = false
+
+    // Memory write confirmation
+    @State private var pendingWriteAddr: UInt32 = 0
+    @State private var pendingWriteData: Data?
+    @State private var showWriteConfirmation = false
 
     private var felService: FELService { appState.felService }
 
@@ -49,6 +55,15 @@ struct FELDetailView: View {
                 // DevTools toolbar
                 devToolsToolbar(info)
                 Divider()
+
+                // USB replug banner
+                if felService.needsUSBReplug {
+                    noticeBanner(
+                        icon: "cable.connector",
+                        message: "USB reset required — replug device to continue. DRAM init has corrupted the USB PHY state.",
+                        color: .orange
+                    )
+                }
 
                 // Tab content
                 switch selectedTab {
@@ -76,6 +91,24 @@ struct FELDetailView: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .alert("Confirm Memory Write", isPresented: $showWriteConfirmation) {
+            Button("Write", role: .destructive) {
+                guard let bytes = pendingWriteData else { return }
+                let addr = pendingWriteAddr
+                felService.writeMemory(address: addr, data: bytes) { result in
+                    if case .success = result {
+                        felService.appendLog("Wrote \(bytes.count) byte(s) @ 0x\(String(format: "%x", addr))")
+                        readMemory()
+                    }
+                }
+                pendingWriteData = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingWriteData = nil
+            }
+        } message: {
+            Text("Write \(pendingWriteData?.count ?? 0) byte(s) to address 0x\(String(format: "%08x", pendingWriteAddr))?\n\nThis directly modifies device memory and cannot be undone.")
+        }
     }
 
     // MARK: - DevTools Toolbar
@@ -146,8 +179,45 @@ struct FELDetailView: View {
             .padding(.vertical, 3)
             .background((hasAPIKey ? Color.green : Color.secondary).opacity(0.1))
             .clipShape(RoundedRectangle(cornerRadius: 3))
-            .help(hasAPIKey ? "source.parts API key configured" : "No source.parts API key found")
+            .help(hasAPIKey ? "source.parts API key configured" : "Click for setup info")
+            .onTapGesture { if !hasAPIKey { showAPIKeyInfo.toggle() } }
+            .popover(isPresented: $showAPIKeyInfo, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("API Key Required")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("An API key enables:")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("IQC live data", systemImage: "shippingbox")
+                        Label("Device sync to source.parts", systemImage: "arrow.triangle.2.circlepath")
+                        Label("Datasheet downloads", systemImage: "doc.text")
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    Divider()
+                    Text("Run: pws auth login")
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                .padding(12)
+                .frame(width: 200)
+            }
             .onAppear { hasAPIKey = APIKeychain.loadAPIKey() != nil }
+
+            // Access tier indicator
+            HStack(spacing: 3) {
+                Image(systemName: "shield.fill")
+                    .font(.system(size: 8))
+                Text(appState.userSession.role.displayName)
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .help("Access tier: \(appState.userSession.role.displayName) — controls FEL permissions")
 
             // Device lifecycle state
             HStack(spacing: 4) {
@@ -330,12 +400,9 @@ struct FELDetailView: View {
                 HexDumpView(data: data, baseAddress: felService.watchAddress)
             } else if let data = readData {
                 HexDumpView(data: data, baseAddress: readBaseAddr) { addr, bytes in
-                    felService.writeMemory(address: addr, data: bytes) { result in
-                        if case .success = result {
-                            felService.appendLog("Wrote \(bytes.count) byte(s) @ 0x\(String(format: "%x", addr))")
-                            readMemory() // refresh
-                        }
-                    }
+                    pendingWriteAddr = addr
+                    pendingWriteData = bytes
+                    showWriteConfirmation = true
                 }
             } else {
                 VStack {
@@ -348,6 +415,10 @@ struct FELDetailView: View {
                 .frame(maxWidth: .infinity)
                 .background(Color.black)
             }
+        }
+        .onKeyPress("q") {
+            selectedTab = .console
+            return .handled
         }
     }
 
@@ -526,8 +597,22 @@ struct FELDetailView: View {
                 .padding(.vertical, 3)
                 .background((hasAPIKey ? Color.green : Color.secondary).opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 3))
-                .help(hasAPIKey ? "source.parts API key configured" : "No source.parts API key found")
+                .help(hasAPIKey ? "source.parts API key configured" : "Click for setup info")
+                .onTapGesture { if !hasAPIKey { showAPIKeyInfo.toggle() } }
                 .onAppear { hasAPIKey = APIKeychain.loadAPIKey() != nil }
+
+                // Access tier indicator
+                HStack(spacing: 3) {
+                    Image(systemName: "shield.fill")
+                        .font(.system(size: 8))
+                    Text(appState.userSession.role.displayName)
+                        .font(.system(size: 9, weight: .medium))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.secondary.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 3))
 
                 HStack(spacing: 4) {
                     Circle()
@@ -544,6 +629,15 @@ struct FELDetailView: View {
             .background(Color(nsColor: .controlBackgroundColor))
 
             Divider()
+
+            // Heartbeat loss banner
+            if felService.heartbeatLost {
+                noticeBanner(
+                    icon: "exclamationmark.triangle.fill",
+                    message: "Device connection lost — heartbeat failed. Check USB cable or power cycle the device.",
+                    color: .red
+                )
+            }
 
             VStack(spacing: 12) {
                 Spacer()
@@ -600,6 +694,27 @@ struct FELDetailView: View {
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
 
+    // MARK: - Notice Banner
+
+    @ViewBuilder
+    private func noticeBanner(icon: String, message: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+            Text(message)
+                .font(.system(size: 10))
+                .lineLimit(2)
+            Spacer()
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.1))
+        .overlay(alignment: .bottom) {
+            color.opacity(0.3).frame(height: 0.5)
+        }
+    }
+
     // MARK: - Console Commands
 
     private func handleConsoleCommand(_ cmd: String) {
@@ -627,6 +742,25 @@ struct FELDetailView: View {
             felService.appendLog("  gpio <port> <pin> <0|1> Set GPIO pin")
             felService.appendLog("  uart <0-4>             Read UART status")
             felService.appendLog("  reg <addr>             Read 32-bit register")
+            felService.appendLog("  i2c scan <bus>         Scan TWI bus (0-2)")
+            felService.appendLog("  i2c read <bus> <addr> <reg> [len]")
+            felService.appendLog("  i2c write <bus> <addr> <reg> <val>")
+            felService.appendLog("  backlight <0-255>      Set LM3630A brightness")
+            felService.appendLog("  dump brom              Dump 32KB BROM")
+            felService.appendLog("  dump <addr> <len>      Dump memory to file")
+            felService.appendLog("  gps                    Start GPS polling (parsed)")
+            felService.appendLog("  gps raw                Start GPS raw NMEA output")
+            felService.appendLog("  gps stop               Stop GPS polling")
+            felService.appendLog("  rak                    RAK4200 version query")
+            felService.appendLog("  rak reset              Reset RAK4200 module")
+            felService.appendLog("  rak join               Join LoRaWAN network")
+            felService.appendLog("  rak send <hex>         Send LoRa data")
+            felService.appendLog("  rak <AT cmd>           Send raw AT command")
+            felService.appendLog("  lora                   Alias for rak")
+            felService.appendLog("  swd [scan|stop|status] Debug probe control")
+            felService.appendLog("  voice [start|stop]     Voice recognition")
+            felService.appendLog("  voice [direct|natural] Set voice mode")
+            felService.appendLog("  sync                   Sync device to source.parts")
             felService.appendLog("  serial                 Connect serial console")
             felService.appendLog("  device                 Show device identity")
             felService.appendLog("  name <name>            Name this device")
@@ -672,6 +806,7 @@ struct FELDetailView: View {
             felService.startWatch(address: addr, length: min(len, 4096))
         case "stop":
             felService.stopWatch()
+            felService.stopGPS()
         case "spl":
             // Load SPL only — no U-Boot, no auto-exec. Manual control.
             let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -793,6 +928,276 @@ struct FELDetailView: View {
                 }
             }
 
+        case "i2c":
+            guard parts.count >= 2 else {
+                felService.appendLog("Usage: i2c scan <bus> | i2c read <bus> <addr> <reg> [len] | i2c write <bus> <addr> <reg> <val>")
+                return
+            }
+            let subCmd = parts[1].lowercased()
+            switch subCmd {
+            case "scan":
+                let bus = parts.count >= 3 ? (Int(parts[2]) ?? 1) : 1
+                felService.appendLog("Initializing TWI\(bus)...")
+                felService.initTWI(bus: bus) { result in
+                    if case .failure(let err) = result {
+                        felService.appendLog("ERROR: TWI init failed: \(err.localizedDescription)")
+                        return
+                    }
+                    felService.appendLog("Scanning TWI\(bus) (0x03-0x77)...")
+                    felService.i2cScan(bus: bus) { result in
+                        switch result {
+                        case .success(let addrs):
+                            if addrs.isEmpty {
+                                felService.appendLog("No devices found on TWI\(bus)")
+                            } else {
+                                let list = addrs.map { String(format: "0x%02x", $0) }.joined(separator: " ")
+                                felService.appendLog("Found \(addrs.count) device(s): \(list)")
+                            }
+                        case .failure(let err):
+                            felService.appendLog("ERROR: \(err.localizedDescription)")
+                        }
+                    }
+                }
+            case "read":
+                let cmdParts = cmd.split(separator: " ").map(String.init)
+                guard cmdParts.count >= 5,
+                      let bus = Int(cmdParts[2]),
+                      let addrVal = parseHexAddress(cmdParts[3]),
+                      let regVal = parseHexAddress(cmdParts[4]) else {
+                    felService.appendLog("Usage: i2c read <bus> <addr> <reg> [len]")
+                    return
+                }
+                let addr = UInt8(addrVal & 0x7F)
+                let reg = UInt8(regVal & 0xFF)
+                let len = cmdParts.count >= 6 ? (Int(cmdParts[5]) ?? 1) : 1
+                felService.i2cRead(bus: bus, addr: addr, reg: reg, length: len) { result in
+                    switch result {
+                    case .success(let data):
+                        let hex = data.map { String(format: "%02x", $0) }.joined(separator: " ")
+                        felService.appendLog("[0x\(String(format: "%02x", addr))] reg 0x\(String(format: "%02x", reg)): \(hex)")
+                    case .failure(let err):
+                        felService.appendLog("ERROR: \(err.localizedDescription)")
+                    }
+                }
+            case "write":
+                let cmdParts = cmd.split(separator: " ").map(String.init)
+                guard cmdParts.count >= 6,
+                      let bus = Int(cmdParts[2]),
+                      let addrVal = parseHexAddress(cmdParts[3]),
+                      let regVal = parseHexAddress(cmdParts[4]),
+                      let valVal = parseHexAddress(cmdParts[5]) else {
+                    felService.appendLog("Usage: i2c write <bus> <addr> <reg> <val>")
+                    return
+                }
+                let addr = UInt8(addrVal & 0x7F)
+                let reg = UInt8(regVal & 0xFF)
+                let val = UInt8(valVal & 0xFF)
+                felService.i2cWrite(bus: bus, addr: addr, reg: reg, data: [val]) { result in
+                    switch result {
+                    case .success:
+                        felService.appendLog("OK: [0x\(String(format: "%02x", addr))] reg 0x\(String(format: "%02x", reg)) = 0x\(String(format: "%02x", val))")
+                    case .failure(let err):
+                        felService.appendLog("ERROR: \(err.localizedDescription)")
+                    }
+                }
+            default:
+                felService.appendLog("Usage: i2c scan <bus> | i2c read <bus> <addr> <reg> [len] | i2c write <bus> <addr> <reg> <val>")
+            }
+
+        case "backlight":
+            guard parts.count >= 2, let val = UInt8(parts[1]) else {
+                felService.appendLog("Usage: backlight <0-255>")
+                return
+            }
+            felService.appendLog("Setting backlight to \(val)...")
+            felService.initBacklight(brightness: val) { result in
+                switch result {
+                case .success:
+                    felService.appendLog("Backlight set to \(val)")
+                case .failure(let err):
+                    felService.appendLog("ERROR: \(err.localizedDescription)")
+                }
+            }
+
+        case "gps":
+            if parts.count >= 2 && parts[1].lowercased() == "stop" {
+                felService.stopGPS()
+            } else {
+                let raw = parts.count >= 2 && parts[1].lowercased() == "raw"
+                felService.startGPS(raw: raw)
+            }
+
+        case "rak", "lora":
+            if parts.count < 2 {
+                felService.appendLog("Querying RAK4200...")
+                felService.ensureUART3 { result in
+                    if case .failure(let err) = result {
+                        felService.appendLog("ERROR: UART3 init failed: \(err.localizedDescription)")
+                        return
+                    }
+                    felService.rakCommand("at+version") { result in
+                        switch result {
+                        case .success(let response): felService.appendLog("RAK: \(response)")
+                        case .failure(let err): felService.appendLog("ERROR: \(err.localizedDescription)")
+                        }
+                    }
+                }
+            } else {
+                let subCmd = parts[1].lowercased()
+                switch subCmd {
+                case "reset":
+                    felService.appendLog("Resetting RAK4200...")
+                    felService.rakReset { result in
+                        switch result {
+                        case .success: felService.appendLog("RAK4200 reset complete")
+                        case .failure(let err): felService.appendLog("ERROR: \(err.localizedDescription)")
+                        }
+                    }
+                case "join":
+                    felService.ensureUART3 { result in
+                        if case .failure(let err) = result { felService.appendLog("ERROR: \(err.localizedDescription)"); return }
+                        felService.appendLog("Joining LoRaWAN...")
+                        felService.rakCommand("at+join", responseDelay: 5.0) { result in
+                            switch result {
+                            case .success(let response): felService.appendLog("RAK: \(response)")
+                            case .failure(let err): felService.appendLog("ERROR: \(err.localizedDescription)")
+                            }
+                        }
+                    }
+                case "send":
+                    guard parts.count >= 3 else {
+                        felService.appendLog("Usage: rak send <hex data>")
+                        return
+                    }
+                    let payload = parts[2]
+                    felService.ensureUART3 { result in
+                        if case .failure(let err) = result { felService.appendLog("ERROR: \(err.localizedDescription)"); return }
+                        felService.appendLog("Sending LoRa data...")
+                        felService.rakCommand("at+send=lora:2:\(payload)", responseDelay: 2.0) { result in
+                            switch result {
+                            case .success(let response): felService.appendLog("RAK: \(response)")
+                            case .failure(let err): felService.appendLog("ERROR: \(err.localizedDescription)")
+                            }
+                        }
+                    }
+                default:
+                    // Raw AT command
+                    let atCmd = parts[1...].joined(separator: " ")
+                    felService.ensureUART3 { result in
+                        if case .failure(let err) = result { felService.appendLog("ERROR: \(err.localizedDescription)"); return }
+                        felService.rakCommand(atCmd) { result in
+                            switch result {
+                            case .success(let response): felService.appendLog("RAK: \(response)")
+                            case .failure(let err): felService.appendLog("ERROR: \(err.localizedDescription)")
+                            }
+                        }
+                    }
+                }
+            }
+
+        case "swd":
+            let result = appState.swdProbe.handleCommand(parts)
+            felService.appendLog(result)
+
+        case "voice":
+            if parts.count >= 2 {
+                switch parts[1].lowercased() {
+                case "start", "on":
+                    appState.voiceService.startListening()
+                    felService.appendLog("Voice recognition started (\(appState.voiceService.mode.rawValue) mode)")
+                case "stop", "off":
+                    appState.voiceService.stopListening()
+                    felService.appendLog("Voice recognition stopped")
+                case "direct":
+                    appState.voiceService.mode = .direct
+                    felService.appendLog("Voice mode: direct commands")
+                case "natural":
+                    appState.voiceService.mode = .natural
+                    felService.appendLog("Voice mode: natural language (say 'hey parts')")
+                default:
+                    felService.appendLog("Usage: voice [start|stop|direct|natural]")
+                }
+            } else {
+                felService.appendLog("Voice: \(appState.voiceService.isListening ? "listening" : "off") (\(appState.voiceService.mode.rawValue) mode)")
+            }
+
+        case "esp32", "esp":
+            let result = appState.esp32Service.handleCommand(parts)
+            felService.appendLog(result)
+
+        case "dump":
+            guard parts.count >= 2 else {
+                felService.appendLog("Usage: dump brom | dump <addr> <len>")
+                return
+            }
+            let dumpAddr: UInt32
+            let dumpLen: UInt32
+            let filename: String
+
+            if parts[1].lowercased() == "brom" {
+                dumpAddr = 0x00000000
+                dumpLen = 0x8000 // 32KB
+                filename = "a64-brom.bin"
+            } else {
+                guard let a = parseHexAddress(parts[1]),
+                      parts.count >= 3, let l = UInt32(parts[2]) else {
+                    felService.appendLog("Usage: dump <addr> <len>")
+                    return
+                }
+                dumpAddr = a
+                dumpLen = l
+                filename = "dump-\(String(format: "%08x", a))-\(l).bin"
+            }
+
+            felService.appendLog("Dumping \(dumpLen) bytes from 0x\(String(format: "%08x", dumpAddr))...")
+            felService.dumpMemory(address: dumpAddr, length: dumpLen, progress: { done, total in
+                let pct = (done * 100) / total
+                if pct % 25 == 0 {
+                    felService.appendLog("  \(done)/\(total) (\(pct)%)")
+                }
+            }) { result in
+                switch result {
+                case .success(let data):
+                    let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+                    let fileURL = desktop.appendingPathComponent(filename)
+                    do {
+                        try data.write(to: fileURL)
+                        felService.appendLog("Saved \(data.count) bytes to \(fileURL.path)")
+                    } catch {
+                        felService.appendLog("ERROR: Failed to save: \(error.localizedDescription)")
+                    }
+                case .failure(let err):
+                    felService.appendLog("ERROR: \(err.localizedDescription)")
+                }
+            }
+
+        case "sync":
+            guard let sid = felService.deviceInfo?.sid else {
+                felService.appendLog("ERROR: No device SID available")
+                return
+            }
+            let pending = appState.deviceRegistry.pendingSyncs
+            if pending > 0 {
+                felService.appendLog("Flushing \(pending) queued sync(s)...")
+                appState.deviceRegistry.flushQueue()
+            }
+            felService.appendLog("Syncing device to source.parts...")
+            appState.deviceRegistry.sync(sid: sid) { [weak appState] result in
+                switch result {
+                case .success:
+                    felService.appendLog("Device synced to source.parts API")
+                case .failure(let err):
+                    let queued = appState?.deviceRegistry.pendingSyncs ?? 0
+                    felService.appendLog("\(err.localizedDescription) (\(queued) queued)")
+                }
+            }
+
+        case "disconnect":
+            felService.disconnect()
+
+        case "reconnect", "connect":
+            felService.connect()
+
         case "serial":
             if felService.connectionState == .connected {
                 felService.appendLog("Cannot open serial while FEL is active — boot first")
@@ -852,6 +1257,11 @@ struct FELDetailView: View {
 
     @State private var ubootCommand = ""
 
+    /// Whether serial commands can be sent (not in FEL mode and serial is active).
+    private var serialReady: Bool {
+        felService.connectionState != .connected && felService.serialActive
+    }
+
     @ViewBuilder
     private var ubootPanel: some View {
         VStack(spacing: 0) {
@@ -863,6 +1273,7 @@ struct FELDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
+                .disabled(!serialReady)
 
                 Button(action: { sendUBoot("bdinfo") }) {
                     Text("bdinfo")
@@ -870,6 +1281,7 @@ struct FELDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
+                .disabled(!serialReady)
 
                 Button(action: { sendUBoot("printenv") }) {
                     Text("env")
@@ -877,6 +1289,7 @@ struct FELDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
+                .disabled(!serialReady)
 
                 Button(action: { sendUBoot("mmc info") }) {
                     Text("mmc")
@@ -884,6 +1297,7 @@ struct FELDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
+                .disabled(!serialReady)
 
                 Button(action: { sendUBoot("usb info") }) {
                     Text("usb")
@@ -891,6 +1305,7 @@ struct FELDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
+                .disabled(!serialReady)
 
                 Button(action: { sendUBoot("boot") }) {
                     Text("boot")
@@ -899,6 +1314,7 @@ struct FELDetailView: View {
                 .buttonStyle(.bordered)
                 .tint(.orange)
                 .controlSize(.mini)
+                .disabled(!serialReady)
 
                 Button(action: { sendUBoot("reset") }) {
                     Text("reset")
@@ -907,10 +1323,18 @@ struct FELDetailView: View {
                 .buttonStyle(.bordered)
                 .tint(.red)
                 .controlSize(.mini)
+                .disabled(!serialReady)
 
                 Divider().frame(height: 14)
 
-                if !felService.serialActive {
+                if felService.connectionState == .connected {
+                    HStack(spacing: 3) {
+                        Circle().fill(.yellow).frame(width: 5, height: 5)
+                        Text("FEL Mode")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.yellow)
+                    }
+                } else if !felService.serialActive {
                     Button(action: { felService.connectSerial() }) {
                         HStack(spacing: 3) {
                             Circle().fill(.orange).frame(width: 5, height: 5)
@@ -939,12 +1363,20 @@ struct FELDetailView: View {
 
             // Serial output
             ScrollView {
-                Text(felService.serialOutput.isEmpty ? "Connect serial or boot device to see U-Boot output..." : felService.serialOutput)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.green)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
+                if felService.connectionState == .connected {
+                    Text("Device is in FEL mode — boot first to use serial console")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.yellow.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                } else {
+                    Text(felService.serialOutput.isEmpty ? "Connect serial or boot device to see output..." : felService.serialOutput)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.green)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                }
             }
             .background(Color.black)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -953,11 +1385,12 @@ struct FELDetailView: View {
             HStack(spacing: 4) {
                 Text("=>")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.yellow)
-                TextField("U-Boot command...", text: $ubootCommand)
+                    .foregroundStyle(serialReady ? .yellow : .yellow.opacity(0.3))
+                TextField("Serial command...", text: $ubootCommand)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.green)
                     .textFieldStyle(.plain)
+                    .disabled(!serialReady)
                     .onSubmit {
                         guard !ubootCommand.isEmpty else { return }
                         sendUBoot(ubootCommand)
@@ -1184,6 +1617,13 @@ struct FELDetailView: View {
             ubootData = try? Data(contentsOf: ubootUrl)
         }
 
+        guard confirmBoot(
+            splName: splUrl.lastPathComponent,
+            splSize: splData.count,
+            ubootName: ubootURL?.lastPathComponent,
+            ubootSize: ubootData?.count
+        ) else { return }
+
         isBooting = true
         bootError = nil
 
@@ -1202,24 +1642,68 @@ struct FELDetailView: View {
         }
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let splPath = "\(home)/Work/fel.js/assets/PocketPC/u-boot-sunxi-with-spl.bin"
-        let ubootPath = "\(home)/Work/fel.js/assets/PocketPC/u-boot-sunxi-with-spl.bin"
-
-        guard let splData = try? Data(contentsOf: URL(fileURLWithPath: splPath)) else {
-            bootError = "Cannot read \(splPath)"
+        // Try binary paths in order of preference:
+        // 1. Buildroot combined binary (SPL + ATF BL31 + U-Boot FIT)
+        // 2. fel.js assets combined binary
+        // 3. Standalone SPL from PocketPC-Uboot build (SPL-only, no U-Boot)
+        let candidates = [
+            "\(home)/Work/deepfry/buildroot/output/images/u-boot-sunxi-with-spl.bin",
+            "\(home)/Work/fel.js/assets/PocketPC/u-boot-sunxi-with-spl.bin",
+            "\(home)/Work/PocketPC-Uboot/spl/sunxi-spl.bin",
+        ]
+        guard let splPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }),
+              let splData = try? Data(contentsOf: URL(fileURLWithPath: splPath)) else {
+            bootError = "No SPL binary found"
             return
         }
 
-        let ubootData = try? Data(contentsOf: URL(fileURLWithPath: ubootPath))
+        // Load separate U-Boot and ATF BL31 binaries
+        let ubootData = try? Data(contentsOf: URL(fileURLWithPath: "\(home)/Work/PocketPC-Uboot/u-boot.bin"))
+        let bl31Data = try? Data(contentsOf: URL(fileURLWithPath: "\(home)/Work/PocketPC-Uboot/bl31.bin"))
+
+        let splName = URL(fileURLWithPath: splPath).lastPathComponent
+        guard confirmBoot(splName: splName, splSize: splData.count, ubootName: nil, ubootSize: ubootData?.count) else { return }
 
         isBooting = true
         bootError = nil
 
-        felService.bootPocketPC(splData: splData, ubootData: ubootData) { result in
+        felService.bootPocketPC(splData: splData, ubootData: ubootData, bl31Data: bl31Data) { result in
             isBooting = false
             if case .failure(let error) = result {
                 bootError = error.localizedDescription
             }
         }
+    }
+
+    /// Show a pre-flight confirmation dialog before boot. Returns true if user confirms.
+    private func confirmBoot(splName: String, splSize: Int, ubootName: String?, ubootSize: Int?) -> Bool {
+        let soc = felService.deviceInfo?.socInfo.name ?? "Unknown SoC"
+        var details = """
+        SoC: \(soc)
+        SPL: \(splName) (\(splSize) bytes)
+        """
+        if let name = ubootName, let size = ubootSize {
+            details += "\nU-Boot: \(name) (\(size) bytes)"
+        } else if splSize > 0x8000 {
+            details += "\nCombined binary — SPL + U-Boot will be split automatically"
+        }
+        details += """
+
+        \nThis will:
+        1. Write and execute SPL (DRAM init, 30-60s)
+        2. Reset USB after DRAM PLL reconfig
+        3. Write U-Boot to DRAM
+        4. Trigger RMR warm reset into AArch64
+
+        The device will reboot and the USB connection will drop.
+        """
+
+        let alert = NSAlert()
+        alert.messageText = "Boot Device?"
+        alert.informativeText = details
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Boot")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }
