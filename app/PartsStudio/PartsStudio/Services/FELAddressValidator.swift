@@ -76,6 +76,10 @@ enum FELAddressValidator {
             }
         }
 
+        // Allow writes to peripheral MMIO space (PIO, CCU, UART registers)
+        // Required for GPIO pin config, UART init, backlight, etc.
+        if address >= 0x01C00000 && (address &+ length) <= 0x02000000 { return .safe }
+
         return validateAccess(address: address, length: length, soc: soc)
     }
 

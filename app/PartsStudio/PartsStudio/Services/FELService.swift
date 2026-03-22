@@ -99,11 +99,20 @@ class FELService: ObservableObject {
     /// Called after boot completes — use to auto-switch to serial console.
     var onBootComplete: (() -> Void)? = nil
 
+    /// True while a boot sequence is in progress — rejects other USB commands.
+    @Published var bootInProgress: Bool = false
+
     /// Serial console state after boot
     @Published var serialPort: String?
     @Published var serialOutput: String = ""
     @Published var serialActive: Bool = false
     private var serialHandle: FileHandle?
+
+    /// True when DRAM init has corrupted USB PHY and device needs physical replug.
+    @Published var needsUSBReplug: Bool = false
+
+    /// True when heartbeat monitoring detected device loss (not a clean disconnect).
+    @Published var heartbeatLost: Bool = false
 
     private var deviceInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOUSBDeviceInterface>>?
     private var interfaceInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOUSBInterfaceInterface>>?
@@ -214,6 +223,7 @@ class FELService: ObservableObject {
                 self.appendLog("FEL device disconnected")
                 self.connectionState = .disconnected
                 self.deviceInfo = nil
+                self.resetPeripheralState()
                 self.stopHeartbeat()
                 self.closeDevice()
             }
@@ -277,6 +287,9 @@ class FELService: ObservableObject {
                 self.deviceInfo = info
                 self.connectionState = .connected
                 self.consecutiveErrors = 0
+                self.heartbeatLost = false
+                self.needsUSBReplug = false
+                self.resetPeripheralState()
                 self.appendLog("")
                 self.appendLog("Connected: \(socInfo.name) (0x\(version.socIdHex))")
                 self.startHeartbeat()
@@ -620,10 +633,12 @@ class FELService: ObservableObject {
                     self.deviceInfo?.sid = sid
                     self.appendLog("SID: \(sid)")
 
-                    // Auto-register in device registry
+                    // Auto-register in device registry (sync queued in background)
                     if let reg = self.onDeviceIdentified?(sid, self.deviceInfo?.socInfo.name ?? "Unknown") {
                         self.registeredDevice = reg
-                        self.appendLog("Device: \(reg.name)" + (reg.owner.isEmpty ? "" : " (\(reg.owner))"))
+                        let owner = reg.owner.isEmpty ? "" : " (\(reg.owner))"
+                        let boots = reg.bootCount > 1 ? "  boots: \(reg.bootCount)" : ""
+                        self.appendLog("Device: \(reg.name)\(owner)\(boots)")
                     }
                 }
             } catch {
@@ -717,8 +732,58 @@ class FELService: ObservableObject {
         }
     }
 
+    /// Execute an ARM thunk atomically: write code to scratchAddr, execute, read back results.
+    /// All three operations happen on the USB queue without interleaving.
+    func runThunk(code: Data, readOffset: UInt32, readLength: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        let scratch = socInfo.scratchAddr
+        usbQueue.async { [weak self] in
+            do {
+                try self?.awFELWrite(data: code, offset: scratch)
+                try self?.awFELExecute(offset: scratch)
+                let result = try self?.awFELRead(offset: readOffset, length: readLength) ?? Data()
+                DispatchQueue.main.async { completion(.success(result)) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// Execute an ARM thunk that produces no output (write + execute only).
+    func runThunkNoRead(code: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        let scratch = socInfo.scratchAddr
+        usbQueue.async { [weak self] in
+            do {
+                try self?.awFELWrite(data: code, offset: scratch)
+                try self?.awFELExecute(offset: scratch)
+                DispatchQueue.main.async { completion(.success(())) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
     /// Read memory at the given address. Runs on the USB queue.
     func readMemory(address: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
         guard let socInfo = deviceInfo?.socInfo else {
             completion(.failure(FELError.deviceNotFound))
             return
@@ -742,6 +807,10 @@ class FELService: ObservableObject {
 
     /// Write data to memory at the given address. Runs on the USB queue.
     func writeMemory(address: UInt32, data: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
         guard let socInfo = deviceInfo?.socInfo else {
             completion(.failure(FELError.deviceNotFound))
             return
@@ -765,6 +834,10 @@ class FELService: ObservableObject {
 
     /// Execute code at the given address. Runs on the USB queue.
     func executeAt(address: UInt32, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
         usbQueue.async { [weak self] in
             do {
                 try self?.awFELExecute(offset: address)
@@ -777,20 +850,29 @@ class FELService: ObservableObject {
 
     /// Write and execute SPL. Validates eGON header and checksum.
     func writeSPL(data splData: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
         guard let socInfo = deviceInfo?.socInfo else {
             completion(.failure(FELError.deviceNotFound))
             return
         }
+        DispatchQueue.main.async { self.bootInProgress = true }
 
         usbQueue.async { [weak self] in
             do {
                 try self?.writeSPLSync(data: splData, socInfo: socInfo)
                 DispatchQueue.main.async {
+                    self?.bootInProgress = false
                     self?.appendLog("SPL loaded and executed successfully")
                     completion(.success(()))
                 }
             } catch {
-                DispatchQueue.main.async { completion(.failure(error)) }
+                DispatchQueue.main.async {
+                    self?.bootInProgress = false
+                    completion(.failure(error))
+                }
             }
         }
     }
@@ -867,34 +949,16 @@ class FELService: ObservableObject {
         let thunkCode = buildSPLThunk(socInfo: socInfo)
         try awFELWrite(data: thunkCode, offset: socInfo.thunkAddr)
 
-        // Increase USB timeout for SPL execution — DRAM init can take 5-30s
-        let savedTimeout = usbTimeoutMS
-        usbTimeoutMS = 60000 // 60 second timeout for SPL
-        appendLogSync("SPL executing (60s timeout)...")
+        // Execute SPL. The BROM sends CSW+status before executing, so this returns
+        // instantly. Then DRAM init runs (PLL11 reconfig corrupts USB PHY permanently).
+        // USB cannot be recovered in software — physical replug is required.
+        appendLogSync("SPL executing...")
         try awFELExecute(offset: socInfo.thunkAddr)
-        usbTimeoutMS = savedTimeout
+        appendLogSync("SPL execute returned — DRAM init running in background")
 
-        appendLogSync("SPL returned to FEL")
-
-        // Non-blocking verification: wait 2s then check in background.
-        // Don't block the USB queue — the boot sequence continues regardless.
-        let splAddr = socInfo.splAddr > 0 ? socInfo.splAddr : socInfo.scratchAddr
-        let startTime = Date()
-        Thread.sleep(forTimeInterval: 2.0)
-        let elapsed = String(format: "%.1f", Date().timeIntervalSince(startTime))
-
-        // Quick single check — if it fails, continue anyway
-        do {
-            let response = try awFELRead(offset: splAddr + 4, length: 8)
-            let responseStr = String(data: response, encoding: .ascii) ?? ""
-            if responseStr == "eGON.FEL" {
-                appendLogSync("SPL verified: eGON.FEL (\(elapsed)s)")
-            } else {
-                appendLogSync("SPL response: \(responseStr) (\(elapsed)s) — continuing")
-            }
-        } catch {
-            appendLogSync("SPL check skipped (\(elapsed)s) — continuing")
-        }
+        // USB is now dead. Close stale handles and signal for replug.
+        closeDevice()
+        appendLogSync("USB closed — replug required for DRAM init recovery")
     }
 
     /// Build the FEL-to-SPL thunk code with swap buffer data appended.
@@ -1159,10 +1223,15 @@ class FELService: ObservableObject {
     /// Full boot sequence: load SPL, wait for DRAM, write U-Boot, start boot.
     /// Boot using a combined u-boot-sunxi-with-spl.bin (SPL + U-Boot in one file).
     /// If splData is the combined binary (>32KB), splits it automatically.
-    func bootPocketPC(splData: Data, ubootData: Data? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
+    func bootPocketPC(splData: Data, ubootData: Data? = nil, bl31Data: Data? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let socInfo = deviceInfo?.socInfo else {
             completion(.failure(FELError.deviceNotFound))
             return
+        }
+
+        DispatchQueue.main.async {
+            self.bootInProgress = true
+            self.stopHeartbeat()
         }
 
         usbQueue.async { [weak self] in
@@ -1197,15 +1266,49 @@ class FELService: ObservableObject {
                     Thread.sleep(forTimeInterval: 0.3)
                 }
 
-                // Step 1: Write and execute SPL
+                // Step 1: Write and execute SPL (USB dies after DRAM init)
                 self.appendLogSync("[1/4] Loading SPL (\(actualSPL.count) bytes)...")
                 try self.writeSPLSync(data: actualSPL, socInfo: socInfo)
-                self.appendLogSync("[1/4] SPL loaded and executing")
+                self.appendLogSync("[1/4] SPL executed — DRAM init corrupts USB PHY")
 
-                // Step 2: SPL should have returned — verify FEL is still alive
-                self.appendLogSync("[2/4] Verifying FEL connection...")
-                let ver = try self.getVersionSync()
-                self.appendLogSync("[2/4] FEL alive: \(ver.socIdHex)")
+                // Wait for USB replug. DRAM init changes PLL11 which permanently
+                // breaks the USB connection. Physical replug is the only recovery.
+                self.appendLogSync("⚡ REPLUG USB to continue (waiting up to 30s)...")
+                DispatchQueue.main.async { self.needsUSBReplug = true }
+
+                let replugTimeout: TimeInterval = 30
+                let deadline = Date().addingTimeInterval(replugTimeout)
+                var reconnected = false
+
+                while Date() < deadline {
+                    Thread.sleep(forTimeInterval: 1.0)
+                    do {
+                        try self.openUSBDevice()
+                        try self.findAndOpenInterface()
+                        _ = try self.getVersionSync()
+                        reconnected = true
+                        self.appendLogSync("USB reconnected after replug!")
+                        break
+                    } catch {
+                        self.closeDevice()
+                        // Keep trying
+                    }
+                }
+
+                guard reconnected else {
+                    throw FELError.protocolError("USB replug timeout — replug PocketPC and retry")
+                }
+
+                DispatchQueue.main.async { self.needsUSBReplug = false }
+
+                // Step 2: Write ATF BL31 to AR100 SRAM (must happen before RMR)
+                if let bl31 = bl31Data, bl31.count > 0 {
+                    self.appendLogSync("[2/4] Writing ATF BL31 (\(bl31.count) bytes) to 0x44000...")
+                    try self.writeRawToAddress(data: bl31, address: 0x44000)
+                    self.appendLogSync("[2/4] ATF BL31 written")
+                } else {
+                    self.appendLogSync("[2/4] No ATF BL31 payload, skipping")
+                }
 
                 // Step 3: Write U-Boot to DRAM
                 if let ub = bootUBootData, ub.count > 0 {
@@ -1213,13 +1316,17 @@ class FELService: ObservableObject {
                     try self.writeRawToAddress(data: ub, address: 0x4a000000)
                     self.appendLogSync("[3/4] U-Boot written")
                 } else {
-                    self.appendLogSync("[3/4] No U-Boot image, skipping")
+                    self.appendLogSync("[3/4] No U-Boot payload, skipping write")
                 }
 
-                // Step 4: Start U-Boot
-                // A64 uses RMR warm reset — entry at 0x44000 (ATF BL31 in FIT)
-                // or direct execute at 0x4a000000 for raw U-Boot
-                if socInfo.rvbarReg != 0 && bootUBootData != nil {
+                // Step 4: Boot via RMR warm reset to ATF BL31
+                // RMR sets RVBAR to 0x44000 and triggers warm reset into AArch64.
+                // ATF initializes EL3, then jumps to U-Boot at 0x4a000000.
+                if socInfo.rvbarReg != 0 {
+                    self.appendLogSync("[4/4] RMR boot → 0x44000 (ATF BL31)...")
+                    try self.rmrRequest(entryPoint: 0x44000, socInfo: socInfo)
+                    self.appendLogSync("[4/4] RMR warm reset issued")
+                } else if bootUBootData != nil {
                     self.appendLogSync("[4/4] Executing at 0x4a000000...")
                     try self.awFELExecute(offset: 0x4a000000)
                     self.appendLogSync("[4/4] U-Boot started")
@@ -1231,12 +1338,14 @@ class FELService: ObservableObject {
                 }
 
                 DispatchQueue.main.async {
+                    self.bootInProgress = false
                     self.appendLog("=== Boot sequence complete ===")
                     completion(.success(()))
                 }
 
             } catch {
                 DispatchQueue.main.async {
+                    self.bootInProgress = false
                     self.appendLog("Boot failed: \(error.localizedDescription)")
                     completion(.failure(error))
                 }
@@ -1269,7 +1378,8 @@ class FELService: ObservableObject {
         process.waitUntilExit()
 
         guard let fh = FileHandle(forReadingAtPath: port) else {
-            appendLog("Cannot open \(port)")
+            appendLog("Cannot open \(port) — port may be in use by another application (screen, minicom, etc.)")
+            appendLog("Try: lsof \(port)  to find the holding process")
             return
         }
 
@@ -1284,9 +1394,10 @@ class FELService: ObservableObject {
                 DispatchQueue.main.async {
                     self?.serialOutput += text
                     self?.appendLog(text.trimmingCharacters(in: .whitespacesAndNewlines))
-                    // Keep bounded
-                    if let len = self?.serialOutput.count, len > 65536 {
-                        self?.serialOutput = String(self!.serialOutput.suffix(32768))
+                    // Keep bounded — notify when truncating
+                    if let self = self, self.serialOutput.count > 65536 {
+                        self.serialOutput = String(self.serialOutput.suffix(32768))
+                        self.appendLog("[Serial buffer truncated — oldest output discarded (64KB limit)]")
                     }
                 }
             }
@@ -1402,6 +1513,159 @@ class FELService: ObservableObject {
         }
     }
 
+    // MARK: - PocketPC Device Gating
+
+    /// SID prefix for authorized PocketPC devices (GPS, LoRa, peripheral commands).
+    private static let pocketPCSIDPrefix = "92c0f6ba"
+
+    /// Check if the connected device is an authorized PocketPC.
+    var isPocketPC: Bool {
+        guard let sid = deviceInfo?.sid else { return false }
+        return sid.hasPrefix(Self.pocketPCSIDPrefix)
+    }
+
+    // MARK: - GPS Continuous Polling (UART2)
+
+    private var gpsTimer: Timer?
+    @Published var gpsActive: Bool = false
+    private var gpsRawMode: Bool = false
+    private var gpsNMEABuffer: String = ""
+    private var uart2Initialized: Bool = false
+    private var uart3Initialized: Bool = false
+
+    /// Reset all peripheral state when device connects/disconnects/reboots.
+    /// Hardware state (CCU, GPIO, UART registers) is lost on device reset.
+    private func resetPeripheralState() {
+        uart2Initialized = false
+        uart3Initialized = false
+        stopGPS()
+    }
+
+    func startGPS(raw: Bool = false) {
+        guard isPocketPC else {
+            appendLog("ERROR: GPS requires authorized PocketPC device")
+            return
+        }
+        stopGPS()
+        gpsRawMode = raw
+        gpsActive = true
+
+        if !uart2Initialized {
+            appendLog("Initializing UART2 (9600 baud)...")
+            initUART(uart: 2, baud: 9600) { [weak self] result in
+                guard let self = self else { return }
+                switch result {
+                case .success:
+                    self.uart2Initialized = true
+                    self.appendLog("UART2 ready — polling GPS...")
+                    self.pollGPS()
+                    self.gpsTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+                        self?.pollGPS()
+                    }
+                case .failure(let err):
+                    self.appendLog("UART2 init failed: \(err.localizedDescription)")
+                    self.gpsActive = false
+                }
+            }
+        } else {
+            appendLog("Polling GPS...")
+            pollGPS()
+            gpsTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+                self?.pollGPS()
+            }
+        }
+    }
+
+    func stopGPS() {
+        gpsTimer?.invalidate()
+        gpsTimer = nil
+        if gpsActive {
+            gpsActive = false
+            gpsNMEABuffer = ""
+            appendLog("GPS stopped")
+        }
+    }
+
+    private func pollGPS() {
+        guard connectionState == .connected, gpsActive else {
+            stopGPS()
+            return
+        }
+        // RX thunk idle timeout: ~200ms (500K loops at ~24MHz, ~5 cycles/loop)
+        // At 9600 baud, inter-byte gap is ~1ms; inter-burst gap is ~200ms.
+        // Captures full NMEA burst without clipping mid-sentence.
+        uartReceive(uart: 2, maxBytes: 512, timeoutLoops: 500_000) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let data):
+                guard !data.isEmpty else { return }
+                let text = String(data: data, encoding: .ascii) ?? ""
+                self.gpsNMEABuffer += text
+
+                // Process complete lines
+                while let range = self.gpsNMEABuffer.range(of: "\r\n") {
+                    let line = String(self.gpsNMEABuffer[self.gpsNMEABuffer.startIndex..<range.lowerBound])
+                    self.gpsNMEABuffer = String(self.gpsNMEABuffer[range.upperBound...])
+
+                    if self.gpsRawMode {
+                        self.appendLog(line)
+                    } else {
+                        self.processNMEA(line)
+                    }
+                }
+
+                // Prevent buffer from growing unbounded
+                if self.gpsNMEABuffer.count > 2048 {
+                    self.gpsNMEABuffer = ""
+                }
+
+            case .failure(let err):
+                self.appendLog("GPS read error: \(err.localizedDescription)")
+            }
+        }
+    }
+
+    private var lastGPSFix = GPSFix()
+
+    private func processNMEA(_ sentence: String) {
+        guard sentence.hasPrefix("$") else { return }
+
+        if sentence.hasPrefix("$GPRMC") || sentence.hasPrefix("$GNRMC") {
+            if let fix = GPSFix.parseRMC(sentence) {
+                lastGPSFix.latitude = fix.latitude ?? lastGPSFix.latitude
+                lastGPSFix.longitude = fix.longitude ?? lastGPSFix.longitude
+                lastGPSFix.speed = fix.speed ?? lastGPSFix.speed
+                lastGPSFix.course = fix.course ?? lastGPSFix.course
+                lastGPSFix.time = fix.time ?? lastGPSFix.time
+                lastGPSFix.date = fix.date ?? lastGPSFix.date
+                lastGPSFix.fix = fix.fix
+                appendLog(lastGPSFix.summary)
+            }
+        } else if sentence.hasPrefix("$GPGGA") || sentence.hasPrefix("$GNGGA") {
+            if let fix = GPSFix.parseGGA(sentence) {
+                lastGPSFix.altitude = fix.altitude ?? lastGPSFix.altitude
+                lastGPSFix.satellites = fix.satellites ?? lastGPSFix.satellites
+            }
+        }
+    }
+
+    // MARK: - RAK4200 UART3 Init Helper
+
+    func ensureUART3(completion: @escaping (Result<Void, Error>) -> Void) {
+        guard isPocketPC else {
+            completion(.failure(FELError.protocolError("LoRa requires authorized PocketPC device")))
+            return
+        }
+        if uart3Initialized {
+            completion(.success(()))
+            return
+        }
+        initUART(uart: 3, baud: 115200) { [weak self] result in
+            if case .success = result { self?.uart3Initialized = true }
+            completion(result)
+        }
+    }
+
     /// Manually trigger a connection attempt.
     func connect() {
         usbQueue.async { [weak self] in
@@ -1446,10 +1710,12 @@ class FELService: ObservableObject {
                 DispatchQueue.main.async {
                     self.consecutiveErrors += 1
                     if self.consecutiveErrors == self.maxConsecutiveErrors {
+                        self.heartbeatLost = true
                         self.connectionState = .disconnected
                         self.deviceInfo = nil
                         self.stopHeartbeat()
                         self.closeDevice()
+                        self.appendLog("Device connection lost — heartbeat failed \(self.maxConsecutiveErrors) times. Check USB cable or power cycle device.")
                     }
                 }
             }
@@ -1485,9 +1751,10 @@ class FELService: ObservableObject {
             if log.count > 500 { log = Array(log.suffix(500)) }
         } else {
             DispatchQueue.main.async { [weak self] in
-                self?.log.append(entry)
-                if let count = self?.log.count, count > 500 {
-                    self?.log = Array(self!.log.suffix(500))
+                guard let self = self else { return }
+                self.log.append(entry)
+                if self.log.count > 500 {
+                    self.log = Array(self.log.suffix(500))
                 }
             }
         }
