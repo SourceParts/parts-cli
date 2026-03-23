@@ -437,8 +437,23 @@ class AppState: ObservableObject {
                                 return "sent: \(msg)"
                             }
                             return "usage: ble send <message>"
+                        case "flash", "ota":
+                            guard cmdParts.count >= 3 else {
+                                return "usage: ble flash <firmware.bin>"
+                            }
+                            let path = cmdParts[2...].joined(separator: " ")
+                            guard let fw = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+                                return "cannot read: \(path)"
+                            }
+                            self.bleService.flashOTA(firmware: fw) { result in
+                                switch result {
+                                case .success: self.bleService.appendLog("[OTA] Flash complete")
+                                case .failure(let err): self.bleService.appendLog("[OTA] Failed: \(err.localizedDescription)")
+                                }
+                            }
+                            return "BLE OTA flashing \(fw.count) bytes..."
                         default:
-                            return "usage: ble [scan|stop|devices|connect|disconnect|send]"
+                            return "usage: ble [scan|stop|devices|connect|disconnect|send|flash]"
                         }
                     }
                     return "BLE: \(self.bleService.state == .connected ? "connected to \(self.bleService.connectedDevice?.name ?? "?")" : "disconnected"). Commands: scan, stop, devices, connect, disconnect, send"
