@@ -1,15 +1,21 @@
-.PHONY: build run app clean
+.PHONY: build sign run app clean
 
 APP_NAME    := PartsStudio
 BUILD_DIR   := .build/debug
 APP_BUNDLE  := $(BUILD_DIR)/$(APP_NAME).app
 ICON        := $(APP_NAME).icns
 IDENTIFIER  := studio.source.parts
+SIGN_ID     ?= PartsStudio Dev
 
 build:
 	swift build
 
-run: build
+sign: build
+	@codesign --force --sign "$(SIGN_ID)" $(BUILD_DIR)/$(APP_NAME) 2>/dev/null \
+		&& echo "Signed with '$(SIGN_ID)'" \
+		|| echo "No signing identity '$(SIGN_ID)' — run unsigned (keychain prompts expected)"
+
+run: sign
 	$(BUILD_DIR)/$(APP_NAME)
 
 app: build
@@ -43,6 +49,9 @@ app: build
 	<true/>\n\
 </dict>\n\
 </plist>' > $(APP_BUNDLE)/Contents/Info.plist
+	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE) 2>/dev/null \
+		&& echo "Signed $(APP_BUNDLE) with '$(SIGN_ID)'" \
+		|| echo "Warning: not signed (create cert named '$(SIGN_ID)' in Keychain Access)"
 	@echo "Built $(APP_BUNDLE)"
 
 install: app

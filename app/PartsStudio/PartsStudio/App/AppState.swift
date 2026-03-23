@@ -212,6 +212,11 @@ class AppState: ObservableObject {
                     let bl31Data = try? Data(contentsOf: URL(fileURLWithPath: bl31Path))
                     self.felService.bootPocketPC(splData: splData, ubootData: ubootData, bl31Data: bl31Data) { _ in }
                     return "boot sequence started"
+                case "autoboot":
+                    self.felService.appendLog("=== AUTOBOOT SEQUENCE ===")
+                    self.runAutoboot()
+                    return "autoboot started — check console for progress"
+
                 case "spl":
                     guard self.felService.connectionState == .connected else { return "not connected" }
                     let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -465,6 +470,16 @@ class AppState: ObservableObject {
                     return "unknown command: \(cmd). try: status, info, read, dump, gps, rak, swd, voice, ble"
                 }
             }
+            consoleServer.onReload = { [weak self] in
+                let config = PartsConfig.reload()
+                self?.assemblyStore.loadDocuments()
+                return "{\"reloaded\":true,\"revision\":\"\(config.revision)\",\"assembly\":\"\(config.assemblyPath)\",\"fab_release\":\"\(config.fabReleasePath)\"}"
+            }
+            consoleServer.onSetRevision = { [weak self] newRev in
+                let config = PartsConfig.setRevision(newRev)
+                self?.assemblyStore.loadDocuments()
+                return "{\"revision\":\"\(config.revision)\",\"assembly\":\"\(config.assemblyPath)\",\"fab_release\":\"\(config.fabReleasePath)\"}"
+            }
             consoleServer.start()
 
             // Listen for component reference clicks from ECN markdown
@@ -477,6 +492,101 @@ class AppState: ObservableObject {
             }
 
             restoreLastView()
+        }
+    }
+
+    // MARK: - Autoboot Sequence
+
+    /// Automated boot: halt STM32 → SPL → wait for replug → U-Boot → execute.
+    /// The STM32 halt keeps the PocketPC powered during USB replug.
+    private func runAutoboot() {
+        let fel = felService
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let splPath = "\(home)/Work/PocketPC-Uboot/spl/sunxi-spl.bin"
+        let ubootPath = "\(home)/Work/PocketPC-Uboot/u-boot.bin"
+        let bl31Path = "\(home)/Work/PocketPC-Uboot/bl31.bin"
+
+        // Step 1: Halt STM32 via debug probe (if connected)
+        fel.appendLog("[1/5] Halting STM32 via SWD (no-battery fix)...")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let halt = Process()
+            halt.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/openocd")
+            halt.arguments = [
+                "-f", "interface/cmsis-dap.cfg",
+                "-c", "transport select swd; adapter speed 400",
+                "-f", "target/stm32f1x.cfg",
+                "-c", """
+                init; halt;
+                mww 0x40010800 0x44444444; mww 0x40010804 0x44444444;
+                mww 0x40010C00 0x44444444; mww 0x40010C04 0x44444444;
+                mww 0x40011000 0x44444444; mww 0x40011004 0x44444444;
+                shutdown
+                """
+            ]
+            let pipe = Pipe()
+            halt.standardOutput = pipe
+            halt.standardError = pipe
+
+            do {
+                try halt.run()
+                halt.waitUntilExit()
+                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let halted = output.contains("halted")
+
+                DispatchQueue.main.async {
+                    if halted {
+                        fel.appendLog("[1/5] STM32 halted — PocketPC will stay powered")
+                    } else if output.contains("Error") || output.contains("error") {
+                        fel.appendLog("[1/5] No debug probe — skipping STM32 halt")
+                        fel.appendLog("  (If device shuts down during boot, connect debug probe first)")
+                    } else {
+                        fel.appendLog("[1/5] OpenOCD: \(output.prefix(100))")
+                    }
+
+                    // Step 2: Load SPL
+                    self.autobootStep2(splPath: splPath, ubootPath: ubootPath, bl31Path: bl31Path)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    fel.appendLog("[1/5] OpenOCD not found — skipping STM32 halt")
+                    self.autobootStep2(splPath: splPath, ubootPath: ubootPath, bl31Path: bl31Path)
+                }
+            }
+        }
+    }
+
+    private func autobootStep2(splPath: String, ubootPath: String, bl31Path: String) {
+        let fel = felService
+
+        guard fel.connectionState == .connected else {
+            fel.appendLog("[2/5] ERROR: FEL device not connected. Plug in PocketPC in FEL mode.")
+            return
+        }
+
+        guard let splData = try? Data(contentsOf: URL(fileURLWithPath: splPath)) else {
+            fel.appendLog("[2/5] ERROR: Cannot read SPL at \(splPath)")
+            return
+        }
+
+        let ubootData = try? Data(contentsOf: URL(fileURLWithPath: ubootPath))
+        let bl31Data = try? Data(contentsOf: URL(fileURLWithPath: bl31Path))
+
+        fel.appendLog("[2/5] Loading SPL (\(splData.count) bytes)...")
+        fel.bootPocketPC(splData: splData, ubootData: ubootData, bl31Data: bl31Data) { result in
+            switch result {
+            case .success:
+                fel.appendLog("[5/5] Boot complete!")
+            case .failure(let err):
+                let msg = err.localizedDescription
+                if msg.contains("Replug") || msg.contains("USB") {
+                    fel.appendLog("[3/5] SPL done — DRAM initialized. USB PHY died.")
+                    fel.appendLog("[4/5] >>> REPLUG USB NOW <<<")
+                    fel.appendLog("  Then run: write-uboot → exec 0x4a000000")
+                    fel.appendLog("  Or run 'boot' again (DRAM is already initialized)")
+                } else {
+                    fel.appendLog("[2/5] Boot failed: \(msg)")
+                }
+            }
         }
     }
 
