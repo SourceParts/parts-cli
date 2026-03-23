@@ -275,6 +275,44 @@ struct GerberViewerView: View {
     }
 }
 
+// MARK: - Draggable Scroll View
+
+/// NSScrollView subclass that supports click-drag panning.
+/// Click and drag with trackpad or mouse to pan the canvas.
+class DraggableScrollView: NSScrollView {
+    private var isPanning = false
+    private var panOrigin: NSPoint = .zero
+
+    override func mouseDown(with event: NSEvent) {
+        isPanning = true
+        panOrigin = event.locationInWindow
+        NSCursor.closedHand.push()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isPanning else { return }
+        let current = event.locationInWindow
+        let dx = current.x - panOrigin.x
+        let dy = current.y - panOrigin.y
+        panOrigin = current
+
+        var newOrigin = contentView.bounds.origin
+        newOrigin.x -= dx
+        newOrigin.y -= dy
+        contentView.scroll(to: newOrigin)
+        reflectScrolledClipView(contentView)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        isPanning = false
+        NSCursor.pop()
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .openHand)
+    }
+}
+
 // MARK: - Zoomable Image View (NSScrollView-based)
 
 /// NSViewRepresentable wrapping NSScrollView with magnification support.
@@ -284,7 +322,7 @@ struct ZoomableImageView: NSViewRepresentable {
     @Binding var zoomLevel: CGFloat
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = DraggableScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.allowsMagnification = true
@@ -292,6 +330,7 @@ struct ZoomableImageView: NSViewRepresentable {
         scrollView.maxMagnification = 10.0
         scrollView.backgroundColor = .black
         scrollView.drawsBackground = true
+        scrollView.autohidesScrollers = true
 
         let imageView = NSImageView()
         imageView.image = image
