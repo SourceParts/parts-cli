@@ -9,6 +9,7 @@ enum DocumentType: String, CaseIterable, Identifiable {
     case invoice = "Invoice"
     case agreement = "Agreement / NDA"
     case bom = "BOM Export"
+    case dfm = "DFM Report"
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum DocumentType: String, CaseIterable, Identifiable {
         case .invoice: return "doc.text"
         case .agreement: return "signature"
         case .bom: return "tablecells"
+        case .dfm: return "checklist"
         }
     }
 }
@@ -69,6 +71,17 @@ struct DocumentData {
     var specs: [(String, String)] = []  // (key, value)
     var features: [String] = []
     var imageURL: String = ""
+
+    // DFM-specific
+    var dfmScore: Int = 0
+    var dfmChecks: [(name: String, pass: Bool, detail: String)] = []
+    var dfmWarnings: [String] = []
+    var dfmRecommendations: [String] = []
+    var projectId: String = ""
+
+    // Fab quote
+    var fabQuotePrice: Double = 0
+    var fabLeadTime: String = ""
 }
 
 /// Core document generation service.
@@ -94,6 +107,7 @@ class DocumentGenerator: ObservableObject {
         case .invoice:   html = DocumentTemplates.invoice(data)
         case .agreement: html = DocumentTemplates.agreement(data)
         case .bom:       html = DocumentTemplates.bom(data)
+        case .dfm:       html = DocumentTemplates.dfm(data)
         }
 
         // Render HTML to PDF via offscreen WKWebView
@@ -135,6 +149,7 @@ class DocumentGenerator: ObservableObject {
         case .invoice:   return DocumentTemplates.invoice(data)
         case .agreement: return DocumentTemplates.agreement(data)
         case .bom:       return DocumentTemplates.bom(data)
+        case .dfm:       return DocumentTemplates.dfm(data)
         }
     }
 }
@@ -361,6 +376,59 @@ enum DocumentTemplates {
             \(rows)
             \(data.subtotal > 0 ? "<tr class=\"total-row\"><td colspan=\"5\" style=\"text-align:right\"><strong>Total BOM Cost</strong></td><td style=\"text-align:right\"><strong>$\(String(format: "%.2f", data.subtotal))</strong></td></tr>" : "")
         </table>
+
+        \(data.notes.isEmpty ? "" : "<h2>Notes</h2><p style=\"font-size:10pt;\">\(esc(data.notes))</p>")
+        \(footer())
+        </body></html>
+        """
+    }
+
+    // MARK: - DFM Report
+
+    static func dfm(_ data: DocumentData) -> String {
+        let scoreColor = data.dfmScore >= 80 ? "#2e7d32" : data.dfmScore >= 50 ? "#f57f17" : "#c62828"
+
+        let checksHTML = data.dfmChecks.map { check in
+            let icon = check.pass ? "&#10004;" : "&#10008;"
+            let color = check.pass ? "#2e7d32" : "#c62828"
+            return "<tr><td style=\"color:\(color); font-size:14pt; text-align:center;\">\(icon)</td><td><strong>\(esc(check.name))</strong></td><td style=\"font-size:9pt; color:#666;\">\(esc(check.detail))</td></tr>"
+        }.joined()
+
+        let warningsHTML = data.dfmWarnings.map {
+            "<li style=\"color:#e65100;\">\(esc($0))</li>"
+        }.joined()
+
+        let recsHTML = data.dfmRecommendations.map {
+            "<li>\(esc($0))</li>"
+        }.joined()
+
+        return """
+        <!DOCTYPE html><html><head><meta charset="utf-8">\(css)
+        <style>
+            .score-circle { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center;
+                justify-content: center; font-size: 24pt; font-weight: 700; color: white; margin: 0 auto 8px; }
+        </style>
+        </head><body>
+        \(header(data, docType: "DFM REPORT"))
+        <h1>Design for Manufacturability Report</h1>
+        <p style="font-size:10pt; color:#666;">Project: \(esc(data.projectId))</p>
+
+        <div style="text-align:center; margin: 24px 0;">
+            <div class="score-circle" style="background:\(scoreColor);">\(data.dfmScore)</div>
+            <p style="font-size:10pt; color:#666;">DFM Score (0-100)</p>
+        </div>
+
+        <h2>Design Checks</h2>
+        <table>
+            <tr><th style="width:30px;"></th><th>Check</th><th>Details</th></tr>
+            \(checksHTML.isEmpty ? "<tr><td colspan=\"3\" style=\"color:#999;\">No checks available</td></tr>" : checksHTML)
+        </table>
+
+        \(data.dfmWarnings.isEmpty ? "" : "<h2>Warnings</h2><ul style=\"font-size:10pt;\">\(warningsHTML)</ul>")
+
+        \(data.dfmRecommendations.isEmpty ? "" : "<h2>Recommendations</h2><ul style=\"font-size:10pt;\">\(recsHTML)</ul>")
+
+        \(data.fabQuotePrice > 0 ? "<h2>Fabrication Estimate</h2><p style=\"font-size:10pt;\">Unit price: $\(String(format: "%.2f", data.fabQuotePrice)) &bull; Lead time: \(esc(data.fabLeadTime))</p>" : "")
 
         \(data.notes.isEmpty ? "" : "<h2>Notes</h2><p style=\"font-size:10pt;\">\(esc(data.notes))</p>")
         \(footer())

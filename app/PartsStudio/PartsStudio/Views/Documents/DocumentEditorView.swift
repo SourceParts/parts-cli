@@ -6,6 +6,8 @@ struct DocumentEditorView: View {
     @State private var selectedType: DocumentType = .quote
     @State private var data = DocumentData()
     @State private var previewHTML = ""
+    @State private var apiStatus = ""
+    private let api = PartsAPIClient.shared
 
     var body: some View {
         HSplitView {
@@ -51,8 +53,31 @@ struct DocumentEditorView: View {
                     if selectedType == .datasheet {
                         Divider()
                         Text("Product").font(.caption).foregroundStyle(.secondary)
-                        field("Part Number", text: $data.partNumber)
-                        // Specs are managed via the specs editor
+                        HStack {
+                            field("Part Number", text: $data.partNumber)
+                            Button("Lookup") { lookupPart() }
+                                .buttonStyle(.bordered)
+                                .font(.caption)
+                                .disabled(data.partNumber.isEmpty)
+                        }
+                    }
+
+                    // DFM fields
+                    if selectedType == .dfm {
+                        Divider()
+                        Text("DFM Analysis").font(.caption).foregroundStyle(.secondary)
+                        field("Project ID", text: $data.projectId)
+                        HStack {
+                            Button("Submit DFM") { submitDFM() }
+                                .buttonStyle(.borderedProminent)
+                                .font(.caption)
+                                .disabled(data.projectId.isEmpty)
+                            if !apiStatus.isEmpty {
+                                Text(apiStatus)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
 
                     // Line items (quotes, invoices, BOM)
@@ -61,6 +86,10 @@ struct DocumentEditorView: View {
                         HStack {
                             Text("Line Items").font(.caption).foregroundStyle(.secondary)
                             Spacer()
+                            Button("Price All") { priceAllItems() }
+                                .font(.caption2)
+                                .buttonStyle(.bordered)
+                                .disabled(data.items.isEmpty)
                             Button(action: {
                                 data.items.append(LineItem())
                                 updatePreview()
@@ -202,6 +231,84 @@ struct DocumentEditorView: View {
                 if case .failure(let err) = result {
                     print("Export failed: \(err)")
                 }
+            }
+        }
+    }
+    // MARK: - API Integration
+
+    private func lookupPart() {
+        guard !data.partNumber.isEmpty else { return }
+        apiStatus = "Looking up..."
+        Task {
+            do {
+                let details = try await api.getPartDetails(partNumber: data.partNumber)
+                await MainActor.run {
+                    data.title = details.description
+                    data.specs = details.specs
+                    data.features = details.features
+                    if details.imageURL.count > 0 { data.imageURL = details.imageURL }
+                    apiStatus = "Found: \(details.manufacturer) \(details.partNumber)"
+                    updatePreview()
+                }
+            } catch {
+                await MainActor.run { apiStatus = "Error: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    private func priceAllItems() {
+        let parts = data.items.filter { !$0.partNumber.isEmpty }.map { ($0.partNumber, $0.quantity) }
+        guard !parts.isEmpty else { return }
+        apiStatus = "Pricing..."
+        Task {
+            do {
+                let estimates = try await api.estimateCost(parts: parts)
+                await MainActor.run {
+                    for est in estimates {
+                        if let idx = data.items.firstIndex(where: { $0.partNumber == est.partNumber }) {
+                            data.items[idx].unitPrice = est.unitPrice
+                        }
+                    }
+                    apiStatus = "Priced \(estimates.count) items"
+                    updatePreview()
+                }
+            } catch {
+                await MainActor.run { apiStatus = "Error: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    private func submitDFM() {
+        guard !data.projectId.isEmpty else { return }
+        apiStatus = "Submitting DFM..."
+        Task {
+            do {
+                let jobId = try await api.submitDFM(projectId: data.projectId)
+                await MainActor.run { apiStatus = "DFM submitted (job: \(jobId)). Polling..." }
+
+                // Poll for results
+                for _ in 0..<60 {
+                    try await Task.sleep(nanoseconds: 2_000_000_000) // 2s
+                    let result = try await api.checkDFMStatus(jobId: jobId)
+                    if result.status == "completed" || result.status == "done" {
+                        await MainActor.run {
+                            data.dfmScore = result.score
+                            data.dfmChecks = result.checks
+                            data.dfmWarnings = result.warnings
+                            data.dfmRecommendations = result.recommendations
+                            apiStatus = "DFM complete — score: \(result.score)"
+                            updatePreview()
+                        }
+                        return
+                    } else if result.status == "failed" || result.status == "error" {
+                        await MainActor.run { apiStatus = "DFM failed" }
+                        return
+                    }
+                    await MainActor.run { apiStatus = "DFM \(result.status)..." }
+                }
+                await MainActor.run { apiStatus = "DFM timeout" }
+            } catch {
+                await MainActor.run { apiStatus = "Error: \(error.localizedDescription)" }
             }
         }
     }
