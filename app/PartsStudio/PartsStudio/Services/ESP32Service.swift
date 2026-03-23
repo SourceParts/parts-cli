@@ -79,7 +79,8 @@ class ESP32Service: ObservableObject {
     private static let ESP_MD5: UInt8 = 0x13
 
     init() {
-        startDeviceWatcher()
+        // Device watcher disabled — connect manually via "esp32 serial" command
+        // startDeviceWatcher() blocks when mass storage driver owns the device
     }
 
     nonisolated deinit {
@@ -209,8 +210,9 @@ class ESP32Service: ObservableObject {
             return
         }
 
-        // Find bulk interface for serial communication
+        // Find bulk interface for USB communication
         if findCDCInterface() {
+            // Serial port opened on-demand via "esp32 serial" command
             DispatchQueue.main.async { [weak self] in
                 self?.connectionState = .connected
                 self?.deviceName = "ESP32-S3 JTAG/Serial"
@@ -314,55 +316,94 @@ class ESP32Service: ObservableObject {
         pipeOut = 0
     }
 
-    // MARK: - Serial Read/Write
+    // MARK: - Serial Port (CDC via /dev/cu.usbmodem*)
 
-    /// Write data to ESP32 serial port.
-    func serialWrite(_ data: Data, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard let iface = interfaceInterface, pipeOut > 0 else {
-            completion(.failure(NSError(domain: "ESP32", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])))
+    private var serialHandle: FileHandle?
+    private var serialOutputBuffer: String = ""
+
+    /// Find and open the ESP32 CDC serial port.
+    func openSerial() {
+        // Find usbmodem port (ESP32-S3 USB-JTAG serial)
+        let fm = FileManager.default
+        guard let ports = try? fm.contentsOfDirectory(atPath: "/dev").filter({ $0.hasPrefix("cu.usbmodem") }),
+              let port = ports.first else {
+            appendLog("No /dev/cu.usbmodem* serial port found")
             return
         }
 
-        usbQueue.async {
-            var mutableData = data
-            let kr = mutableData.withUnsafeMutableBytes { ptr -> IOReturn in
-                guard let base = ptr.baseAddress else { return kIOReturnError }
-                return iface.pointee?.pointee.WritePipe(iface, self.pipeOut, base, UInt32(data.count)) ?? kIOReturnError
-            }
+        let path = "/dev/\(port)"
+        appendLog("Opening serial: \(path)")
 
+        // Configure baud rate
+        let sttyResult = Process()
+        sttyResult.executableURL = URL(fileURLWithPath: "/bin/stty")
+        sttyResult.arguments = ["-f", path, "115200"]
+        try? sttyResult.run()
+        sttyResult.waitUntilExit()
+
+        guard let handle = FileHandle(forUpdatingAtPath: path) else {
+            appendLog("Failed to open \(path)")
+            return
+        }
+
+        serialHandle = handle
+
+        // Async read handler
+        handle.readabilityHandler = { [weak self] fh in
+            let data = fh.availableData
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async {
-                if kr == kIOReturnSuccess {
-                    completion(.success(()))
-                } else {
-                    completion(.failure(NSError(domain: "ESP32", code: Int(kr), userInfo: [NSLocalizedDescriptionKey: "USB write failed: \(kr)"])))
+                for line in text.components(separatedBy: "\n") where !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    self?.appendLog(line.trimmingCharacters(in: .newlines))
                 }
             }
         }
+
+        appendLog("Serial connected at 115200 baud")
+    }
+
+    func closeSerial() {
+        serialHandle?.readabilityHandler = nil
+        serialHandle?.closeFile()
+        serialHandle = nil
+    }
+
+    /// Write data to ESP32 serial port (FileHandle-based).
+    func serialWrite(_ data: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let handle = serialHandle else {
+            // Fallback to USB bulk if serial port not open
+            guard let iface = interfaceInterface, pipeOut > 0 else {
+                completion(.failure(NSError(domain: "ESP32", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])))
+                return
+            }
+            usbQueue.async {
+                var mutableData = data
+                let kr = mutableData.withUnsafeMutableBytes { ptr -> IOReturn in
+                    guard let base = ptr.baseAddress else { return kIOReturnError }
+                    return iface.pointee?.pointee.WritePipe(iface, self.pipeOut, base, UInt32(data.count)) ?? kIOReturnError
+                }
+                DispatchQueue.main.async {
+                    if kr == kIOReturnSuccess { completion(.success(())) }
+                    else { completion(.failure(NSError(domain: "ESP32", code: Int(kr)))) }
+                }
+            }
+            return
+        }
+
+        handle.write(data)
+        completion(.success(()))
     }
 
     /// Read data from ESP32 serial port.
     func serialRead(maxBytes: Int = 512, timeout: UInt32 = 3000, completion: @escaping (Result<Data, Error>) -> Void) {
-        guard let iface = interfaceInterface, pipeIn > 0 else {
-            completion(.failure(NSError(domain: "ESP32", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])))
+        // With FileHandle readabilityHandler, reads happen automatically and go to the log.
+        // This method is for explicit one-shot reads.
+        guard let handle = serialHandle else {
+            completion(.success(Data()))
             return
         }
-
-        usbQueue.async {
-            var buffer = [UInt8](repeating: 0, count: maxBytes)
-            var bytesRead = UInt32(maxBytes)
-
-            let kr = iface.pointee?.pointee.ReadPipeTO(iface, self.pipeIn, &buffer, &bytesRead, timeout, timeout) ?? kIOReturnError
-
-            DispatchQueue.main.async {
-                if kr == kIOReturnSuccess && bytesRead > 0 {
-                    completion(.success(Data(buffer[0..<Int(bytesRead)])))
-                } else if kr == kIOReturnSuccess {
-                    completion(.success(Data()))
-                } else {
-                    completion(.failure(NSError(domain: "ESP32", code: Int(kr), userInfo: [NSLocalizedDescriptionKey: "USB read failed: \(kr)"])))
-                }
-            }
-        }
+        let data = handle.availableData
+        completion(.success(data))
     }
 
     /// Send a string command to ESP32 serial console.
@@ -567,6 +608,9 @@ class ESP32Service: ObservableObject {
         switch sub {
         case "status":
             return "ESP32: \(connectionState.rawValue)\(deviceName.isEmpty ? "" : " — \(deviceName)")"
+        case "serial", "open":
+            openSerial()
+            return "Opening ESP32 serial port..."
         case "read":
             readConsole()
             return "Reading ESP32 serial..."
