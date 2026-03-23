@@ -37,12 +37,6 @@ struct GerberViewerView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Button(action: render) {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Re-render")
-                .disabled(isRendering)
-
                 Divider()
                     .frame(height: 20)
 
@@ -150,6 +144,7 @@ struct GerberViewerView: View {
                                     } else {
                                         selectedLayers.insert(index)
                                     }
+                                    render()
                                 }
                                 .contextMenu {
                                     Button("Reveal in Finder") {
@@ -163,13 +158,6 @@ struct GerberViewerView: View {
 
                             Button("Show All") {
                                 selectedLayers.removeAll()
-                                render()
-                            }
-                            .font(.caption2)
-                            .buttonStyle(.link)
-                            .padding(.horizontal, 10)
-
-                            Button("Render Selected") {
                                 render()
                             }
                             .font(.caption2)
