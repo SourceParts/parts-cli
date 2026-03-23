@@ -141,7 +141,10 @@ class ESP32Service: ObservableObject {
         guard found, connectionState == .disconnected else { return }
 
         appendLog("ESP32-S3 detected (VID 0x\(String(format: "%04x", Self.ESP_VID)))")
-        usbQueue.async { [weak self] in
+        // Connect on a detached thread with timeout — USBDeviceOpenSeize can block
+        // if the kernel mass storage driver has exclusive access
+        let connectQueue = DispatchQueue(label: "parts.studio.esp32.connect", qos: .utility)
+        connectQueue.async { [weak self] in
             self?.connectToDevice()
         }
     }
@@ -195,15 +198,18 @@ class ESP32Service: ObservableObject {
         let devIface = rawDeviceInterface.assumingMemoryBound(to: UnsafeMutablePointer<IOUSBDeviceStruct942>?.self)
         self.deviceInterface = devIface
 
-        // Open device
-        guard devIface.pointee?.pointee.USBDeviceOpenSeize(devIface) == KERN_SUCCESS else {
+        // Try to open device — may fail if kernel driver has exclusive access
+        let openResult = devIface.pointee?.pointee.USBDeviceOpenSeize(devIface)
+        if openResult != KERN_SUCCESS {
             DispatchQueue.main.async { [weak self] in
-                self?.appendLog("Failed to open ESP32 USB device")
+                self?.appendLog("ESP32 USB device busy (kernel driver) — detected but not controllable")
+                self?.connectionState = .disconnected
+                self?.deviceName = "ESP32-S3 (kernel driver active)"
             }
             return
         }
 
-        // Find CDC serial interface (interface 2 on ESP32-S3 JTAG/serial)
+        // Find bulk interface for serial communication
         if findCDCInterface() {
             DispatchQueue.main.async { [weak self] in
                 self?.connectionState = .connected
@@ -231,8 +237,8 @@ class ESP32Service: ObservableObject {
 
         var iterator: io_iterator_t = 0
 
-        // Try vendor-specific first, then CDC
-        for interfaceClass: UInt16 in [0xFF, 0x0A, 0x02] {
+        // Try all interface classes: mass storage (0x08), vendor-specific (0xFF), CDC (0x0A, 0x02)
+        for interfaceClass: UInt16 in [0x08, 0xFF, 0x0A, 0x02] {
             request.bInterfaceClass = interfaceClass
             guard devIface.pointee?.pointee.CreateInterfaceIterator(devIface, &request, &iterator) == KERN_SUCCESS else { continue }
             defer { IOObjectRelease(iterator) }
