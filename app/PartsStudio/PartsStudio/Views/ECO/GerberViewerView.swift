@@ -6,7 +6,7 @@ struct GerberViewerView: View {
     @State private var renderedImage: NSImage?
     @State private var isRendering = false
     @State private var error: String?
-    @State private var selectedLayers: Set<Int> = []
+    @State private var disabledLayers: Set<Int> = []
 
     // Zoom state (driven by NSScrollView magnification)
     @State private var zoomLevel: CGFloat = 1.0
@@ -125,24 +125,28 @@ struct GerberViewerView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(layerNames, id: \.0) { index, name, color in
                                 HStack(spacing: 6) {
+                                    Image(systemName: disabledLayers.contains(index) ? "eye.slash" : "eye")
+                                        .font(.caption2)
+                                        .foregroundStyle(disabledLayers.contains(index) ? .tertiary : color)
+                                        .frame(width: 14)
                                     Circle()
-                                        .fill(selectedLayers.contains(index) || selectedLayers.isEmpty ? color : color.opacity(0.3))
+                                        .fill(disabledLayers.contains(index) ? color.opacity(0.2) : color)
                                         .frame(width: 10, height: 10)
                                     Text(name)
                                         .font(.caption2)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
-                                        .foregroundStyle(selectedLayers.contains(index) || selectedLayers.isEmpty ? .primary : .tertiary)
+                                        .foregroundStyle(disabledLayers.contains(index) ? .tertiary : .primary)
                                     Spacer()
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    if selectedLayers.contains(index) {
-                                        selectedLayers.remove(index)
+                                    if disabledLayers.contains(index) {
+                                        disabledLayers.remove(index)
                                     } else {
-                                        selectedLayers.insert(index)
+                                        disabledLayers.insert(index)
                                     }
                                     render()
                                 }
@@ -156,14 +160,21 @@ struct GerberViewerView: View {
                             Divider()
                                 .padding(.vertical, 4)
 
-                            Button("Show All") {
-                                selectedLayers.removeAll()
+                            Button("Enable All") {
+                                disabledLayers.removeAll()
                                 render()
                             }
                             .font(.caption2)
                             .buttonStyle(.link)
                             .padding(.horizontal, 10)
-                            .disabled(selectedLayers.isEmpty)
+                            .disabled(disabledLayers.isEmpty)
+
+                            Button("Render Selected") {
+                                render()
+                            }
+                            .font(.caption2)
+                            .buttonStyle(.link)
+                            .padding(.horizontal, 10)
                         }
                         .padding(.vertical, 6)
                     }
@@ -181,13 +192,8 @@ struct GerberViewerView: View {
         isRendering = true
         error = nil
 
-        let paths: [String]
-        if selectedLayers.isEmpty {
-            paths = filePaths
-        } else {
-            paths = selectedLayers.sorted().compactMap { i in
-                i < filePaths.count ? filePaths[i] : nil
-            }
+        let paths = filePaths.enumerated().compactMap { i, path in
+            disabledLayers.contains(i) ? nil : path
         }
 
         Task {
