@@ -94,6 +94,9 @@ class AppState: ObservableObject {
     let userSession = UserSession()
     let deviceRegistry = DeviceRegistry()
     let consoleServer = FELConsoleServer()
+    @Published var showDocuments: Bool = false {
+        didSet { if showDocuments { lastActiveView = "documents" } }
+    }
     @AppStorage("userRole") var userRoleRaw: String = "admin" {
         didSet { userSession.role = UserRole(rawValue: userRoleRaw) ?? .admin }
     }

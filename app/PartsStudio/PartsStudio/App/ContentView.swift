@@ -9,7 +9,9 @@ struct ContentView: View {
         NavigationSplitView {
             DatasheetSidebarView()
         } detail: {
-            if appState.showFEL {
+            if appState.showDocuments {
+                DocumentEditorView()
+            } else if appState.showFEL {
                 FELDetailView()
             } else if appState.showBLE {
                 BLEView()
