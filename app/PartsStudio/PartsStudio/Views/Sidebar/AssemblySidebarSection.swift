@@ -4,7 +4,7 @@ struct AssemblySidebarSection: View {
     @EnvironmentObject var appState: AppState
 
     private var groupedDocs: [(String, [AssemblyDocument])] {
-        let categories = ["BOM", "Assembly", "Schematic", "Fab"]
+        let categories = ["BOM", "Assembly", "Schematic", "Fab", "3D Model"]
         return categories.compactMap { cat in
             let docs = appState.assemblyStore.documents.filter { $0.category == cat }
             return docs.isEmpty ? nil : (cat, docs)
@@ -87,6 +87,12 @@ struct AssemblySidebarSection: View {
         } else if isGerberFile(doc.path) {
             appState.pdfDocument = nil
         } else if doc.path.lowercased().hasSuffix(".md") {
+            appState.pdfDocument = nil
+        } else if doc.path.lowercased().hasSuffix(".dxf") {
+            appState.pdfDocument = nil
+        } else if doc.path.lowercased().hasSuffix(".json") {
+            appState.pdfDocument = nil
+        } else if ["step", "stp"].contains(URL(fileURLWithPath: doc.path).pathExtension.lowercased()) {
             appState.pdfDocument = nil
         } else {
             NSWorkspace.shared.open(URL(fileURLWithPath: doc.path))

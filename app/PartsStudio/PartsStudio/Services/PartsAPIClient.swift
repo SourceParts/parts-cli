@@ -234,9 +234,90 @@ class PartsAPIClient {
             d.partNumber = item["mpn"] as? String ?? ""
             d.manufacturer = item["manufacturer"] as? String ?? ""
             d.description = item["description"] as? String ?? ""
+            d.category = item["category"] as? String ?? ""
             d.unitPrice = item["unit_price"] as? Double ?? 0
+            if let stock = item["stock"] as? Int ?? item["stock_quantity"] as? Int {
+                d.stock = stock
+                d.available = stock > 0
+            }
             return d
         }
+    }
+
+    // MARK: - Gather (Combined Part Data)
+
+    struct GatheredPart {
+        var part: PartDetails
+        var priceBreaks: [(qty: Int, unitPrice: Double)]
+        var datasheetURL: String?
+        var alternatives: [(sku: String, name: String, manufacturer: String, description: String)]
+    }
+
+    func gatherPart(sku: String) async throws -> GatheredPart {
+        let encoded = sku.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sku
+        let data = try await apiGet("/v1/parts/\(encoded)/gather")
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resultData = json["data"] as? [String: Any],
+              let partData = resultData["part"] as? [String: Any] else {
+            throw APIError.invalidResponse
+        }
+
+        var details = PartDetails()
+        details.partNumber = partData["part_number"] as? String ?? partData["name"] as? String ?? sku
+        details.manufacturer = partData["manufacturer"] as? String ?? ""
+        details.description = partData["description"] as? String ?? ""
+        details.category = partData["category"] as? String ?? ""
+        if let specsDict = partData["specifications"] as? [String: Any] {
+            details.specs = specsDict.map { ($0.key, "\($0.value)") }.sorted { $0.0 < $1.0 }
+        }
+        if let feats = partData["features"] as? [String] {
+            details.features = feats
+        }
+        if let img = partData["image_url"] as? String {
+            details.imageURL = img
+        }
+        if let price = partData["unit_price"] as? Double ?? partData["price"] as? Double {
+            details.unitPrice = price
+        }
+        if let stock = partData["stock_quantity"] as? Int ?? partData["stock"] as? Int {
+            details.stock = stock
+            details.available = stock > 0
+        }
+
+        // Price breaks
+        var priceBreaks: [(qty: Int, unitPrice: Double)] = []
+        if let pricingData = resultData["pricing"] as? [String: Any],
+           let breaks = pricingData["price_breaks"] as? [[String: Any]] {
+            priceBreaks = breaks.compactMap { pb in
+                guard let qty = pb["quantity"] as? Int,
+                      let price = pb["unit_price"] as? Double else { return nil }
+                return (qty: qty, unitPrice: price)
+            }
+        }
+
+        // Datasheet URL
+        var datasheetURL: String?
+        if let dsData = resultData["datasheet"] as? [String: Any] {
+            datasheetURL = dsData["url"] as? String ?? dsData["datasheet_url"] as? String
+        }
+
+        // Alternatives
+        var alternatives: [(sku: String, name: String, manufacturer: String, description: String)] = []
+        if let alts = resultData["alternatives"] as? [[String: Any]] {
+            alternatives = alts.map { alt in
+                (sku: alt["sku"] as? String ?? "",
+                 name: alt["name"] as? String ?? alt["part_number"] as? String ?? "",
+                 manufacturer: alt["manufacturer"] as? String ?? "",
+                 description: alt["description"] as? String ?? "")
+            }
+        }
+
+        return GatheredPart(
+            part: details,
+            priceBreaks: priceBreaks,
+            datasheetURL: datasheetURL,
+            alternatives: alternatives
+        )
     }
 
     // MARK: - HTTP Helpers

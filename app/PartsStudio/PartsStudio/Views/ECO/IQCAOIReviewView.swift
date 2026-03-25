@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct AOIImageResult: Codable {
@@ -523,3 +524,4 @@ struct OverlayImageView: NSViewRepresentable {
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 }
+#endif

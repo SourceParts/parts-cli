@@ -28,15 +28,15 @@ struct DataLabel: Codable, Identifiable {
         self.created = ISO8601DateFormatter().string(from: Date())
     }
 
-    var categoryColor: NSColor {
+    var categoryColor: PlatformColor {
         switch category {
-        case "pin": return NSColor.systemBlue
-        case "voltage": return NSColor.systemRed
-        case "current": return NSColor.systemOrange
-        case "package": return NSColor.systemPurple
-        case "temperature": return NSColor.systemBrown
-        case "frequency": return NSColor.systemTeal
-        default: return NSColor.systemGray
+        case "pin": return PlatformColor.systemBlue
+        case "voltage": return PlatformColor.systemRed
+        case "current": return PlatformColor.systemOrange
+        case "package": return PlatformColor.systemPurple
+        case "temperature": return PlatformColor.systemBrown
+        case "frequency": return PlatformColor.systemTeal
+        default: return PlatformColor.systemGray
         }
     }
 
@@ -51,7 +51,7 @@ struct DataLabel: Codable, Identifiable {
         let rect = CGRect(x: x, y: y, width: width, height: height)
         let annotation = PDFAnnotation(bounds: rect, forType: .freeText, withProperties: nil)
         annotation.contents = displayText
-        annotation.font = NSFont.boldSystemFont(ofSize: 9)
+        annotation.font = PlatformFont.boldSystemFont(ofSize: 9)
         annotation.fontColor = categoryColor
         annotation.color = categoryColor.withAlphaComponent(0.08)
 

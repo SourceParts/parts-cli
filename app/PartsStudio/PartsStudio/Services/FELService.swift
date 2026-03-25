@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import IOKit
 import IOKit.usb
@@ -949,16 +950,47 @@ class FELService: ObservableObject {
         let thunkCode = buildSPLThunk(socInfo: socInfo)
         try awFELWrite(data: thunkCode, offset: socInfo.thunkAddr)
 
-        // Execute SPL. The BROM sends CSW+status before executing, so this returns
-        // instantly. Then DRAM init runs (PLL11 reconfig corrupts USB PHY permanently).
-        // USB cannot be recovered in software — physical replug is required.
+        // Execute SPL. The BROM sends CSW+status before executing, so this
+        // returns instantly. DRAM init then kills USB permanently — the only
+        // recovery is physical USB replug.
         appendLogSync("SPL executing...")
         try awFELExecute(offset: socInfo.thunkAddr)
-        appendLogSync("SPL execute returned — DRAM init running in background")
+        appendLogSync("SPL acknowledged — DRAM init running, USB will die")
 
-        // USB is now dead. Close stale handles and signal for replug.
+        // Close dead handles and wait for replug
         closeDevice()
-        appendLogSync("USB closed — replug required for DRAM init recovery")
+        DispatchQueue.main.async { self.needsUSBReplug = true }
+        appendLogSync(">>> REPLUG USB NOW — waiting 60s <<<")
+
+        var reconnected = false
+        let deadline = Date().addingTimeInterval(60)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.5)
+            do {
+                try openUSBDevice()
+                try findAndOpenInterface()
+                _ = try getVersionSync()
+                reconnected = true
+                appendLogSync("USB reconnected!")
+                break
+            } catch {
+                closeDevice()
+            }
+        }
+
+        DispatchQueue.main.async { self.needsUSBReplug = false }
+        guard reconnected else {
+            throw FELError.protocolError("Replug timeout — replug USB and run boot again")
+        }
+
+        // Verify DRAM initialized — eGON.FEL signature
+        let felSig = try awFELRead(offset: socInfo.splAddr + 4, length: 8)
+        let sigStr = String(data: felSig, encoding: .ascii) ?? ""
+        if sigStr == "eGON.FEL" {
+            appendLogSync("SPL returned to FEL — DRAM initialized")
+        } else {
+            appendLogSync("Warning: signature = \(sigStr)")
+        }
     }
 
     /// Build the FEL-to-SPL thunk code with swap buffer data appended.
@@ -1266,51 +1298,20 @@ class FELService: ObservableObject {
                     Thread.sleep(forTimeInterval: 0.3)
                 }
 
-                // Step 1: Write and execute SPL (USB dies after DRAM init)
-                self.appendLogSync("[1/4] Loading SPL (\(actualSPL.count) bytes)...")
-                try self.writeSPLSync(data: actualSPL, socInfo: socInfo)
-                self.appendLogSync("[1/4] SPL executed — DRAM init corrupts USB PHY")
-
-                // Wait for USB replug. DRAM init changes PLL11 which permanently
-                // breaks the USB connection. Physical replug is the only recovery.
-                self.appendLogSync("⚡ REPLUG USB to continue (waiting up to 30s)...")
-                DispatchQueue.main.async { self.needsUSBReplug = true }
-
-                let replugTimeout: TimeInterval = 30
-                let deadline = Date().addingTimeInterval(replugTimeout)
-                var reconnected = false
-
-                while Date() < deadline {
-                    Thread.sleep(forTimeInterval: 1.0)
-                    do {
-                        try self.openUSBDevice()
-                        try self.findAndOpenInterface()
-                        _ = try self.getVersionSync()
-                        reconnected = true
-                        self.appendLogSync("USB reconnected after replug!")
-                        break
-                    } catch {
-                        self.closeDevice()
-                        // Keep trying
-                    }
-                }
-
-                guard reconnected else {
-                    throw FELError.protocolError("USB replug timeout — replug PocketPC and retry")
-                }
-
-                DispatchQueue.main.async { self.needsUSBReplug = false }
-
-                // Step 2: Write ATF BL31 to AR100 SRAM (must happen before RMR)
+                // Pre-load: Write BL31 to SRAM BEFORE SPL (SRAM is always accessible).
+                // This way after replug we only need to write U-Boot to DRAM.
                 if let bl31 = bl31Data, bl31.count > 0 {
-                    self.appendLogSync("[2/4] Writing ATF BL31 (\(bl31.count) bytes) to 0x44000...")
+                    self.appendLogSync("[1/4] Pre-loading ATF BL31 (\(bl31.count) bytes) to 0x44000 (SRAM)...")
                     try self.writeRawToAddress(data: bl31, address: 0x44000)
-                    self.appendLogSync("[2/4] ATF BL31 written")
-                } else {
-                    self.appendLogSync("[2/4] No ATF BL31 payload, skipping")
+                    self.appendLogSync("[1/4] ATF BL31 pre-loaded")
                 }
 
-                // Step 3: Write U-Boot to DRAM
+                // Step 2: Write and execute SPL → DRAM init → USB dies → replug
+                self.appendLogSync("[2/4] Loading SPL (\(actualSPL.count) bytes)...")
+                try self.writeSPLSync(data: actualSPL, socInfo: socInfo)
+                self.appendLogSync("[2/4] SPL executed — DRAM initialized")
+
+                // Step 3: Write U-Boot to DRAM (must complete in ~10s USB window)
                 if let ub = bootUBootData, ub.count > 0 {
                     self.appendLogSync("[3/4] Writing U-Boot (\(ub.count) bytes) to 0x4a000000...")
                     try self.writeRawToAddress(data: ub, address: 0x4a000000)
@@ -1318,6 +1319,9 @@ class FELService: ObservableObject {
                 } else {
                     self.appendLogSync("[3/4] No U-Boot payload, skipping write")
                 }
+
+                // Restore normal timeout
+                self.usbTimeoutMS = 10000
 
                 // Step 4: Boot via RMR warm reset to ATF BL31
                 // RMR sets RVBAR to 0x44000 and triggers warm reset into AArch64.
@@ -1443,7 +1447,7 @@ class FELService: ObservableObject {
 
     /// Write raw binary data to an address in chunks with progress.
     private func writeRawToAddress(data: Data, address: UInt32) throws {
-        let chunkSize = 65536 // 64KB chunks
+        let chunkSize = 65536 // 64KB — maximize throughput per FEL transaction
         var offset = 0
         let total = data.count
 
@@ -1773,3 +1777,4 @@ class FELService: ObservableObject {
         return f.string(from: Date())
     }
 }
+#endif

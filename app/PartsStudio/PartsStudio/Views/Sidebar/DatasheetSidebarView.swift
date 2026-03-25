@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct DatasheetSidebarView: View {
@@ -163,15 +164,38 @@ struct DatasheetSidebarView: View {
                         .padding(.vertical, 4)
 
                     FELSidebarSection()
+                    ESLRSidebarSection()
 
-                    // Credits & Services
+                    // Tools & Services
                     Divider()
                         .padding(.vertical, 4)
+
+                    Button(action: {
+                        appState.showPCBEditor = true
+                        appState.showFEL = false
+                        appState.showUSBMonitor = false
+                        appState.showCredits = false
+                        appState.showBLE = false
+                        appState.showBotInbox = false
+                        appState.selectedDatasheet = nil
+                        appState.selectedECO = nil
+                        appState.selectedIQCItem = nil
+                        appState.selectedAssemblyDoc = nil
+                        appState.pdfDocument = nil
+                    }) {
+                        Label("PCB Editor", systemImage: "cpu")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(appState.showPCBEditor ? Color.accentColor : .primary)
 
                     Button(action: {
                         appState.showCredits = true
                         appState.showFEL = false
                         appState.showUSBMonitor = false
+                        appState.showPCBEditor = false
                         appState.selectedDatasheet = nil
                         appState.selectedECO = nil
                         appState.selectedIQCItem = nil
@@ -203,6 +227,26 @@ struct DatasheetSidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(appState.showUSBMonitor ? Color.accentColor : .primary)
+
+                    Button(action: {
+                        appState.showBotInbox = true
+                        appState.showUSBMonitor = false
+                        appState.showCredits = false
+                        appState.showFEL = false
+                        appState.showBLE = false
+                        appState.selectedDatasheet = nil
+                        appState.selectedECO = nil
+                        appState.selectedIQCItem = nil
+                        appState.selectedAssemblyDoc = nil
+                        appState.pdfDocument = nil
+                    }) {
+                        Label("Bot Inbox", systemImage: "envelope.fill")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(appState.showBotInbox ? Color.accentColor : .primary)
                 }
             }
             .searchable(text: $appState.sidebarSearchText, prompt: "Filter datasheets")
@@ -391,3 +435,4 @@ struct DatasheetRowView: View {
         .help("Click to open \(datasheet.filename)\nRight-click to add to a project, reveal in Finder, or copy path")
     }
 }
+#endif

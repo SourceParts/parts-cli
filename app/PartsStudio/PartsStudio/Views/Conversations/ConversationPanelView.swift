@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct ConversationPanelView: View {
@@ -392,3 +393,4 @@ struct FocusableTextView: NSViewRepresentable {
         }
     }
 }
+#endif

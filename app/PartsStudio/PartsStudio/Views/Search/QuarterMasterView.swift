@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct PartsQView: View {
@@ -438,3 +439,4 @@ struct SearchField: NSViewRepresentable {
         }
     }
 }
+#endif

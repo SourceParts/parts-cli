@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import IOKit
 import IOKit.usb
@@ -279,3 +280,4 @@ class DeviceStateTracker: ObservableObject {
         serialPort = nil
     }
 }
+#endif

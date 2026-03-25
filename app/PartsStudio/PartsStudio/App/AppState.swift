@@ -57,6 +57,28 @@ enum ToolMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum AppearanceMode: String, CaseIterable {
+    case system = "system"
+    case light = "light"
+    case dark = "dark"
+
+    var label: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
 @MainActor
 class AppState: ObservableObject {
     @Published var selectedDatasheet: CachedDatasheet?
@@ -67,14 +89,26 @@ class AppState: ObservableObject {
     @Published var showImportPanel: Bool = false
     @Published var showStripMetadata: Bool = false
     @Published var showExport: Bool = false
+    @Published var showExportAnnotations: Bool = false
+    @Published var showExportLabels: Bool = false
+    @Published var showExportPagePNG: Bool = false
     @Published var sidebarSearchText: String = ""
     @Published var selectedECO: ECODocument?
     @Published var selectedIQCItem: IQCItem?
     @Published var showCredits: Bool = false
     @Published var showUSBMonitor: Bool = false
     @Published var showBLE: Bool = false
+    @Published var showIQCCalendar: Bool = false
+    @Published var showBotInbox: Bool = false
+    @Published var selectedPartNumber: String?
     @AppStorage("showRightPanel") var showRightPanel: Bool = true
     @AppStorage("lastActiveView") var lastActiveView: String = ""
+    @AppStorage("appearanceMode") var appearanceModeRaw: String = "system"
+
+    var appearanceMode: AppearanceMode {
+        get { AppearanceMode(rawValue: appearanceModeRaw) ?? .system }
+        set { appearanceModeRaw = newValue.rawValue }
+    }
 
     let cacheService = CacheService()
     let annotationStore = AnnotationStoreContainer()
@@ -82,39 +116,60 @@ class AppState: ObservableObject {
     let dataLabelStore = DataLabelStore()
     let ecoStore = ECOStore()
     let ecoChatStore = ECOChatStore()
+    #if os(macOS)
     let updater = Updater()
-    let assemblyStore = AssemblyStore()
     let felBridge = FELBridge()
     let felService = FELService()
-    let voiceService = VoiceService()
-    let bleService = BLEService()
     let swdProbe = SWDProbeService()
     let esp32Service = ESP32Service()
+    let eslrService = ESLRService()
     let deviceTracker = DeviceStateTracker()
+    let consoleServer = FELConsoleServer()
+    #endif
+    let assemblyStore = AssemblyStore()
+    let voiceService = VoiceService()
+    let bleService = BLEService()
     let userSession = UserSession()
     let deviceRegistry = DeviceRegistry()
-    let consoleServer = FELConsoleServer()
     @Published var showDocuments: Bool = false {
         didSet { if showDocuments { lastActiveView = "documents" } }
     }
     @AppStorage("userRole") var userRoleRaw: String = "admin" {
         didSet { userSession.role = UserRole(rawValue: userRoleRaw) ?? .admin }
     }
+    #if os(macOS)
     @Published var showFEL: Bool = false {
         didSet { if showFEL { lastActiveView = "fel" } }
     }
+    @Published var showESLR: Bool = false {
+        didSet { if showESLR { lastActiveView = "eslr" } }
+    }
+    @Published var showPCBEditor: Bool = false {
+        didSet { if showPCBEditor { lastActiveView = "pcb" } }
+    }
+    #endif
     @Published var selectedAssemblyDoc: AssemblyDocument?
 
     let iqcService = IQCService()
     @Published var iqcItems: [IQCItem] = IQCService.sampleItems
 
+    #if os(macOS)
     private var felServiceCancellable: Any?
+    private var eslrServiceCancellable: Any?
+    #endif
 
     /// The effective list of IQC items: live data when available, sample data as fallback.
     var effectiveIQCItems: [IQCItem] {
         iqcService.items.isEmpty ? iqcItems : iqcService.items
     }
 
+    #if os(iOS)
+    nonisolated init() {
+        Task { @MainActor in
+            await iqcService.fetchItems()
+        }
+    }
+    #else
     nonisolated init() {
         // Wire up device registry callback immediately (before FEL connects)
         let registry = deviceRegistry
@@ -137,10 +192,21 @@ class AppState: ObservableObject {
             felService?.appendLog("Serial console ready — switched to Console tab")
         }
 
+        // Wire ESLR device identification to DeviceRegistry
+        let eslrSvc = eslrService
+        eslrService.onDeviceIdentified = { mac, name in
+            _ = registry.register(sid: mac, socName: name)
+            DispatchQueue.main.async { eslrSvc.appendLog("Registered: \(mac)") }
+        }
+
         Task { @MainActor in
             await iqcService.fetchItems()
             // Forward FELService changes to AppState so SwiftUI picks them up
             felServiceCancellable = felService.objectWillChange.sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            // Forward ESLRService changes to AppState so SwiftUI picks them up
+            eslrServiceCancellable = eslrService.objectWillChange.sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
             // Wire voice commands — app-wide routing, not just FEL console
@@ -174,6 +240,14 @@ class AppState: ObservableObject {
                 let sid = info.sid ?? "unknown"
                 let reg = self?.felService.registeredDevice
                 return "{\"connected\":true,\"soc\":\"\(info.socInfo.name)\",\"sid\":\"\(sid)\",\"name\":\"\(reg?.name ?? "")\",\"owner\":\"\(reg?.owner ?? "")\"}"
+            }
+            consoleServer.getESLRDeviceJSON = { [weak self] in
+                guard let info = self?.eslrService.deviceInfo else {
+                    let port = self?.eslrService.serialPort ?? "none"
+                    let state = self?.eslrService.connectionState.rawValue ?? "disconnected"
+                    return "{\"connected\":false,\"state\":\"\(state)\",\"port\":\"\(port)\"}"
+                }
+                return "{\"connected\":true,\"variant\":\"\(info.variant.rawValue)\",\"firmware\":\"\(info.firmwareVersion)\",\"mac\":\"\(info.wifiMAC)\",\"heap\":\(info.freeHeap),\"psram\":\(info.psram),\"ble_name\":\"\(info.bleName)\",\"port\":\"\(info.serialPort)\"}"
             }
             consoleServer.onCommand = { [weak self] cmd in
                 guard let self = self else { return "no app state" }
@@ -390,6 +464,10 @@ class AppState: ObservableObject {
                     let cmdParts = cmd.split(separator: " ").map(String.init)
                     return self.esp32Service.handleCommand(cmdParts)
 
+                case "eslr", "radio":
+                    let cmdParts = cmd.split(separator: " ").map(String.init)
+                    return self.eslrService.handleCommand(cmdParts)
+
                 case "voice":
                     let cmdParts = cmd.split(separator: " ").map(String.init)
                     if cmdParts.count >= 2 {
@@ -467,7 +545,7 @@ class AppState: ObservableObject {
                     return "BLE: \(self.bleService.state == .connected ? "connected to \(self.bleService.connectedDevice?.name ?? "?")" : "disconnected"). Commands: scan, stop, devices, connect, disconnect, send"
 
                 default:
-                    return "unknown command: \(cmd). try: status, info, read, dump, gps, rak, swd, voice, ble"
+                    return "unknown command: \(cmd). try: status, info, read, dump, gps, rak, swd, voice, ble, eslr"
                 }
             }
             consoleServer.onReload = { [weak self] in
@@ -479,6 +557,60 @@ class AppState: ObservableObject {
                 let config = PartsConfig.setRevision(newRev)
                 self?.assemblyStore.loadDocuments()
                 return "{\"revision\":\"\(config.revision)\",\"assembly\":\"\(config.assemblyPath)\",\"fab_release\":\"\(config.fabReleasePath)\"}"
+            }
+            consoleServer.onNavigate = { [weak self] view in
+                guard let self = self else { return "{\"error\":\"no app state\"}" }
+                DispatchQueue.main.async {
+                    // Clear all view state first
+                    self.selectedDatasheet = nil
+                    self.selectedECO = nil
+                    self.selectedIQCItem = nil
+                    self.selectedAssemblyDoc = nil
+                    self.pdfDocument = nil
+                    self.showFEL = false
+                    self.showESLR = false
+                    self.showUSBMonitor = false
+                    self.showCredits = false
+                    self.showBLE = false
+                    self.showDocuments = false
+
+                    switch view.lowercased() {
+                    case "fel":
+                        self.showFEL = true
+                    case "eslr", "radio":
+                        self.showESLR = true
+                    case "usb":
+                        self.showUSBMonitor = true
+                    case "credits":
+                        self.showCredits = true
+                    case "ble":
+                        self.showBLE = true
+                    case "iqc":
+                        // Select first IQC item to show IQC view
+                        if let first = self.effectiveIQCItems.first {
+                            self.selectedIQCItem = first
+                        }
+                    case "eco":
+                        // Select first ECO document
+                        if let first = self.ecoStore.documents.first {
+                            self.selectedECO = first
+                        }
+                    case "search", "partsq":
+                        break // clearing everything shows PartsQView (default)
+                    case "datasheets":
+                        // Select first datasheet
+                        if let first = self.cacheService.datasheets.first {
+                            self.selectDatasheet(first)
+                        }
+                    default:
+                        break
+                    }
+
+                    // Bring window to front
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
+                }
+                return "{\"navigated\":\"\(view)\"}"
             }
             consoleServer.start()
 
@@ -494,7 +626,9 @@ class AppState: ObservableObject {
             restoreLastView()
         }
     }
+    #endif
 
+    #if os(macOS)
     // MARK: - Autoboot Sequence
 
     /// Automated boot: halt STM32 → SPL → wait for replug → U-Boot → execute.
@@ -595,6 +729,8 @@ class AppState: ObservableObject {
         switch lastActiveView {
         case "fel":
             showFEL = true
+        case "eslr":
+            showESLR = true
         case "usb":
             showUSBMonitor = true
         case "ble":
@@ -605,15 +741,38 @@ class AppState: ObservableObject {
             break // default: datasheet/home view
         }
     }
+    #endif
+
+    func selectPart(_ partNumber: String) {
+        selectedPartNumber = partNumber
+        selectedDatasheet = nil
+        selectedECO = nil
+        selectedIQCItem = nil
+        #if os(macOS)
+        selectedAssemblyDoc = nil
+        showUSBMonitor = false
+        showFEL = false
+        showESLR = false
+        showDocuments = false
+        #endif
+        pdfDocument = nil
+        showCredits = false
+        showBLE = false
+        lastActiveView = "part"
+    }
 
     func selectDatasheet(_ datasheet: CachedDatasheet) {
         selectedDatasheet = datasheet
+        selectedPartNumber = nil
         selectedECO = nil
         selectedIQCItem = nil
+        #if os(macOS)
         selectedAssemblyDoc = nil
-        showCredits = false
         showUSBMonitor = false
         showFEL = false
+        showESLR = false
+        #endif
+        showCredits = false
         showBLE = false
         lastActiveView = "datasheet"
         loadPDF(at: datasheet.path)
@@ -690,11 +849,13 @@ class AppState: ObservableObject {
         pdfSearchText = text
 
         // Post notification for the PDF view to scroll to the selection
+        #if os(macOS)
         NotificationCenter.default.post(
             name: .pdfSearchResult,
             object: nil,
             userInfo: ["selection": first]
         )
+        #endif
     }
 
     func applyAnnotations() {

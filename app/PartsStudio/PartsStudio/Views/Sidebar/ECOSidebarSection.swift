@@ -49,6 +49,18 @@ struct ECODocumentRow: View {
         }
     }
 
+    private var statusColor: Color {
+        switch document.status.uppercased() {
+        case "OPEN": return .green
+        case "CLOSED": return .gray
+        case "IN-REVIEW", "IN REVIEW", "REVIEW": return .orange
+        case "IMPLEMENTED": return .blue
+        case "REJECTED": return .red
+        case "DEFERRED": return .yellow
+        default: return .secondary
+        }
+    }
+
     private var severityColor: Color {
         switch document.severity.uppercased() {
         case "CRITICAL": return .red
@@ -97,9 +109,12 @@ struct ECODocumentRow: View {
                 .lineLimit(2)
 
             Text(document.status)
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .font(.system(size: 8, weight: .semibold))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(statusColor.opacity(0.15))
+                .foregroundStyle(statusColor)
+                .clipShape(Capsule())
         }
         .padding(.vertical, 2)
     }

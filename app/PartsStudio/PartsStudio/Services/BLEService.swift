@@ -191,6 +191,9 @@ class BLEService: NSObject, ObservableObject {
         let ts = Self.timestamp()
         DispatchQueue.main.async {
             self.log.append("[\(ts)] \(message)")
+            if self.log.count > 500 {
+                self.log.removeFirst(self.log.count - 500)
+            }
         }
     }
 

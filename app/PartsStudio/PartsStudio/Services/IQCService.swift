@@ -1,17 +1,26 @@
 import Foundation
+#if os(macOS)
+import AppKit
+#endif
 
-/// Fetches IQC items from the Source Parts API, falling back to sample data on failure.
+/// Fetches IQC items from the Source Parts API, loads local JSON reports, and supports image upload.
 class IQCService: ObservableObject {
     @Published var items: [IQCItem] = []
     @Published var isLoading = false
     @Published var error: String?
     @Published var usingLiveData = false
+    @Published var uploadProgress: String?
+
+    // MARK: - Fetch from API
 
     func fetchItems() async {
         await MainActor.run { isLoading = true; error = nil }
 
         guard let apiKey = APIKeychain.loadAPIKey() else {
-            await MainActor.run { isLoading = false }
+            await MainActor.run {
+                self.error = "No API key. Run `parts auth login` to authenticate."
+                self.isLoading = false
+            }
             return
         }
 
@@ -27,13 +36,32 @@ class IQCService: ObservableObject {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            guard let http = response as? HTTPURLResponse else {
                 await MainActor.run { isLoading = false }
                 return
             }
 
+            if http.statusCode == 401 || http.statusCode == 403 {
+                APIKeychain.clearCache()
+                await MainActor.run {
+                    self.error = "Session expired. Run `parts auth login` then click refresh."
+                    self.isLoading = false
+                }
+                return
+            }
+
+            guard http.statusCode == 200 else {
+                await MainActor.run {
+                    self.error = "API returned HTTP \(http.statusCode)"
+                    self.isLoading = false
+                }
+                return
+            }
+
             let apiResp = try JSONDecoder().decode(APIResponse.self, from: data)
-            if let fetched = apiResp.data?.items, !fetched.isEmpty {
+            // API returns items at top level or nested under data
+            let fetched = apiResp.items ?? apiResp.data?.items
+            if let fetched, !fetched.isEmpty {
                 await MainActor.run { items = fetched; usingLiveData = true; isLoading = false }
                 return
             }
@@ -46,15 +74,144 @@ class IQCService: ObservableObject {
         }
     }
 
-    // MARK: - API Response
+    // MARK: - Load Local JSON Reports
+
+    /// Scan the IQC directory for .json report files and parse them as IQCItems.
+    func loadLocalReports() {
+        let iqcPath = PartsConfig.shared.iqcPath
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(atPath: iqcPath) else { return }
+
+        var localItems: [IQCItem] = []
+        for file in files where file.lowercased().hasSuffix(".json") {
+            let fullPath = "\(iqcPath)/\(file)"
+            guard let data = fm.contents(atPath: fullPath) else { continue }
+
+            // Try parsing as a single IQCItem
+            if let item = try? JSONDecoder().decode(IQCItem.self, from: data) {
+                localItems.append(item)
+                continue
+            }
+
+            // Try parsing as an array of IQCItems
+            if let arr = try? JSONDecoder().decode([IQCItem].self, from: data) {
+                localItems.append(contentsOf: arr)
+                continue
+            }
+
+            // Try parsing as { "items": [...] } wrapper
+            if let wrapper = try? JSONDecoder().decode(ItemsWrapper.self, from: data) {
+                localItems.append(contentsOf: wrapper.items)
+            }
+        }
+
+        if !localItems.isEmpty {
+            // Merge with existing items (avoid duplicates by code)
+            let existingCodes = Set(items.map(\.code))
+            let newItems = localItems.filter { !existingCodes.contains($0.code) }
+            items.append(contentsOf: newItems)
+        }
+    }
+
+    // MARK: - Upload Images to Ingest API
+
+    /// Upload images via file picker to POST /v1/ingest
+    func uploadImages() async {
+        // Show file picker on main thread
+        let urls: [URL] = await MainActor.run {
+            let panel = NSOpenPanel()
+            panel.title = "Select images for IQC ingest"
+            panel.allowedContentTypes = [.jpeg, .png, .gif, .heic]
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = false
+            guard panel.runModal() == .OK else { return [] }
+            return panel.urls
+        }
+
+        guard !urls.isEmpty else { return }
+
+        guard let apiKey = APIKeychain.loadAPIKey() else {
+            await MainActor.run { self.error = "No API key. Run `parts auth login`." }
+            return
+        }
+
+        await MainActor.run {
+            uploadProgress = "Uploading \(urls.count) image(s)..."
+            error = nil
+        }
+
+        guard let apiURL = URL(string: "\(PartsConfig.shared.apiURL)/v1/ingest") else { return }
+
+        // Build multipart form-data
+        let boundary = UUID().uuidString
+        var body = Data()
+        for url in urls {
+            guard let fileData = try? Data(contentsOf: url) else { continue }
+            let filename = url.lastPathComponent
+            let mimeType = url.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"files\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+            body.append(fileData)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var request = URLRequest(url: apiURL)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("PartsStudio/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        request.timeoutInterval = 120
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let http = response as? HTTPURLResponse
+
+            await MainActor.run {
+                uploadProgress = nil
+                if http?.statusCode == 200 || http?.statusCode == 201 {
+                    // Refresh items list
+                    Task { await self.fetchItems() }
+                } else {
+                    let msg = String(data: data, encoding: .utf8) ?? "Upload failed"
+                    self.error = "Upload failed (HTTP \(http?.statusCode ?? 0)): \(msg.prefix(200))"
+                }
+            }
+        } catch {
+            await MainActor.run {
+                uploadProgress = nil
+                self.error = "Upload error: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: - X-Ray Analysis JSON Path
+
+    /// Path to the X-ray analysis results JSON file.
+    var xrayAnalysisPath: String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Work/xray_analysis_results.json"
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
+    // MARK: - API Response Models
 
     private struct APIResponse: Decodable {
-        let success: Bool
+        let success: Bool?
+        let status: String?
+        // API may return items at top level or nested under data
+        let items: [IQCItem]?
         let data: APIData?
 
         struct APIData: Decodable {
             let items: [IQCItem]?
         }
+    }
+
+    private struct ItemsWrapper: Decodable {
+        let items: [IQCItem]
     }
 
     // MARK: - Sample Data (fallback)

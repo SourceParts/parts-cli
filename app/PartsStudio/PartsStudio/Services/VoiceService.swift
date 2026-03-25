@@ -190,15 +190,31 @@ class VoiceService: ObservableObject {
             }
 
         case .natural:
-            // Natural mode: wait for "hey parts" wake word
-            if trimmed.contains("hey parts") || trimmed.contains("a parts") || trimmed.contains("hey park") {
-                if let range = trimmed.range(of: "hey parts") ?? trimmed.range(of: "a parts") ?? trimmed.range(of: "hey park") {
-                    let afterWake = String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-                    if !afterWake.isEmpty {
-                        interpretNaturalLanguage(afterWake)
-                    } else {
-                        wakeWordDetected = true
-                    }
+            // Natural mode: wait for wake word (with common misrecognition variants)
+            let wakeVariants = [
+                "hey parts studio",
+                "hey parts",
+                "hey parks",
+                "hey park",
+                "pay parts",
+                "a parts",
+                "parts",
+            ]
+            let lower = trimmed.lowercased()
+            var matchedRange: Range<String.Index>? = nil
+            for variant in wakeVariants {
+                if let range = lower.range(of: variant) {
+                    matchedRange = range
+                    break
+                }
+            }
+
+            if let range = matchedRange {
+                let afterWake = String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if !afterWake.isEmpty {
+                    interpretNaturalLanguage(afterWake)
+                } else {
+                    wakeWordDetected = true
                 }
             } else if wakeWordDetected {
                 interpretNaturalLanguage(trimmed)
@@ -209,7 +225,7 @@ class VoiceService: ObservableObject {
 
     // MARK: - Direct Command Mapping
 
-    /// Map spoken words to console commands. Handles common voice quirks.
+    /// Map spoken words to console commands. Handles common voice quirks and numeric arguments.
     private func mapToCommand(_ spoken: String) -> String? {
         let words = spoken.lowercased()
 
@@ -226,13 +242,25 @@ class VoiceService: ObservableObject {
             }
         }
 
-        // Pattern matches
-        if words.hasPrefix("read ") { return words }
-        if words.hasPrefix("gpio ") { return words }
-        if words.hasPrefix("rack ") || words.hasPrefix("rak ") {
-            return words.replacingOccurrences(of: "rack", with: "rak")
+        // Pattern matches with numeric argument extraction
+        // "read address 0x1000" or "read address 1000" -> "read 0x1000"
+        if words.hasPrefix("read ") {
+            return extractCommandWithArgs("read", from: words, stripWords: ["address", "at", "from", "offset", "memory"])
         }
-        if words.hasPrefix("backlight ") { return words }
+        if words.hasPrefix("gpio ") {
+            return extractCommandWithArgs("gpio", from: words, stripWords: ["port", "pin", "number"])
+        }
+        if words.hasPrefix("rack ") || words.hasPrefix("rak ") {
+            return extractCommandWithArgs("rak", from: words.replacingOccurrences(of: "rack", with: "rak"), stripWords: [])
+        }
+        // "backlight 128" or "backlight level 128" or "backlight to 200" -> "backlight 128"
+        if words.hasPrefix("backlight ") {
+            return extractCommandWithArgs("backlight", from: words, stripWords: ["level", "to", "set", "value", "brightness"])
+        }
+        // "dump brom" / "dump b rom" (voice quirk)
+        if words.contains("dump") && (words.contains("brom") || words.contains("b rom")) {
+            return "dump brom"
+        }
         if words == "boot" { return "boot" }
         if words == "scratch" { return "scratch" }
         if words.contains("gps") && words.contains("stop") { return "gps stop" }
@@ -240,6 +268,32 @@ class VoiceService: ObservableObject {
         if words.contains("gps") || words.contains("location") { return "gps" }
 
         return words // pass through as-is
+    }
+
+    /// Extract a command and its arguments, stripping filler words that speech recognition may insert.
+    /// E.g. "read address 0x1000 64" with stripWords=["address","at"] -> "read 0x1000 64"
+    private func extractCommandWithArgs(_ command: String, from spoken: String, stripWords: [String]) -> String {
+        let tokens = spoken.split(separator: " ").map(String.init)
+        guard tokens.count > 1 else { return command }
+
+        var args: [String] = []
+        for token in tokens.dropFirst() {
+            let lower = token.lowercased()
+            // Skip filler words
+            if stripWords.contains(lower) { continue }
+            // Convert spoken numbers: "one thousand" won't appear (speech-to-text gives digits)
+            // but handle "hex" prefix: "hex 1000" -> "0x1000"
+            if lower == "hex" || lower == "0x" { continue }  // next token gets 0x prefix below
+            // If previous arg was "hex", prefix this with 0x
+            if let prev = args.last, (prev == "hex" || prev == "0x") {
+                args.removeLast()
+                args.append("0x\(token)")
+            } else {
+                args.append(token)
+            }
+        }
+
+        return ([command] + args).joined(separator: " ")
     }
 
     // MARK: - Natural Language via ML Service

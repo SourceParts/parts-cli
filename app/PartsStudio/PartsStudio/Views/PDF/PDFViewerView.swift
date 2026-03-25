@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import PDFKit
 
@@ -454,3 +455,4 @@ class AnnotatingPDFView: PDFView {
         }
     }
 }
+#endif

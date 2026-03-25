@@ -14,6 +14,7 @@ struct AssemblyDocument: Identifiable, Hashable {
         case "Assembly": return "square.on.square.dashed"
         case "Fab": return "cpu"
         case "Schematic": return "waveform.path.ecg"
+        case "3D Model": return "cube.transparent"
         default: return "doc"
         }
     }
@@ -27,34 +28,38 @@ struct AssemblyDocument: Identifiable, Hashable {
 class AssemblyStore: ObservableObject {
     @Published var documents: [AssemblyDocument] = []
 
-    private let projectPath: String
-
     init() {
-        self.projectPath = PartsConfig.shared.projectPath
         loadDocuments()
     }
 
     func loadDocuments() {
+        let config = PartsConfig.shared
         let fm = FileManager.default
         var results: [AssemblyDocument] = []
 
         // BOM files
-        scanDirectory("\(projectPath)/BOM", category: "BOM", fm: fm, results: &results)
+        scanDirectory(config.bomPath, category: "BOM", fm: fm, results: &results)
 
         // Assembly PDFs (from fab release and pdf_output)
-        scanDirectory("\(projectPath)/PCB/EVT2/fab_release/assembly", category: "Assembly", fm: fm, results: &results)
-        scanPDFs("\(projectPath)/PCB/EVT2/pdf_output", keyword: "assembly", category: "Assembly", fm: fm, results: &results)
+        let fabRelease = config.fabReleasePath
+        let pdfOutput = config.assemblyPath
+
+        scanDirectory("\(fabRelease)/assembly", category: "Assembly", fm: fm, results: &results)
+        scanPDFs(pdfOutput, keyword: "assembly", category: "Assembly", fm: fm, results: &results)
 
         // Fab files
-        scanDirectory("\(projectPath)/PCB/EVT2/fab_release", category: "Fab", fm: fm, results: &results, excludeSubdirs: true)
+        scanDirectory(fabRelease, category: "Fab", fm: fm, results: &results, excludeSubdirs: true)
 
         // Schematic PDFs
-        scanPDFs("\(projectPath)/PCB/EVT2/pdf_output", keyword: "schematic", category: "Schematic", fm: fm, results: &results)
+        scanPDFs(pdfOutput, keyword: "schematic", category: "Schematic", fm: fm, results: &results)
+
+        // 3D Models (STEP/STP files)
+        scanDirectory(config.modelsPath, category: "3D Model", fm: fm, results: &results)
 
         // Sort by category then name
         results.sort { a, b in
             if a.category != b.category {
-                let order = ["BOM", "Assembly", "Schematic", "Fab"]
+                let order = ["BOM", "Assembly", "Schematic", "Fab", "3D Model"]
                 return (order.firstIndex(of: a.category) ?? 99) < (order.firstIndex(of: b.category) ?? 99)
             }
             return a.name < b.name

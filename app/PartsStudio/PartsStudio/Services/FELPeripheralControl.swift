@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Direct peripheral control via ARM thunk code executed through FEL.
@@ -1127,3 +1128,4 @@ struct GPSFix {
         return "\(h):\(m):\(s)"
     }
 }
+#endif

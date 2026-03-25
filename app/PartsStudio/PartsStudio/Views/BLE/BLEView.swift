@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct BLEView: View {
@@ -170,6 +171,7 @@ struct BLEDeviceRow: View {
 struct BLEConsoleView: View {
     @ObservedObject var bleService: BLEService
     @State private var command: String = ""
+    @State private var copied = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -179,6 +181,12 @@ struct BLEConsoleView: View {
                 Text("BLE Console")
                     .font(.headline)
                 Spacer()
+                Button(action: copyLog) {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(copied ? .green : .secondary)
+                .help("Copy log to clipboard")
                 Button(action: { bleService.log.removeAll() }) {
                     Image(systemName: "trash")
                 }
@@ -198,7 +206,7 @@ struct BLEConsoleView: View {
                         ForEach(Array(bleService.log.enumerated()), id: \.offset) { idx, line in
                             Text(line)
                                 .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(line.hasPrefix(">") ? .blue : .primary)
+                                .foregroundStyle(line.contains(">") ? .blue : .primary)
                                 .textSelection(.enabled)
                                 .id(idx)
                         }
@@ -206,6 +214,10 @@ struct BLEConsoleView: View {
                     .padding(8)
                 }
                 .onChange(of: bleService.log.count) { _, _ in
+                    // Prune log to 500 entries
+                    if bleService.log.count > 500 {
+                        bleService.log.removeFirst(bleService.log.count - 500)
+                    }
                     if let last = bleService.log.indices.last {
                         proxy.scrollTo(last, anchor: .bottom)
                     }
@@ -235,4 +247,12 @@ struct BLEConsoleView: View {
         bleService.send(command)
         command = ""
     }
+
+    private func copyLog() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(bleService.log.joined(separator: "\n"), forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+    }
 }
+#endif

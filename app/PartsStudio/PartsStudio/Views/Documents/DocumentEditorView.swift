@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import WebKit
 
@@ -77,6 +78,11 @@ struct DocumentEditorView: View {
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
+                        }
+
+                        // DFM Results
+                        if data.dfmScore > 0 || apiStatus.contains("DFM") {
+                            dfmResultsSection
                         }
                     }
 
@@ -234,6 +240,99 @@ struct DocumentEditorView: View {
             }
         }
     }
+    // MARK: - DFM Results
+
+    @ViewBuilder
+    private var dfmResultsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
+            Text("DFM Results").font(.caption).foregroundStyle(.secondary)
+
+            // Score badge
+            if data.dfmScore > 0 {
+                HStack {
+                    Spacer()
+                    Text("\(data.dfmScore)")
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(width: 72, height: 72)
+                        .background(
+                            Circle().fill(dfmScoreColor)
+                        )
+                    Spacer()
+                }
+            }
+
+            // Checks table
+            if !data.dfmChecks.isEmpty {
+                Text("Checks").font(.caption).fontWeight(.semibold)
+                VStack(spacing: 2) {
+                    ForEach(Array(data.dfmChecks.enumerated()), id: \.offset) { _, check in
+                        HStack(spacing: 6) {
+                            Image(systemName: check.pass ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(check.pass ? .green : .red)
+                                .font(.system(size: 14))
+                            Text(check.name)
+                                .font(.system(size: 11, weight: .medium))
+                            Spacer()
+                            Text(check.detail)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            // Warnings list
+            if !data.dfmWarnings.isEmpty {
+                Text("Warnings").font(.caption).fontWeight(.semibold)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(data.dfmWarnings.enumerated()), id: \.offset) { _, warning in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.yellow)
+                                .font(.system(size: 12))
+                            Text(warning)
+                                .font(.system(size: 11))
+                        }
+                    }
+                }
+            }
+
+            // Recommendations list
+            if !data.dfmRecommendations.isEmpty {
+                Text("Recommendations").font(.caption).fontWeight(.semibold)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(data.dfmRecommendations.enumerated()), id: \.offset) { _, rec in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "lightbulb.fill")
+                                .foregroundStyle(.blue)
+                                .font(.system(size: 12))
+                            Text(rec)
+                                .font(.system(size: 11))
+                        }
+                    }
+                }
+            }
+
+            // Retry button (visible on timeout/error)
+            if apiStatus.contains("timeout") || apiStatus.contains("Error") || apiStatus.contains("failed") {
+                Button("Retry DFM") { submitDFM() }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+                    .disabled(data.projectId.isEmpty)
+            }
+        }
+    }
+
+    private var dfmScoreColor: Color {
+        if data.dfmScore >= 80 { return .green }
+        if data.dfmScore >= 60 { return .yellow }
+        return .red
+    }
+
     // MARK: - API Integration
 
     private func lookupPart() {
@@ -329,3 +428,4 @@ struct DocumentPreviewView: NSViewRepresentable {
         webView.loadHTMLString(html, baseURL: nil)
     }
 }
+#endif

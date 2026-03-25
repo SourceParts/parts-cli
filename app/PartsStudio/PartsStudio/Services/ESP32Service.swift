@@ -1,6 +1,8 @@
+#if os(macOS)
 import Foundation
 import IOKit
 import IOKit.usb
+import CommonCrypto
 
 // IOKit USB UUIDs (C macros not bridged to Swift)
 private let kIOUSBDeviceUserClientTypeID_ESP: CFUUID =
@@ -471,6 +473,165 @@ class ESP32Service: ObservableObject {
         return decoded
     }
 
+    // MARK: - Bootloader Response Parsing
+
+    /// Parsed bootloader response from SLIP-framed data.
+    struct BootloaderResponse {
+        let direction: UInt8   // 0x01 = response
+        let command: UInt8     // echo of the command opcode
+        let dataLength: UInt16
+        let value: UInt32      // status value (0 = success)
+        let body: Data         // remaining payload after the 8-byte header
+        var isSuccess: Bool { value == 0 && direction == 0x01 }
+    }
+
+    /// Parse a SLIP-framed bootloader response.
+    /// Expected format after SLIP decode: direction(1) + command(1) + size(2) + value(4) + body(size)
+    private func parseBootloaderResponse(_ raw: Data, expectedCommand: UInt8) -> BootloaderResponse? {
+        let decoded = Self.slipDecode(raw)
+        guard decoded.count >= 8 else {
+            appendLog("Response too short (\(decoded.count) bytes)")
+            return nil
+        }
+
+        let direction = decoded[0]
+        let command = decoded[1]
+        let dataLength = decoded.withUnsafeBytes { $0.load(fromByteOffset: 2, as: UInt16.self).littleEndian }
+        let value = decoded.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt32.self).littleEndian }
+        let body = decoded.count > 8 ? decoded.subdata(in: 8..<decoded.endIndex) : Data()
+
+        let resp = BootloaderResponse(direction: direction, command: command, dataLength: dataLength, value: value, body: body)
+
+        if direction != 0x01 {
+            appendLog("Bad response direction: 0x\(String(format: "%02X", direction)) (expected 0x01)")
+        }
+        if command != expectedCommand {
+            appendLog("Response command mismatch: 0x\(String(format: "%02X", command)) (expected 0x\(String(format: "%02X", expectedCommand)))")
+        }
+        if value != 0 {
+            // value field contains the error code; byte 0 of body is the status, byte 1 is the error
+            let statusByte = body.count > 0 ? body[body.startIndex] : 0xFF
+            let errorByte = body.count > 1 ? body[body.startIndex + 1] : 0xFF
+            appendLog("Bootloader error: status=0x\(String(format: "%02X", statusByte)) error=0x\(String(format: "%02X", errorByte))")
+        }
+
+        return resp
+    }
+
+    /// Compute MD5 hash of data (returns lowercase hex string).
+    private static func md5Hex(_ data: Data) -> String {
+        var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
+        data.withUnsafeBytes { ptr in
+            _ = CC_MD5(ptr.baseAddress, CC_LONG(data.count), &digest)
+        }
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - MD5 Verification
+
+    /// Send ESP_MD5 command to verify flash contents match the firmware data.
+    func verifyFlashMD5(address: UInt32, size: UInt32, expectedData: Data, completion: @escaping (Result<Bool, Error>) -> Void) {
+        var md5Data = Data(count: 16)
+        md5Data.withUnsafeMutableBytes { ptr in
+            ptr.storeBytes(of: address.littleEndian, toByteOffset: 0, as: UInt32.self)
+            ptr.storeBytes(of: size.littleEndian, toByteOffset: 4, as: UInt32.self)
+            ptr.storeBytes(of: UInt32(0).littleEndian, toByteOffset: 8, as: UInt32.self)  // reserved
+            ptr.storeBytes(of: UInt32(0).littleEndian, toByteOffset: 12, as: UInt32.self) // reserved
+        }
+
+        let localMD5 = Self.md5Hex(expectedData)
+        appendLog("Local firmware MD5: \(localMD5)")
+
+        let packet = buildCommand(opcode: Self.ESP_MD5, data: md5Data)
+        serialWrite(packet) { [weak self] result in
+            guard let self = self else { return }
+            if case .failure(let err) = result { completion(.failure(err)); return }
+
+            self.serialRead(maxBytes: 512, timeout: 15000) { result in
+                switch result {
+                case .success(let data):
+                    if let resp = self.parseBootloaderResponse(data, expectedCommand: Self.ESP_MD5) {
+                        // ESP32 returns MD5 as 32-char hex string in the body (or as raw 16 bytes)
+                        let remoteMD5: String
+                        if resp.body.count >= 32, let hexStr = String(data: resp.body.prefix(32), encoding: .ascii) {
+                            remoteMD5 = hexStr.lowercased()
+                        } else if resp.body.count >= 16 {
+                            remoteMD5 = resp.body.prefix(16).map { String(format: "%02x", $0) }.joined()
+                        } else {
+                            self.appendLog("MD5 response body too short (\(resp.body.count) bytes)")
+                            completion(.failure(NSError(domain: "ESP32", code: 5, userInfo: [NSLocalizedDescriptionKey: "MD5 response invalid"])))
+                            return
+                        }
+
+                        self.appendLog("Remote flash MD5: \(remoteMD5)")
+                        if remoteMD5 == localMD5 {
+                            self.appendLog("MD5 verification passed")
+                            completion(.success(true))
+                        } else {
+                            self.appendLog("MD5 MISMATCH: local=\(localMD5) remote=\(remoteMD5)")
+                            completion(.success(false))
+                        }
+                    } else {
+                        completion(.failure(NSError(domain: "ESP32", code: 5, userInfo: [NSLocalizedDescriptionKey: "Failed to parse MD5 response"])))
+                    }
+                case .failure(let err):
+                    completion(.failure(err))
+                }
+            }
+        }
+    }
+
+    // MARK: - Baudrate Switching
+
+    /// Send ESP_CHANGE_BAUDRATE to switch the bootloader to a faster baud rate.
+    /// The ESP32 bootloader expects: new_baud(4) + old_baud(4).
+    func changeBaudrate(newBaud: UInt32, oldBaud: UInt32 = 115200, completion: @escaping (Result<Void, Error>) -> Void) {
+        var baudData = Data(count: 8)
+        baudData.withUnsafeMutableBytes { ptr in
+            ptr.storeBytes(of: newBaud.littleEndian, toByteOffset: 0, as: UInt32.self)
+            ptr.storeBytes(of: oldBaud.littleEndian, toByteOffset: 4, as: UInt32.self)
+        }
+
+        appendLog("Switching baudrate: \(oldBaud) -> \(newBaud)")
+
+        let packet = buildCommand(opcode: Self.ESP_CHANGE_BAUDRATE, data: baudData)
+        serialWrite(packet) { [weak self] result in
+            guard let self = self else { return }
+            if case .failure(let err) = result { completion(.failure(err)); return }
+
+            self.serialRead(maxBytes: 512, timeout: 3000) { result in
+                switch result {
+                case .success(let data):
+                    if let resp = self.parseBootloaderResponse(data, expectedCommand: Self.ESP_CHANGE_BAUDRATE),
+                       resp.isSuccess {
+                        // Reconfigure local serial port to new baud rate
+                        self.reconfigureSerialBaud(newBaud)
+                        self.appendLog("Baudrate changed to \(newBaud)")
+                        completion(.success(()))
+                    } else {
+                        completion(.failure(NSError(domain: "ESP32", code: 6, userInfo: [NSLocalizedDescriptionKey: "Baudrate change rejected by bootloader"])))
+                    }
+                case .failure(let err):
+                    completion(.failure(err))
+                }
+            }
+        }
+    }
+
+    /// Reconfigure the serial port to a new baud rate using stty.
+    private func reconfigureSerialBaud(_ baud: UInt32) {
+        let fm = FileManager.default
+        guard let ports = try? fm.contentsOfDirectory(atPath: "/dev").filter({ $0.hasPrefix("cu.usbmodem") }),
+              let port = ports.first else { return }
+
+        let path = "/dev/\(port)"
+        let stty = Process()
+        stty.executableURL = URL(fileURLWithPath: "/bin/stty")
+        stty.arguments = ["-f", path, "\(baud)"]
+        try? stty.run()
+        stty.waitUntilExit()
+    }
+
     // MARK: - ROM Bootloader Commands
 
     /// Build a bootloader command packet.
@@ -495,11 +656,18 @@ class ESP32Service: ObservableObject {
         serialWrite(packet) { [weak self] result in
             if case .failure(let err) = result { completion(.failure(err)); return }
 
-            // Read response
+            // Read and parse response
             self?.serialRead(maxBytes: 512, timeout: 3000) { result in
                 switch result {
                 case .success(let data):
-                    if data.contains(0x01) { // response marker
+                    if let self = self,
+                       let resp = self.parseBootloaderResponse(data, expectedCommand: Self.ESP_SYNC),
+                       resp.isSuccess {
+                        self.appendLog("Sync response OK (command=0x\(String(format: "%02X", resp.command)))")
+                        completion(.success(()))
+                    } else if data.contains(0x01) {
+                        // Fallback: at least direction byte present (partial response)
+                        self?.appendLog("Sync partial response — proceeding")
                         completion(.success(()))
                     } else {
                         completion(.failure(NSError(domain: "ESP32", code: 2, userInfo: [NSLocalizedDescriptionKey: "Sync failed — no response"])))
@@ -512,7 +680,8 @@ class ESP32Service: ObservableObject {
     }
 
     /// Flash a firmware binary to the ESP32.
-    func flash(firmware: Data, offset: UInt32 = 0x10000, completion: @escaping (Result<Void, Error>) -> Void) {
+    /// Optionally switches to a faster baud rate before flashing for speed.
+    func flash(firmware: Data, offset: UInt32 = 0x10000, flashBaud: UInt32? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         guard connectionState == .connected else {
             completion(.failure(NSError(domain: "ESP32", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])))
             return
@@ -522,41 +691,79 @@ class ESP32Service: ObservableObject {
         flashProgress = 0
         appendLog("Flashing \(firmware.count) bytes to 0x\(String(format: "%x", offset))...")
 
-        let blockSize = 4096
-        let totalBlocks = (firmware.count + blockSize - 1) / blockSize
-
-        // Step 1: FLASH_BEGIN
-        var beginData = Data(count: 16)
-        beginData.withUnsafeMutableBytes { ptr in
-            ptr.storeBytes(of: UInt32(firmware.count).littleEndian, toByteOffset: 0, as: UInt32.self)  // size
-            ptr.storeBytes(of: UInt32(totalBlocks).littleEndian, toByteOffset: 4, as: UInt32.self)     // blocks
-            ptr.storeBytes(of: UInt32(blockSize).littleEndian, toByteOffset: 8, as: UInt32.self)       // block size
-            ptr.storeBytes(of: offset.littleEndian, toByteOffset: 12, as: UInt32.self)                 // offset
-        }
-
-        let beginPacket = buildCommand(opcode: Self.ESP_FLASH_BEGIN, data: beginData)
-        serialWrite(beginPacket) { [weak self] result in
+        // Optional: switch to faster baud rate before flash
+        let beginFlash: () -> Void = { [weak self] in
             guard let self = self else { return }
-            if case .failure(let err) = result {
-                self.connectionState = .connected
-                completion(.failure(err))
-                return
+
+            let blockSize = 4096
+            let totalBlocks = (firmware.count + blockSize - 1) / blockSize
+
+            // Step 1: FLASH_BEGIN
+            var beginData = Data(count: 16)
+            beginData.withUnsafeMutableBytes { ptr in
+                ptr.storeBytes(of: UInt32(firmware.count).littleEndian, toByteOffset: 0, as: UInt32.self)  // size
+                ptr.storeBytes(of: UInt32(totalBlocks).littleEndian, toByteOffset: 4, as: UInt32.self)     // blocks
+                ptr.storeBytes(of: UInt32(blockSize).littleEndian, toByteOffset: 8, as: UInt32.self)       // block size
+                ptr.storeBytes(of: offset.littleEndian, toByteOffset: 12, as: UInt32.self)                 // offset
             }
 
-            // Step 2: FLASH_DATA blocks
-            self.flashBlocks(firmware: firmware, blockSize: blockSize, blockIndex: 0, totalBlocks: totalBlocks, completion: completion)
+            let beginPacket = self.buildCommand(opcode: Self.ESP_FLASH_BEGIN, data: beginData)
+            self.serialWrite(beginPacket) { [weak self] result in
+                guard let self = self else { return }
+                if case .failure(let err) = result {
+                    self.connectionState = .connected
+                    completion(.failure(err))
+                    return
+                }
+
+                // Step 2: FLASH_DATA blocks
+                self.flashBlocks(firmware: firmware, blockSize: blockSize, blockIndex: 0, totalBlocks: totalBlocks, offset: offset, completion: completion)
+            }
+        }
+
+        if let baud = flashBaud, baud != 115200 {
+            changeBaudrate(newBaud: baud) { [weak self] result in
+                if case .failure(let err) = result {
+                    self?.appendLog("Baudrate switch failed (\(err.localizedDescription)), continuing at 115200")
+                }
+                beginFlash()
+            }
+        } else {
+            beginFlash()
         }
     }
 
-    private func flashBlocks(firmware: Data, blockSize: Int, blockIndex: Int, totalBlocks: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+    private func flashBlocks(firmware: Data, blockSize: Int, blockIndex: Int, totalBlocks: Int, offset: UInt32 = 0x10000, completion: @escaping (Result<Void, Error>) -> Void) {
         guard blockIndex < totalBlocks else {
             // Step 3: FLASH_END
             let endPacket = buildCommand(opcode: Self.ESP_FLASH_END, data: Data([0x00, 0x00, 0x00, 0x00]))
             serialWrite(endPacket) { [weak self] result in
-                self?.connectionState = .connected
-                self?.flashProgress = 1.0
-                self?.appendLog("Flash complete!")
-                completion(result)
+                guard let self = self else { return }
+                if case .failure = result {
+                    self.connectionState = .connected
+                    completion(result)
+                    return
+                }
+
+                // Step 4: MD5 verification
+                self.appendLog("Verifying flash MD5...")
+                self.verifyFlashMD5(address: offset, size: UInt32(firmware.count), expectedData: firmware) { md5Result in
+                    self.connectionState = .connected
+                    self.flashProgress = 1.0
+                    switch md5Result {
+                    case .success(let matched):
+                        if matched {
+                            self.appendLog("Flash complete — verified!")
+                        } else {
+                            self.appendLog("Flash complete — MD5 MISMATCH (may need re-flash)")
+                        }
+                        completion(.success(()))
+                    case .failure(let err):
+                        // MD5 check failed but flash data was written — warn but don't fail
+                        self.appendLog("Flash complete — MD5 verification unavailable: \(err.localizedDescription)")
+                        completion(.success(()))
+                    }
+                }
             }
             return
         }
@@ -596,7 +803,7 @@ class ESP32Service: ObservableObject {
 
             // Next block
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                self.flashBlocks(firmware: firmware, blockSize: blockSize, blockIndex: blockIndex + 1, totalBlocks: totalBlocks, completion: completion)
+                self.flashBlocks(firmware: firmware, blockSize: blockSize, blockIndex: blockIndex + 1, totalBlocks: totalBlocks, offset: offset, completion: completion)
             }
         }
     }
@@ -631,20 +838,46 @@ class ESP32Service: ObservableObject {
             }
             return "Syncing bootloader..."
         case "flash":
-            guard parts.count >= 3 else { return "Usage: esp32 flash <firmware.bin>" }
-            let path = parts[2...].joined(separator: " ")
+            guard parts.count >= 3 else { return "Usage: esp32 flash <firmware.bin> [--baud <rate>]" }
+            // Parse optional --baud flag
+            var flashBaud: UInt32? = nil
+            var fileParts: [String] = []
+            var i = 2
+            while i < parts.count {
+                if parts[i] == "--baud", i + 1 < parts.count, let b = UInt32(parts[i + 1]) {
+                    flashBaud = b
+                    i += 2
+                } else {
+                    fileParts.append(parts[i])
+                    i += 1
+                }
+            }
+            let path = fileParts.joined(separator: " ")
             guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
                 return "Cannot read: \(path)"
             }
-            flash(firmware: data) { [weak self] result in
+            flash(firmware: data, flashBaud: flashBaud) { [weak self] result in
                 switch result {
                 case .success: self?.appendLog("Flash complete")
                 case .failure(let err): self?.appendLog("Flash failed: \(err.localizedDescription)")
                 }
             }
-            return "Flashing \(data.count) bytes..."
+            let baudInfo = flashBaud != nil ? " at \(flashBaud!) baud" : ""
+            return "Flashing \(data.count) bytes\(baudInfo)..."
+        case "baud":
+            guard parts.count >= 3, let baud = UInt32(parts[2]) else {
+                return "Usage: esp32 baud <rate> (e.g. 921600)"
+            }
+            changeBaudrate(newBaud: baud) { [weak self] result in
+                switch result {
+                case .success: self?.appendLog("Baudrate changed to \(baud)")
+                case .failure(let err): self?.appendLog("Baudrate change failed: \(err.localizedDescription)")
+                }
+            }
+            return "Switching baudrate to \(baud)..."
         default:
-            return "Usage: esp32 [status|read|send|sync|flash]"
+            return "Usage: esp32 [status|read|send|sync|flash|baud]"
         }
     }
 }
+#endif

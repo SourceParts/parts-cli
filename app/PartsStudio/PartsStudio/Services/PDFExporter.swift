@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import PDFKit
 
@@ -127,6 +128,112 @@ enum PDFExporter {
         }
     }
 
+    // MARK: - Export Annotations as JSON
+
+    static func exportAnnotations(from store: AnnotationStore) {
+        guard !store.annotations.isEmpty else {
+            showConfirmation("No annotations to export.")
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "Export Annotations"
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "annotations.json"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let data = try JSONEncoder.prettyPrinted.encode(store.annotations)
+            try data.write(to: url, options: .atomic)
+            showConfirmation("Exported \(store.annotations.count) annotation(s) to \(url.lastPathComponent)")
+        } catch {
+            showConfirmation("Failed to export: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Export Labels as CSV
+
+    static func exportLabels(from store: DataLabelStore) {
+        guard !store.labels.isEmpty else {
+            showConfirmation("No labels to export.")
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "Export Labels"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "labels.csv"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        var csv = "page,category,key,value,unit,x,y,width,height,created\n"
+        for label in store.labels {
+            let unit = label.unit ?? ""
+            let escaped = { (s: String) -> String in
+                s.contains(",") || s.contains("\"") ? "\"\(s.replacingOccurrences(of: "\"", with: "\"\""))\"" : s
+            }
+            csv += "\(label.page),\(escaped(label.category)),\(escaped(label.key)),\(escaped(label.value)),\(escaped(unit)),\(label.x),\(label.y),\(label.width),\(label.height),\(label.created)\n"
+        }
+
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+            showConfirmation("Exported \(store.labels.count) label(s) to \(url.lastPathComponent)")
+        } catch {
+            showConfirmation("Failed to export: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Export Current Page as PNG
+
+    static func exportPageAsPNG(from document: PDFDocument?, pageIndex: Int) {
+        guard let document, let page = document.page(at: pageIndex) else {
+            showConfirmation("No page to export.")
+            return
+        }
+
+        let dpi: CGFloat = 300
+        let mediaBox = page.bounds(for: .mediaBox)
+        let scale = dpi / 72.0
+        let pixelWidth = Int(mediaBox.width * scale)
+        let pixelHeight = Int(mediaBox.height * scale)
+
+        let image = NSImage(size: NSSize(width: pixelWidth, height: pixelHeight))
+        image.lockFocus()
+
+        guard let context = NSGraphicsContext.current?.cgContext else {
+            image.unlockFocus()
+            return
+        }
+
+        context.setFillColor(.white)
+        context.fill(CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
+        context.scaleBy(x: scale, y: scale)
+        page.draw(with: .mediaBox, to: context)
+        image.unlockFocus()
+
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            showConfirmation("Failed to render page.")
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "Export Page as PNG"
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "page-\(pageIndex + 1).png"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try pngData.write(to: url, options: .atomic)
+            showConfirmation("Page \(pageIndex + 1) exported at \(dpi) DPI to \(url.lastPathComponent)")
+        } catch {
+            showConfirmation("Failed to save: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Helpers
 
     private static func showConfirmation(_ message: String) {
@@ -138,3 +245,4 @@ enum PDFExporter {
         alert.runModal()
     }
 }
+#endif

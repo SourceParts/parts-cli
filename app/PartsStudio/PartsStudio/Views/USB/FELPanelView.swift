@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct FELPanelView: View {
@@ -171,3 +172,4 @@ struct FELPanelView: View {
         }
     }
 }
+#endif

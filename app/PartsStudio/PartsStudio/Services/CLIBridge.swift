@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Bridges to the `parts` CLI binary for API operations.
@@ -67,3 +68,4 @@ class CLIBridge {
         }
     }
 }
+#endif

@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import WebKit
 
@@ -222,3 +223,4 @@ class FELBridge: NSObject, ObservableObject, WKScriptMessageHandler {
         }
     }
 }
+#endif

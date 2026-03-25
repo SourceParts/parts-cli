@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 enum FELTab: String, CaseIterable {
@@ -1707,3 +1708,4 @@ struct FELDetailView: View {
         return alert.runModal() == .alertFirstButtonReturn
     }
 }
+#endif

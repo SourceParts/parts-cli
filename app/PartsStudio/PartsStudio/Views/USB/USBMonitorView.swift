@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import IOKit
 import IOKit.usb
@@ -657,3 +658,4 @@ struct SerialTerminalView: View {
         }
     }
 }
+#endif

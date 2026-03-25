@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct FELSidebarSection: View {
@@ -64,3 +65,4 @@ struct FELSidebarSection: View {
         .foregroundStyle(appState.showFEL ? Color.accentColor : .primary)
     }
 }
+#endif

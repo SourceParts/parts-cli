@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct ContentView: View {
@@ -13,12 +14,18 @@ struct ContentView: View {
                 DocumentEditorView()
             } else if appState.showFEL {
                 FELDetailView()
+            } else if appState.showESLR {
+                ESLRDetailView()
             } else if appState.showBLE {
                 BLEView()
             } else if appState.showUSBMonitor {
                 USBMonitorView()
             } else if appState.showCredits {
                 CreditsView()
+            } else if appState.showBotInbox {
+                BotInboxView()
+            } else if appState.showIQCCalendar {
+                IQCCalendarView(items: appState.effectiveIQCItems)
             } else if let iqc = appState.selectedIQCItem {
                 detailWithPanel {
                     IQCDetailView(item: iqc)
@@ -35,10 +42,20 @@ struct ContentView: View {
                 CSVViewerView(filePath: asmDoc.path)
             } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".gbrjob") {
                 GerberJobView(filePath: asmDoc.path)
+            } else if appState.showPCBEditor {
+                PCBEditorView()
             } else if let asmDoc = appState.selectedAssemblyDoc, isGerberFile(asmDoc.path) {
                 GerberViewerView(filePaths: gerberFilesInSameDir(asmDoc.path))
             } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".md") {
                 MarkdownFileView(filePath: asmDoc.path)
+            } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".dxf") {
+                DXFViewerView(filePath: asmDoc.path)
+            } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".json") {
+                JSONViewerView(filePath: asmDoc.path)
+            } else if let asmDoc = appState.selectedAssemblyDoc, isSTEPFile(asmDoc.path) {
+                STEPViewerView(filePath: asmDoc.path)
+            } else if let partNumber = appState.selectedPartNumber {
+                PartDetailView(partNumber: partNumber)
             } else if appState.pdfDocument != nil {
                 detailWithPanel {
                     PDFViewerContainer()
@@ -69,6 +86,24 @@ struct ContentView: View {
             if newValue {
                 appState.showExport = false
                 PDFExporter.exportWithRedactions(from: appState.pdfDocument)
+            }
+        }
+        .onChange(of: appState.showExportAnnotations) { _, newValue in
+            if newValue {
+                appState.showExportAnnotations = false
+                PDFExporter.exportAnnotations(from: appState.annotationStore.annotations)
+            }
+        }
+        .onChange(of: appState.showExportLabels) { _, newValue in
+            if newValue {
+                appState.showExportLabels = false
+                PDFExporter.exportLabels(from: appState.dataLabelStore)
+            }
+        }
+        .onChange(of: appState.showExportPagePNG) { _, newValue in
+            if newValue {
+                appState.showExportPagePNG = false
+                PDFExporter.exportPageAsPNG(from: appState.pdfDocument, pageIndex: appState.currentPage)
             }
         }
 
@@ -135,6 +170,11 @@ struct ContentView: View {
         return isKnownGerberExt(ext)
     }
 
+    private func isSTEPFile(_ path: String) -> Bool {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        return ext == "step" || ext == "stp"
+    }
+
     /// Check if a file extension is a known Gerber/drill format (including inner layers g1-g999).
     private func isKnownGerberExt(_ ext: String) -> Bool {
         let fixed: Set<String> = ["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"]
@@ -162,3 +202,4 @@ struct ContentView: View {
         appState.cacheService.reload()
     }
 }
+#endif

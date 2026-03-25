@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import AppKit
 
@@ -262,3 +263,4 @@ struct NativeTableView: NSViewRepresentable {
         }
     }
 }
+#endif

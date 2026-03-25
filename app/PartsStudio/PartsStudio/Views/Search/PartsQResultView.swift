@@ -500,6 +500,7 @@ struct EmptyResultView: View {
 
 struct PartSearchResultView: View {
     let results: QResults
+    @EnvironmentObject var appState: AppState
 
     private var allParts: [[String: AnyCodable]] {
         let p = results.parts ?? []
@@ -521,55 +522,65 @@ struct PartSearchResultView: View {
             }
 
             ForEach(Array(allParts.enumerated()), id: \.offset) { _, part in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(part["mpn"]?.string ?? part["sku"]?.string ?? part["name"]?.string ?? "Unknown")
-                            .font(.body)
-                            .fontWeight(.semibold)
-                        Spacer()
-                        if let price = part["price"]?.string {
-                            Text(price)
+                let mpn = part["mpn"]?.string ?? part["sku"]?.string ?? part["name"]?.string ?? ""
+                Button(action: {
+                    if !mpn.isEmpty { appState.selectPart(mpn) }
+                }) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(mpn.isEmpty ? "Unknown" : mpn)
+                                .font(.body)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if let price = part["price"]?.string {
+                                Text(price)
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(.green)
+                            }
+                            if let stock = part["stock"]?.string, stock != "0" {
+                                Text("\(stock) in stock")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        if let desc = part["description"]?.string {
+                            Text(desc)
                                 .font(.caption)
-                                .fontWeight(.medium)
-                                .foregroundStyle(.green)
-                        }
-                        if let stock = part["stock"]?.string, stock != "0" {
-                            Text("\(stock) in stock")
-                                .font(.caption2)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        HStack(spacing: 8) {
+                            if let mfr = part["manufacturer"]?.string {
+                                Text(mfr)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            if let cat = part["category"]?.string {
+                                Text(cat)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.blue.opacity(0.1))
+                                    .foregroundStyle(.blue)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                            }
+                            if let pkg = part["package"]?.string {
+                                Text(pkg)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                     }
-                    if let desc = part["description"]?.string {
-                        Text(desc)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                    HStack(spacing: 8) {
-                        if let mfr = part["manufacturer"]?.string {
-                            Text(mfr)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        if let cat = part["category"]?.string {
-                            Text(cat)
-                                .font(.caption2)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Color.blue.opacity(0.1))
-                                .foregroundStyle(.blue)
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
-                        }
-                        if let pkg = part["package"]?.string {
-                            Text(pkg)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+                    .contentShape(Rectangle())
                 }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
-                .textSelection(.enabled)
+                .buttonStyle(.plain)
             }
         }
     }

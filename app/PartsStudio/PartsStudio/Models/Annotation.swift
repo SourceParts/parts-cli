@@ -1,5 +1,10 @@
 import Foundation
 import PDFKit
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 enum AnnotationType: String, Codable {
     case redaction
@@ -69,8 +74,8 @@ struct DatasheetAnnotation: Codable, Identifiable {
         case .freeText:
             let annotation = PDFAnnotation(bounds: rect, forType: .freeText, withProperties: nil)
             annotation.contents = text ?? ""
-            annotation.font = NSFont.systemFont(ofSize: fontSize ?? 12)
-            annotation.fontColor = NSColor(hex: color ?? "#FF0000") ?? .red
+            annotation.font = PlatformFont.systemFont(ofSize: fontSize ?? 12)
+            annotation.fontColor = PlatformColor(hex: color ?? "#FF0000") ?? .red
             annotation.color = .clear
             let border = PDFBorder()
             border.lineWidth = 0
@@ -79,7 +84,7 @@ struct DatasheetAnnotation: Codable, Identifiable {
 
         case .highlight:
             let annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
-            annotation.color = NSColor(hex: color ?? "#FFFF0080") ?? NSColor.yellow.withAlphaComponent(0.5)
+            annotation.color = PlatformColor(hex: color ?? "#FFFF0080") ?? PlatformColor.yellow.withAlphaComponent(0.5)
             return annotation
         }
     }
@@ -97,27 +102,4 @@ struct AnnotationFile: Codable {
     }
 }
 
-extension NSColor {
-    convenience init?(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        var hexInt: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&hexInt)
-
-        let r, g, b, a: CGFloat
-        switch hex.count {
-        case 6:
-            r = CGFloat((hexInt >> 16) & 0xFF) / 255
-            g = CGFloat((hexInt >> 8) & 0xFF) / 255
-            b = CGFloat(hexInt & 0xFF) / 255
-            a = 1.0
-        case 8:
-            r = CGFloat((hexInt >> 24) & 0xFF) / 255
-            g = CGFloat((hexInt >> 16) & 0xFF) / 255
-            b = CGFloat((hexInt >> 8) & 0xFF) / 255
-            a = CGFloat(hexInt & 0xFF) / 255
-        default:
-            return nil
-        }
-        self.init(red: r, green: g, blue: b, alpha: a)
-    }
-}
+// NSColor(hex:) / UIColor(hex:) is defined in PlatformTypes.swift

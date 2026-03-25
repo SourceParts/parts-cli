@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import WebKit
 
@@ -8,6 +9,10 @@ struct CreditsView: View {
     @State private var packages: [CreditPackage] = []
     @State private var isLoading = true
     @State private var error: String?
+
+    // Static cache so repeated view appearances don't re-fetch
+    private static var cachedBalance: Int?
+    private static var cachedTier: String?
 
     var body: some View {
         ScrollView {
@@ -81,9 +86,13 @@ struct CreditsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("Retry") { loadData() }
-                        .font(.caption)
-                        .buttonStyle(.link)
+                    Button("Retry") {
+                        Self.cachedBalance = nil
+                        Self.cachedTier = nil
+                        loadData()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.link)
                 }
             }
         }
@@ -190,25 +199,80 @@ struct CreditsView: View {
     // MARK: - Data Loading
 
     private func loadData() {
+        // Return cached balance immediately if available (avoids re-fetch on view reappear)
+        if let cached = Self.cachedBalance {
+            balance = cached
+            tier = Self.cachedTier ?? "developer"
+            packages = CreditPackage.samples
+            isLoading = false
+            error = nil
+            return
+        }
+
         isLoading = true
         error = nil
 
         Task {
+            var fetched = false
+
+            // Try 1: Get balance via CLI
             do {
-                // Get balance via CLI
                 let balanceOutput = try await CLIBridge.shared.run(["credits", "balance", "--json"])
                 if let data = balanceOutput.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let bal = json["balance"] as? Int {
-                    await MainActor.run { balance = bal }
+                    await MainActor.run {
+                        balance = bal
+                        Self.cachedBalance = bal
+                        if let t = json["tier"] as? String {
+                            tier = t
+                            Self.cachedTier = t
+                        }
+                    }
+                    fetched = true
                 }
             } catch {
-                // CLI might not have credits command yet — show placeholder
+                // CLI failed — fall through to API
+            }
+
+            // Try 2: Direct API call with Bearer token from keychain
+            if !fetched {
+                if let token = APIKeychain.loadAPIKey(),
+                   let url = URL(string: "https://api.source.parts/v1/billing/balance") {
+                    var request = URLRequest(url: url)
+                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                    request.timeoutInterval = 10
+
+                    do {
+                        let (data, response) = try await URLSession.shared.data(for: request)
+                        if let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200,
+                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            // Support both flat {"balance": N} and nested {"data": {"balance": N}}
+                            let payload = (json["data"] as? [String: Any]) ?? json
+                            if let bal = payload["balance"] as? Int {
+                                await MainActor.run {
+                                    balance = bal
+                                    Self.cachedBalance = bal
+                                    if let t = payload["tier"] as? String {
+                                        tier = t
+                                        Self.cachedTier = t
+                                    }
+                                }
+                                fetched = true
+                            }
+                        }
+                    } catch {
+                        // API also failed
+                    }
+                }
+            }
+
+            if !fetched {
                 await MainActor.run {
                     self.balance = nil
                     self.tier = "developer"
                     self.packages = CreditPackage.samples
-                    self.error = "Connect your account to view live balance"
+                    self.error = "Could not fetch balance — check connection or API key"
                 }
             }
 
@@ -327,3 +391,4 @@ struct CreditPackageCard: View {
         )
     }
 }
+#endif

@@ -1,5 +1,7 @@
+#if os(macOS)
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct GerberViewerView: View {
     let filePaths: [String]
@@ -11,12 +13,31 @@ struct GerberViewerView: View {
     // Zoom state (driven by NSScrollView magnification)
     @State private var zoomLevel: CGFloat = 1.0
 
-    private var layerNames: [(Int, String, Color)] {
-        let colors: [Color] = [.red, .green, .yellow, .blue, .purple, .cyan, .orange, .pink]
-        return filePaths.enumerated().map { i, path in
-            let name = URL(fileURLWithPath: path).lastPathComponent
-            return (i, name, colors[i % colors.count])
-        }
+    // Per-layer color and alpha
+    @State private var layerColors: [Int: Color] = [:]
+    @State private var layerAlpha: [Int: Double] = [:]
+
+    // Board info from --info
+    @State private var boardBounds: GerberBounds?
+
+    // Coordinates and measurement
+    @State private var mouseCoord: CGPoint?
+    @State private var measureMode = false
+    @State private var measureA: CGPoint?
+    @State private var measureB: CGPoint?
+    @State private var coordinateUnit: CoordinateUnit = .mm
+
+    // Debounced render — avoids re-rendering on every color/alpha drag
+    @State private var renderWorkItem: DispatchWorkItem?
+
+    private static let defaultColors: [Color] = [.red, .green, .yellow, .blue, .purple, .cyan, .orange, .pink]
+
+    private func colorFor(_ index: Int) -> Color {
+        layerColors[index] ?? Self.defaultColors[index % Self.defaultColors.count]
+    }
+
+    private func alphaFor(_ index: Int) -> Double {
+        layerAlpha[index] ?? 1.0
     }
 
     var body: some View {
@@ -44,7 +65,7 @@ struct GerberViewerView: View {
                 Button(action: { zoomLevel = max(0.1, zoomLevel * 0.8) }) {
                     Image(systemName: "minus.magnifyingglass")
                 }
-                .help("Zoom out (Cmd+scroll down)")
+                .help("Zoom out")
                 .keyboardShortcut("-", modifiers: [.command])
 
                 Text("\(Int(zoomLevel * 100))%")
@@ -55,13 +76,52 @@ struct GerberViewerView: View {
                 Button(action: { zoomLevel = min(10.0, zoomLevel * 1.25) }) {
                     Image(systemName: "plus.magnifyingglass")
                 }
-                .help("Zoom in (Cmd+scroll up)")
+                .help("Zoom in")
                 .keyboardShortcut("+", modifiers: [.command])
 
-                Button(action: { zoomLevel = 0 }) { // 0 signals "fit"
+                Button(action: { zoomLevel = 0 }) {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                 }
                 .help("Fit to window")
+
+                Divider()
+                    .frame(height: 20)
+
+                // Measure tool
+                Button(action: {
+                    measureMode.toggle()
+                    if !measureMode { measureA = nil; measureB = nil }
+                }) {
+                    Image(systemName: measureMode ? "ruler.fill" : "ruler")
+                }
+                .help(measureMode ? "Exit measure mode" : "Measure distance")
+                .foregroundStyle(measureMode ? Color.yellow : Color.primary)
+
+                Divider()
+                    .frame(height: 20)
+
+                // Export
+                Menu {
+                    Button("Export PDF...") { exportGerbv(format: "pdf") }
+                    Button("Export SVG...") { exportGerbv(format: "svg") }
+                    Divider()
+                    Button("Save PNG...") {
+                        if let img = renderedImage { saveImage(img) }
+                    }
+                    .disabled(renderedImage == nil)
+                    Button("Copy Image") {
+                        if let img = renderedImage {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.writeObjects([img])
+                        }
+                    }
+                    .disabled(renderedImage == nil)
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 24)
+                .help("Export")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -74,7 +134,12 @@ struct GerberViewerView: View {
                 if let img = renderedImage {
                     ZoomableImageView(
                         image: img,
-                        zoomLevel: $zoomLevel
+                        zoomLevel: $zoomLevel,
+                        boardBounds: boardBounds,
+                        mouseCoord: $mouseCoord,
+                        measureMode: measureMode,
+                        measureA: $measureA,
+                        measureB: $measureB
                     )
                     .contextMenu {
                         Button("Copy Image") {
@@ -110,7 +175,7 @@ struct GerberViewerView: View {
                     .frame(maxWidth: .infinity)
                 }
 
-                // Layer list
+                // Layer list with color picker and alpha
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Layers (\(filePaths.count))")
                         .font(.caption)
@@ -123,36 +188,82 @@ struct GerberViewerView: View {
 
                     ScrollView {
                         VStack(alignment: .leading, spacing: 2) {
-                            ForEach(layerNames, id: \.0) { index, name, color in
-                                HStack(spacing: 6) {
-                                    Image(systemName: disabledLayers.contains(index) ? "eye.slash" : "eye")
-                                        .font(.caption2)
-                                        .foregroundStyle(disabledLayers.contains(index) ? .tertiary : color)
-                                        .frame(width: 14)
-                                    Circle()
-                                        .fill(disabledLayers.contains(index) ? color.opacity(0.2) : color)
-                                        .frame(width: 10, height: 10)
-                                    Text(name)
-                                        .font(.caption2)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                        .foregroundStyle(disabledLayers.contains(index) ? .tertiary : .primary)
-                                    Spacer()
+                            ForEach(Array(filePaths.enumerated()), id: \.offset) { index, path in
+                                let name = URL(fileURLWithPath: path).lastPathComponent
+                                let disabled = disabledLayers.contains(index)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 6) {
+                                        // Visibility toggle
+                                        Button(action: {
+                                            if disabledLayers.contains(index) {
+                                                disabledLayers.remove(index)
+                                            } else {
+                                                disabledLayers.insert(index)
+                                            }
+                                            render()
+                                        }) {
+                                            Image(systemName: disabled ? "eye.slash" : "eye.fill")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(disabled ? .gray : colorFor(index))
+                                                .frame(width: 16, height: 16)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help(disabled ? "Show layer" : "Hide layer")
+
+                                        // Color swatch + picker
+                                        ColorPicker("", selection: Binding(
+                                            get: { colorFor(index) },
+                                            set: { layerColors[index] = $0; debouncedRender() }
+                                        ), supportsOpacity: false)
+                                        .labelsHidden()
+                                        .frame(width: 24, height: 18)
+                                        .disabled(disabled)
+                                        .opacity(disabled ? 0.3 : 1.0)
+                                        .help("Layer color — click to change")
+
+                                        Text(name)
+                                            .font(.caption2)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                            .foregroundStyle(disabled ? .tertiary : .primary)
+                                        Spacer()
+
+                                        // Alpha percentage
+                                        if !disabled {
+                                            Text("\(Int(alphaFor(index) * 100))%")
+                                                .font(.system(size: 9, design: .monospaced))
+                                                .foregroundStyle(.tertiary)
+                                                .frame(width: 30, alignment: .trailing)
+                                        }
+                                    }
+
+                                    // Alpha slider — only when enabled
+                                    if !disabled {
+                                        Slider(value: Binding(
+                                            get: { alphaFor(index) },
+                                            set: { layerAlpha[index] = $0; debouncedRender() }
+                                        ), in: 0.05...1.0)
+                                        .controlSize(.mini)
+                                        .tint(colorFor(index))
+                                        .padding(.leading, 22)
+                                    }
                                 }
                                 .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    if disabledLayers.contains(index) {
-                                        disabledLayers.remove(index)
-                                    } else {
-                                        disabledLayers.insert(index)
-                                    }
-                                    render()
-                                }
+                                .padding(.vertical, 3)
                                 .contextMenu {
                                     Button("Reveal in Finder") {
                                         NSWorkspace.shared.selectFile(filePaths[index], inFileViewerRootedAtPath: "")
+                                    }
+                                    Divider()
+                                    Button("Solo This Layer") {
+                                        disabledLayers = Set(filePaths.indices.filter { $0 != index })
+                                        render()
+                                    }
+                                    Button("Reset Color") {
+                                        layerColors.removeValue(forKey: index)
+                                        layerAlpha.removeValue(forKey: index)
+                                        render()
                                     }
                                 }
                             }
@@ -169,7 +280,9 @@ struct GerberViewerView: View {
                             .padding(.horizontal, 10)
                             .disabled(disabledLayers.isEmpty)
 
-                            Button("Render Selected") {
+                            Button("Reset Colors") {
+                                layerColors.removeAll()
+                                layerAlpha.removeAll()
                                 render()
                             }
                             .font(.caption2)
@@ -179,11 +292,69 @@ struct GerberViewerView: View {
                         .padding(.vertical, 6)
                     }
                 }
-                .frame(width: 200)
+                .frame(width: 220)
                 .background(Color(nsColor: .controlBackgroundColor))
             }
+
+            Divider()
+
+            // Status bar
+            HStack(spacing: 12) {
+                if let coord = mouseCoord {
+                    Text(String(format: "X: %.3f  Y: %.3f %@",
+                                coord.x * coordinateUnit.fromInch,
+                                coord.y * coordinateUnit.fromInch,
+                                coordinateUnit.suffix))
+                }
+
+                if let a = measureA, let b = measureB {
+                    let dx = (b.x - a.x) * coordinateUnit.fromInch
+                    let dy = (b.y - a.y) * coordinateUnit.fromInch
+                    let dist = sqrt(dx * dx + dy * dy)
+                    Text(String(format: "Dist: %.3f %@", dist, coordinateUnit.suffix))
+                        .foregroundStyle(.yellow)
+                } else if measureMode {
+                    Text(measureA == nil ? "Click first point" : "Click second point")
+                        .foregroundStyle(.yellow)
+                }
+
+                Spacer()
+
+                if let bounds = boardBounds {
+                    let w = (bounds.right - bounds.left) * coordinateUnit.fromInch
+                    let h = (bounds.top - bounds.bottom) * coordinateUnit.fromInch
+                    Text(String(format: "%.1f x %.1f %@", w, h, coordinateUnit.suffix))
+                }
+
+                Text("\(filePaths.count - disabledLayers.count)/\(filePaths.count) layers")
+
+                Picker("", selection: $coordinateUnit) {
+                    ForEach(CoordinateUnit.allCases, id: \.self) { unit in
+                        Text(unit.rawValue).tag(unit)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 120)
+            }
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .onAppear { render() }
+    }
+
+    // MARK: - Debounced Render
+
+    /// Schedule a render after a short delay. Cancels any pending render.
+    /// Use for continuous adjustments (color picker, alpha slider) to avoid
+    /// firing a subprocess on every drag tick.
+    private func debouncedRender(delay: TimeInterval = 0.4) {
+        renderWorkItem?.cancel()
+        let item = DispatchWorkItem { [self] in render() }
+        renderWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     // MARK: - Render
@@ -192,17 +363,17 @@ struct GerberViewerView: View {
         isRendering = true
         error = nil
 
-        let paths = filePaths.enumerated().compactMap { i, path in
-            disabledLayers.contains(i) ? nil : path
-        }
+        // Build layer index mapping: which original indices are enabled
+        let enabledIndices = filePaths.indices.filter { !disabledLayers.contains($0) }
+        let paths = enabledIndices.map { filePaths[$0] }
 
         Task {
             do {
-                let img = try await renderGerber(paths: paths)
+                let result = try await renderGerber(paths: paths, enabledIndices: enabledIndices)
                 await MainActor.run {
-                    renderedImage = img
+                    renderedImage = result.image
+                    boardBounds = result.bounds
                     isRendering = false
-                    // Signal fit-to-window on first render
                     zoomLevel = 0
                 }
             } catch {
@@ -214,36 +385,119 @@ struct GerberViewerView: View {
         }
     }
 
-    private func renderGerber(paths: [String]) async throws -> NSImage {
+    private struct RenderResult {
+        let image: NSImage
+        let bounds: GerberBounds?
+    }
+
+    private func renderGerber(paths: [String], enabledIndices: [Int]) async throws -> RenderResult {
         let renderTool = findGerbvRender()
         guard let tool = renderTool else {
             throw NSError(domain: "", code: 1, userInfo: [NSLocalizedDescriptionKey: "gerbv-render not found.\nInstall with: brew install gerbv\nThen build tools/gerbv-render.c"])
         }
 
         let outputPath = NSTemporaryDirectory() + "parts_gerber_\(UUID().uuidString).png"
-        var args = [outputPath, "2400", "1600", "--bg", "000000"]
+        var args = [outputPath, "2400", "1600", "--bg", "000000", "--info"]
+
+        // Add per-layer color and alpha overrides
+        for (renderIdx, origIdx) in enabledIndices.enumerated() {
+            if let color = layerColors[origIdx] {
+                let hex = colorToHex(color)
+                args.append(contentsOf: ["--color", "\(renderIdx)", hex])
+            }
+            if let alpha = layerAlpha[origIdx] {
+                let alphaVal = Int(alpha * 65535)
+                args.append(contentsOf: ["--alpha", "\(renderIdx)", "\(alphaVal)"])
+            }
+        }
+
         args.append(contentsOf: paths)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tool)
         process.arguments = args
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
 
         try process.run()
         process.waitUntilExit()
 
+        // Parse board bounds from stderr
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrStr = String(data: stderrData, encoding: .utf8) ?? ""
+        let bounds = parseInfoJSON(stderrStr)
+
         guard process.terminationStatus == 0,
               let img = NSImage(contentsOfFile: outputPath) else {
-            let errData = pipe.fileHandleForReading.readDataToEndOfFile()
-            let errStr = String(data: errData, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "", code: 1, userInfo: [NSLocalizedDescriptionKey: errStr])
+            throw NSError(domain: "", code: 1, userInfo: [NSLocalizedDescriptionKey: stderrStr.isEmpty ? "Render failed" : stderrStr])
         }
 
         try? FileManager.default.removeItem(atPath: outputPath)
-        return img
+        return RenderResult(image: img, bounds: bounds)
     }
+
+    // MARK: - Color Helpers
+
+    private func colorToHex(_ color: Color) -> String {
+        let nsColor = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+        let r = Int(nsColor.redComponent * 255)
+        let g = Int(nsColor.greenComponent * 255)
+        let b = Int(nsColor.blueComponent * 255)
+        return String(format: "%02x%02x%02x", r, g, b)
+    }
+
+    // MARK: - Info Parsing
+
+    private func parseInfoJSON(_ stderr: String) -> GerberBounds? {
+        // Find JSON line in stderr (may have warnings before it)
+        for line in stderr.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}"),
+                  let data = trimmed.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            return GerberBounds(
+                left: json["left"] as? Double ?? 0,
+                right: json["right"] as? Double ?? 0,
+                bottom: json["bottom"] as? Double ?? 0,
+                top: json["top"] as? Double ?? 0
+            )
+        }
+        return nil
+    }
+
+    // MARK: - Export via gerbv CLI
+
+    private func exportGerbv(format: String) {
+        let gerbvPath = "/opt/homebrew/bin/gerbv"
+        guard FileManager.default.fileExists(atPath: gerbvPath) else { return }
+
+        let contentType: UTType = format == "pdf" ? .pdf : .svg
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [contentType]
+        panel.nameFieldStringValue = "gerber_export.\(format)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        var args = ["--export=\(format)", "--output=\(url.path)", "--background=#000000"]
+        // gerbv expects -f COLOR before each file
+        for (i, path) in filePaths.enumerated() {
+            if disabledLayers.contains(i) { continue }
+            let hex = colorToHex(colorFor(i))
+            let alpha = String(format: "%02x", Int(alphaFor(i) * 255))
+            args.append("-f")
+            args.append("#\(hex)\(alpha)")
+            args.append(path)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: gerbvPath)
+        process.arguments = args
+        try? process.run()
+        process.waitUntilExit()
+    }
+
+    // MARK: - Helpers
 
     private func findGerbvRender() -> String? {
         let paths = [
@@ -269,15 +523,31 @@ struct GerberViewerView: View {
     }
 }
 
+// MARK: - Board Bounds
+
+struct GerberBounds {
+    let left: Double
+    let right: Double
+    let bottom: Double
+    let top: Double
+}
+
 // MARK: - Draggable Scroll View
 
 /// NSScrollView subclass that supports click-drag panning.
-/// Click and drag with trackpad or mouse to pan the canvas.
+/// When measureMode is true, clicks report coordinates instead of panning.
 class DraggableScrollView: NSScrollView {
     private var isPanning = false
     private var panOrigin: NSPoint = .zero
+    var measureMode = false
+    var onMeasureClick: ((NSPoint) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
+        if measureMode, let docView = documentView {
+            let viewPoint = docView.convert(event.locationInWindow, from: nil)
+            onMeasureClick?(viewPoint)
+            return
+        }
         isPanning = true
         panOrigin = event.locationInWindow
         NSCursor.closedHand.push()
@@ -298,22 +568,58 @@ class DraggableScrollView: NSScrollView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        isPanning = false
-        NSCursor.pop()
+        if isPanning {
+            isPanning = false
+            NSCursor.pop()
+        }
     }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .openHand)
+        addCursorRect(bounds, cursor: measureMode ? .crosshair : .openHand)
+    }
+}
+
+// MARK: - Tracking Image View
+
+/// NSImageView subclass that tracks mouse movement and reports position.
+class TrackingImageView: NSImageView {
+    var onMouseMoved: ((NSPoint) -> Void)?
+    var onMouseExited: (() -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil
+        )
+        addTrackingArea(area)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        onMouseMoved?(point)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onMouseExited?()
     }
 }
 
 // MARK: - Zoomable Image View (NSScrollView-based)
 
 /// NSViewRepresentable wrapping NSScrollView with magnification support.
-/// Provides native macOS zoom (Cmd+scroll, trackpad pinch) and click-drag pan.
+/// Provides native macOS zoom (Cmd+scroll, trackpad pinch), click-drag pan,
+/// mouse coordinate tracking, and measurement tool.
 struct ZoomableImageView: NSViewRepresentable {
     let image: NSImage
     @Binding var zoomLevel: CGFloat
+    var boardBounds: GerberBounds?
+    @Binding var mouseCoord: CGPoint?
+    var measureMode: Bool
+    @Binding var measureA: CGPoint?
+    @Binding var measureB: CGPoint?
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = DraggableScrollView()
@@ -326,15 +632,28 @@ struct ZoomableImageView: NSViewRepresentable {
         scrollView.drawsBackground = true
         scrollView.autohidesScrollers = true
 
-        let imageView = NSImageView()
+        let imageView = TrackingImageView()
         imageView.image = image
         imageView.imageScaling = .scaleNone
         imageView.frame = NSRect(origin: .zero, size: image.size)
 
+        // Mouse tracking → board coordinates
+        let coordinator = context.coordinator
+        imageView.onMouseMoved = { point in
+            coordinator.handleMouseMoved(point)
+        }
+        imageView.onMouseExited = {
+            DispatchQueue.main.async { coordinator.parent.mouseCoord = nil }
+        }
+
+        // Measure clicks
+        scrollView.onMeasureClick = { point in
+            coordinator.handleMeasureClick(point)
+        }
+
         scrollView.documentView = imageView
         context.coordinator.scrollView = scrollView
 
-        // Observe magnification changes to sync back to SwiftUI
         NotificationCenter.default.addObserver(
             context.coordinator,
             selector: #selector(Coordinator.magnificationDidChange(_:)),
@@ -342,7 +661,6 @@ struct ZoomableImageView: NSViewRepresentable {
             object: scrollView
         )
 
-        // Fit to window on first display
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             context.coordinator.fitToWindow(scrollView)
         }
@@ -351,15 +669,20 @@ struct ZoomableImageView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        // Update image if changed
-        if let imageView = scrollView.documentView as? NSImageView, imageView.image !== image {
+        if let imageView = scrollView.documentView as? TrackingImageView, imageView.image !== image {
             imageView.image = image
             imageView.frame = NSRect(origin: .zero, size: image.size)
         }
 
-        // Handle zoom level changes from toolbar buttons
+        // Sync measure mode to scroll view
+        if let dsv = scrollView as? DraggableScrollView {
+            if dsv.measureMode != measureMode {
+                dsv.measureMode = measureMode
+                scrollView.window?.invalidateCursorRects(for: scrollView)
+            }
+        }
+
         if zoomLevel == 0 {
-            // Signal to fit to window
             context.coordinator.fitToWindow(scrollView)
         } else if abs(scrollView.magnification - zoomLevel) > 0.01 {
             scrollView.magnification = zoomLevel
@@ -399,5 +722,42 @@ struct ZoomableImageView: NSViewRepresentable {
                 self.parent.zoomLevel = fitScale
             }
         }
+
+        /// Convert pixel position in the image view to board coordinates (inches).
+        private func pixelToBoardCoord(_ point: NSPoint) -> CGPoint? {
+            guard let bounds = parent.boardBounds else { return nil }
+            let imgW = parent.image.size.width
+            let imgH = parent.image.size.height
+            guard imgW > 0, imgH > 0 else { return nil }
+
+            let boardX = bounds.left + (Double(point.x) / Double(imgW)) * (bounds.right - bounds.left)
+            // Y is inverted: top of image = top of board
+            let boardY = bounds.top - (Double(point.y) / Double(imgH)) * (bounds.top - bounds.bottom)
+            return CGPoint(x: boardX, y: boardY)
+        }
+
+        func handleMouseMoved(_ point: NSPoint) {
+            guard let coord = pixelToBoardCoord(point) else { return }
+            DispatchQueue.main.async {
+                self.parent.mouseCoord = coord
+            }
+        }
+
+        func handleMeasureClick(_ point: NSPoint) {
+            guard let coord = pixelToBoardCoord(point) else { return }
+            DispatchQueue.main.async {
+                if self.parent.measureA == nil {
+                    self.parent.measureA = coord
+                    self.parent.measureB = nil
+                } else if self.parent.measureB == nil {
+                    self.parent.measureB = coord
+                } else {
+                    // Reset: start new measurement
+                    self.parent.measureA = coord
+                    self.parent.measureB = nil
+                }
+            }
+        }
     }
 }
+#endif

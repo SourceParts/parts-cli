@@ -37,7 +37,77 @@ struct IQCSidebarSectionHeader: View {
             if appState.iqcService.isLoading {
                 ProgressView()
                     .controlSize(.mini)
+            } else if let progress = appState.iqcService.uploadProgress {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text(progress)
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                }
             } else {
+                // Calendar view
+                Button(action: {
+                    appState.showIQCCalendar.toggle()
+                    if appState.showIQCCalendar {
+                        appState.selectedIQCItem = nil
+                        appState.selectedECO = nil
+                        appState.selectedDatasheet = nil
+                        appState.selectedAssemblyDoc = nil
+                        appState.pdfDocument = nil
+                        appState.showFEL = false
+                    }
+                }) {
+                    Image(systemName: appState.showIQCCalendar ? "calendar.circle.fill" : "calendar")
+                        .font(.caption2)
+                        .foregroundStyle(appState.showIQCCalendar ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("IQC timeline calendar")
+
+                // Upload images
+                Button(action: {
+                    Task { await appState.iqcService.uploadImages() }
+                }) {
+                    Image(systemName: "photo.badge.plus")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Upload images to IQC ingest")
+
+                // Load local JSON reports
+                Button(action: {
+                    appState.iqcService.loadLocalReports()
+                }) {
+                    Image(systemName: "folder")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Load local IQC JSON reports")
+
+                // Open X-ray analysis in JSON viewer
+                if let xrayPath = appState.iqcService.xrayAnalysisPath {
+                    Button(action: {
+                        let doc = AssemblyDocument(
+                            id: xrayPath, name: "xray_analysis_results.json",
+                            category: "IQC", path: xrayPath, size: 0, revision: "")
+                        appState.selectedAssemblyDoc = doc
+                        appState.selectedIQCItem = nil
+                        appState.selectedECO = nil
+                        appState.selectedDatasheet = nil
+                        appState.pdfDocument = nil
+                    }) {
+                        Image(systemName: "waveform.path.ecg.rectangle")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("View X-ray analysis results (JSON)")
+                }
+
+                // Refresh from API
                 Button(action: {
                     Task { await appState.iqcService.fetchItems() }
                 }) {
@@ -48,6 +118,36 @@ struct IQCSidebarSectionHeader: View {
                 .buttonStyle(.plain)
                 .help("Refresh IQC items from API")
             }
+        }
+    }
+}
+
+// MARK: - Error Banner
+
+struct IQCErrorBanner: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        if let error = appState.iqcService.error {
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+                Button(action: { appState.iqcService.error = nil }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Color.orange.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
         }
     }
 }

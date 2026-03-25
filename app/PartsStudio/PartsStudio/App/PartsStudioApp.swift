@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import AppKit
 
@@ -23,6 +24,7 @@ struct PartsStudioApp: App {
         WindowGroup("Parts Studio") {
             ContentView()
                 .environmentObject(appState)
+                .preferredColorScheme(appState.appearanceMode.colorScheme)
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1200, height: 800)
@@ -34,6 +36,7 @@ struct PartsStudioApp: App {
                 .keyboardShortcut("i", modifiers: [.command])
             }
             ToolCommands(appState: appState)
+            AppearanceCommands(appState: appState)
             FELCommands(appState: appState)
             UpdateCommands(updater: appState.updater)
         }
@@ -65,6 +68,38 @@ struct ToolCommands: Commands {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(appState.selectedDatasheet == nil)
+
+            Divider()
+
+            Button("Export Annotations (JSON)...") {
+                appState.showExportAnnotations = true
+            }
+            .disabled(appState.annotationStore.annotations.annotations.isEmpty)
+
+            Button("Export Labels (CSV)...") {
+                appState.showExportLabels = true
+            }
+            .disabled(appState.dataLabelStore.labels.isEmpty)
+
+            Button("Export Page as PNG...") {
+                appState.showExportPagePNG = true
+            }
+            .disabled(appState.pdfDocument == nil)
+        }
+    }
+}
+
+struct AppearanceCommands: Commands {
+    @ObservedObject var appState: AppState
+
+    var body: some Commands {
+        CommandMenu("Appearance") {
+            ForEach(AppearanceMode.allCases, id: \.rawValue) { mode in
+                Button(mode.label) {
+                    appState.appearanceMode = mode
+                }
+                .disabled(appState.appearanceMode == mode)
+            }
         }
     }
 }
@@ -134,3 +169,4 @@ struct UpdateCommands: Commands {
         }
     }
 }
+#endif

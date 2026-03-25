@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Local HTTP server on localhost:9801 for remote control of the FEL console.
@@ -13,6 +14,10 @@ class FELConsoleServer {
     var onCommand: ((String) -> String)?
     var getLog: (() -> [String])?
     var getDeviceJSON: (() -> String)?
+    var onReload: (() -> String)?
+    var onSetRevision: ((String) -> String)?
+    var onNavigate: ((String) -> String)?
+    var getESLRDeviceJSON: (() -> String)?
 
     init() {}
 
@@ -161,12 +166,35 @@ class FELConsoleServer {
             let json = getDeviceJSON?() ?? "{}"
             return ("200 OK", "application/json", json)
 
+        case "/eslr":
+            let json = getESLRDeviceJSON?() ?? "{\"connected\":false}"
+            return ("200 OK", "application/json", json)
+
         case "/status":
             return ("200 OK", "application/json", "{\"status\":\"ok\",\"port\":\(port)}")
 
+        case "/reload":
+            let result = onReload?() ?? "{\"error\":\"no handler\"}"
+            return ("200 OK", "application/json", result)
+
+        case "/revision":
+            if let newRev = queryMap["set"], !newRev.isEmpty {
+                let result = onSetRevision?(newRev) ?? "{\"error\":\"no handler\"}"
+                return ("200 OK", "application/json", result)
+            }
+            let config = PartsConfig.shared
+            return ("200 OK", "application/json", "{\"revision\":\"\(config.revision)\",\"assembly\":\"\(config.assemblyPath)\",\"fab_release\":\"\(config.fabReleasePath)\"}")
+
+        case "/navigate":
+            guard let view = queryMap["view"], !view.isEmpty else {
+                return ("400 Bad Request", "application/json", "{\"error\":\"missing ?view= parameter. Options: fel, iqc, eco, usb, credits, search, datasheets\"}")
+            }
+            let result = onNavigate?(view) ?? "{\"error\":\"no handler\"}"
+            return ("200 OK", "application/json", result)
+
         case "/":
             let help = """
-            {"endpoints":{"/cmd?q=<command>":"Execute console command","/log":"Get console log","/device":"Get device info","/status":"Server status"}}
+            {"endpoints":{"/cmd?q=<command>":"Execute console command","/log":"Get console log","/device":"Get FEL device info","/eslr":"Get ESLR radio info","/status":"Server status","/reload":"Reload config and refresh assembly","/revision":"Show current revision","/revision?set=EVT1":"Switch board variant","/navigate?view=<name>":"Navigate to view (fel, eslr, iqc, eco, usb, credits, search, datasheets)"}}
             """
             return ("200 OK", "application/json", help)
 
@@ -175,3 +203,4 @@ class FELConsoleServer {
         }
     }
 }
+#endif

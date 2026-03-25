@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import PDFKit
 
@@ -28,6 +29,61 @@ struct PDFViewerContainer: View {
                     }
                 )
                 .id(annotationRefresh)
+            }
+
+            // Bottom file info bar
+            if let ds = appState.selectedDatasheet {
+                Divider()
+                HStack {
+                    Image(systemName: "doc.text")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(ds.path)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button(action: {
+                        NSWorkspace.shared.selectFile(ds.path, inFileViewerRootedAtPath: "")
+                    }) {
+                        Image(systemName: "folder")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Reveal in Finder")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(nsColor: .windowBackgroundColor))
+            } else if let asmDoc = appState.selectedAssemblyDoc {
+                Divider()
+                HStack {
+                    Image(systemName: "doc.text")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(asmDoc.path)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button(action: {
+                        NSWorkspace.shared.selectFile(asmDoc.path, inFileViewerRootedAtPath: "")
+                    }) {
+                        Image(systemName: "folder")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Reveal in Finder")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(nsColor: .windowBackgroundColor))
             }
         }
     }
@@ -165,3 +221,4 @@ struct PageJumpField: View {
         }
     }
 }
+#endif

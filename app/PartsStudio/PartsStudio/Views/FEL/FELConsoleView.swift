@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct FELConsoleView: View {
@@ -318,3 +319,4 @@ private func hexDumpFormatted(_ data: Data, base: UInt32) -> String {
     }
     return lines.joined(separator: "\n")
 }
+#endif
