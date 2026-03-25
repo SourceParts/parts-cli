@@ -24,10 +24,32 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.3.app/Contents/Developer
+        run: |
+          # List available Xcode versions and pick the best one
+          ls /Applications/Xcode*.app/Contents/Developer/usr/bin/xcodebuild 2>/dev/null | head -5
+          # Prefer 16.2 (has bundled simulators), fall back to latest
+          if [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+          elif [ -d "/Applications/Xcode_16.3.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.3.app/Contents/Developer
+          else
+            sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | tail -1)/Contents/Developer"
+          fi
 
       - name: Show Xcode version
         run: xcodebuild -version
+
+      - name: Install iOS Simulator runtime (if needed)
+        run: |
+          # Check if any iOS simulator runtime is available
+          if ! xcrun simctl list runtimes | grep -q "iOS.*Available"; then
+            echo "No iOS runtime found, installing..."
+            xcodebuild -downloadPlatform iOS || true
+            xcrun simctl list runtimes
+          else
+            echo "iOS runtime available:"
+            xcrun simctl list runtimes | grep iOS
+          fi
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -35,12 +57,19 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Determine simulator destination
+        run: |
+          # Find an available iPhone simulator to use as build destination
+          SIM_NAME=$(xcrun simctl list devices available | grep iPhone | head -1 | sed 's/^ *//' | sed 's/ (.*//')
+          echo "SIM_DEST=platform=iOS Simulator,name=$SIM_NAME" >> $GITHUB_ENV
+          echo "Building for: $SIM_NAME"
+
       - name: Build iOS (Simulator)
         run: |
           xcodebuild build \
             -project PartsStudio.xcodeproj \
             -scheme PartsStudio-iOS \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination "$SIM_DEST" \
             -configuration Debug \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
@@ -70,13 +99,16 @@ jobs:
 
       - name: Boot simulator
         run: |
+          echo "Available simulators:"
+          xcrun simctl list devices available | grep iPhone | head -10
+          # Pick the first available iPhone
           DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c "
           import json, sys
           data = json.load(sys.stdin)
-          for runtime, devices in data['devices'].items():
+          for runtime, devices in sorted(data['devices'].items(), reverse=True):
               if 'iOS' in runtime:
                   for d in devices:
-                      if 'iPhone 16' in d['name'] and d['isAvailable']:
+                      if 'iPhone' in d['name'] and d['isAvailable']:
                           print(d['udid'])
                           sys.exit(0)
           sys.exit(1)
@@ -84,7 +116,6 @@ jobs:
           echo "DEVICE_ID=$DEVICE_ID" >> $GITHUB_ENV
           echo "Booting simulator $DEVICE_ID..."
           xcrun simctl boot "$DEVICE_ID" || true
-          # Wait for boot to complete
           xcrun simctl bootstatus "$DEVICE_ID" -b
 
       - name: Install app on simulator
@@ -97,36 +128,32 @@ jobs:
         run: |
           mkdir -p screenshots
 
+          # Set a clean status bar for screenshots
+          xcrun simctl status_bar "$DEVICE_ID" override \
+            --time "9:41" \
+            --batteryState charged \
+            --batteryLevel 100 \
+            --cellularMode active \
+            --cellularBars 4 \
+            --wifiBars 3 2>/dev/null || true
+
           # Launch the app
           echo "Launching Parts Studio..."
           xcrun simctl launch "$DEVICE_ID" parts.studio.ios
           sleep 5
 
           # Screenshot 1: Initial view (Datasheets tab)
-          echo "Capturing: Datasheets tab"
-          xcrun simctl io "$DEVICE_ID" screenshot screenshots/01-datasheets-tab.png
+          echo "Capturing: Initial view"
+          xcrun simctl io "$DEVICE_ID" screenshot screenshots/01-initial-view.png
 
-          # Tap "Parts" tab (3rd tab) — use simctl UI interaction
-          # Tab bar is at the bottom; Parts tab is roughly at x=50% y=95% on iPhone 16
-          # iPhone 16 logical resolution: 393x852
-          xcrun simctl io "$DEVICE_ID" tap 197 820 2>/dev/null || true
-          sleep 2
-          echo "Capturing: Parts Search tab"
-          xcrun simctl io "$DEVICE_ID" screenshot screenshots/02-parts-search-tab.png
+          # Record a short video (3 seconds) to show the app running
+          echo "Recording short video..."
+          xcrun simctl io "$DEVICE_ID" recordVideo --time 3 screenshots/app-demo.mp4 2>/dev/null &
+          RECORD_PID=$!
+          sleep 4
+          kill $RECORD_PID 2>/dev/null || true
 
-          # Tap "ECO / IQC" tab (2nd tab) — roughly x=25% y=95%
-          xcrun simctl io "$DEVICE_ID" tap 98 820 2>/dev/null || true
-          sleep 2
-          echo "Capturing: ECO/IQC tab"
-          xcrun simctl io "$DEVICE_ID" screenshot screenshots/03-eco-iqc-tab.png
-
-          # Tap "BLE" tab (4th tab) — roughly x=75% y=95%
-          xcrun simctl io "$DEVICE_ID" tap 295 820 2>/dev/null || true
-          sleep 2
-          echo "Capturing: BLE tab"
-          xcrun simctl io "$DEVICE_ID" screenshot screenshots/04-ble-tab.png
-
-          echo "Screenshots captured:"
+          echo "Screenshots and recording captured:"
           ls -la screenshots/
 
       - name: Shutdown simulator
@@ -147,5 +174,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-screenshots
-          path: app/PartsStudio/screenshots/*.png
+          path: |
+            app/PartsStudio/screenshots/*.png
+            app/PartsStudio/screenshots/*.mp4
           retention-days: 30
