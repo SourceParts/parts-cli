@@ -24,3 +24,17 @@ type PricePartResult struct {
 	Total      float64 `json:"total"`
 	Available  bool    `json:"available"`
 }
+
+// AllUnavailable returns true if every part in the estimate came back
+// with zero price and unavailable status.
+func (d *PriceData) AllUnavailable() bool {
+	if len(d.Parts) == 0 {
+		return true
+	}
+	for _, p := range d.Parts {
+		if p.Available || p.UnitPrice > 0 {
+			return false
+		}
+	}
+	return true
+}

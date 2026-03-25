@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -509,6 +510,140 @@ func writeMinimalKicadPro(dir, name string) error {
 }
 
 // =============================================================================
+// DXF — Board outline info
+// =============================================================================
+
+var edaDXF = &cobra.Command{
+	Use:   "dxf <file.dxf>",
+	Short: "Parse DXF board outline and report dimensions",
+	Long: `Read a DXF file (board outline / mechanical drawing) and report
+bounding box dimensions, entity count, and layer information.
+
+Supports LINE, ARC, CIRCLE, LWPOLYLINE, and POLYLINE entities.`,
+	Args:    cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` eda dxf board_outline.dxf`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dxfFile := args[0]
+		data, err := os.ReadFile(dxfFile)
+		if err != nil {
+			return fmt.Errorf("cannot read file: %w", err)
+		}
+
+		result := parseDXF(string(data), filepath.Base(dxfFile))
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+
+		if jsonOutput {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(result)
+		}
+
+		// Human-readable output
+		fmt.Printf("File:       %s\n", result.File)
+		fmt.Printf("Size:       %.2f x %.2f mm\n", result.Width, result.Height)
+		fmt.Printf("Bounds X:   [%.2f, %.2f]\n", result.MinX, result.MaxX)
+		fmt.Printf("Bounds Y:   [%.2f, %.2f]\n", result.MinY, result.MaxY)
+		fmt.Printf("Entities:   %d\n", result.Entities)
+		if len(result.Layers) > 0 {
+			fmt.Printf("Layers:     %s\n", strings.Join(result.Layers, ", "))
+		}
+		return nil
+	},
+}
+
+type dxfResult struct {
+	File     string   `json:"file"`
+	Width    float64  `json:"width"`
+	Height   float64  `json:"height"`
+	MinX     float64  `json:"min_x"`
+	MaxX     float64  `json:"max_x"`
+	MinY     float64  `json:"min_y"`
+	MaxY     float64  `json:"max_y"`
+	Entities int      `json:"entities"`
+	Layers   []string `json:"layers"`
+}
+
+func parseDXF(content, filename string) dxfResult {
+	lines := strings.Split(content, "\n")
+	var xs, ys []float64
+	layerSet := make(map[string]bool)
+	entities := 0
+
+	geometryTypes := map[string]bool{
+		"LINE": true, "ARC": true, "CIRCLE": true,
+		"LWPOLYLINE": true, "POLYLINE": true, "ELLIPSE": true,
+	}
+
+	i := 0
+	for i < len(lines) {
+		code := strings.TrimSpace(lines[i])
+		if geometryTypes[code] {
+			entities++
+			// Scan entity for coordinates and layer
+			j := i + 1
+			for j < len(lines) {
+				gc := strings.TrimSpace(lines[j])
+				if gc == "0" {
+					break // next entity
+				}
+				if j+1 < len(lines) {
+					val := strings.TrimSpace(lines[j+1])
+					switch gc {
+					case "8": // layer name
+						layerSet[val] = true
+					case "10", "11": // X coordinates
+						if f, err := strconv.ParseFloat(val, 64); err == nil {
+							xs = append(xs, f)
+						}
+					case "20", "21": // Y coordinates
+						if f, err := strconv.ParseFloat(val, 64); err == nil {
+							ys = append(ys, f)
+						}
+					}
+				}
+				j++
+			}
+			i = j
+		} else {
+			i++
+		}
+	}
+
+	result := dxfResult{File: filename, Entities: entities}
+
+	if len(xs) > 0 && len(ys) > 0 {
+		result.MinX = xs[0]
+		result.MaxX = xs[0]
+		for _, x := range xs {
+			if x < result.MinX {
+				result.MinX = x
+			}
+			if x > result.MaxX {
+				result.MaxX = x
+			}
+		}
+		result.MinY = ys[0]
+		result.MaxY = ys[0]
+		for _, y := range ys {
+			if y < result.MinY {
+				result.MinY = y
+			}
+			if y > result.MaxY {
+				result.MaxY = y
+			}
+		}
+		result.Width = result.MaxX - result.MinX
+		result.Height = result.MaxY - result.MinY
+	}
+
+	for layer := range layerSet {
+		result.Layers = append(result.Layers, layer)
+	}
+
+	return result
+}
+
+// =============================================================================
 // init — Register subcommands and flags
 // =============================================================================
 
@@ -529,10 +664,13 @@ func init() {
 	edaImportAltium.Flags().String("revision", "EVT1", "Revision label for directory structure")
 	edaImportAltium.Flags().Bool("no-git", false, "Skip git init")
 
+	edaDXF.Flags().Bool("json", false, "Output as JSON")
+
 	// Wire up subcommands
 	edaImport.AddCommand(edaImportAltium)
 
 	EDA.AddCommand(edaERC)
 	EDA.AddCommand(edaDRC)
 	EDA.AddCommand(edaImport)
+	EDA.AddCommand(edaDXF)
 }
