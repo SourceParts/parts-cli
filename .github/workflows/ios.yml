@@ -1,0 +1,65 @@
+name: Build iOS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/PartsStudio/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/PartsStudio/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: app/PartsStudio
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app/Contents/Developer
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build iOS (Simulator)
+        run: |
+          xcodebuild build \
+            -project PartsStudio.xcodeproj \
+            -scheme PartsStudio-iOS \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tail -50
+
+      - name: Collect app bundle
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "Parts Studio.app" -path "*/Debug-iphonesimulator/*" | head -1)
+          if [ -n "$APP_PATH" ]; then
+            mkdir -p build-output
+            cp -R "$APP_PATH" build-output/
+            cd build-output && zip -r PartsStudio-iOS-Simulator.zip "Parts Studio.app"
+          else
+            echo "App bundle not found in DerivedData"
+            exit 1
+          fi
+
+      - name: Upload iOS app
+        uses: actions/upload-artifact@v4
+        with:
+          name: parts-studio-ios-simulator
+          path: app/PartsStudio/build-output/PartsStudio-iOS-Simulator.zip
+          retention-days: 30
