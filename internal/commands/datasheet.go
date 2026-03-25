@@ -85,7 +85,7 @@ Use --alias to set a friendly name for quick retrieval.`,
 
 		// Upload to API and register alias when --project is provided
 		if dsProject != "" && dsAlias != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 			defer cancel()
 			if err := Client.RegisterDatasheetAlias(ctx, dsAlias, contentHash, localPath, filepath.Base(localPath), dsProject, os.Stdout); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: remote registration failed: %v\n", err)
