@@ -37,13 +37,20 @@ jobs:
 
       - name: Build iOS (Simulator)
         run: |
+          set -o pipefail
           xcodebuild build \
             -project PartsStudio.xcodeproj \
             -scheme PartsStudio-iOS \
             -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tail -50
+            2>&1 | tee /tmp/xcodebuild.log | grep -E "error:|warning:.*error|BUILD|Linking|Compiling" || true
+          # Show errors if build failed
+          if grep -q "BUILD FAILED" /tmp/xcodebuild.log; then
+            echo "=== COMPILE ERRORS ==="
+            grep "error:" /tmp/xcodebuild.log | head -50
+            exit 1
+          fi
 
       - name: Collect app bundle
         run: |
