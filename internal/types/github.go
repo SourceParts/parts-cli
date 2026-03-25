@@ -91,3 +91,21 @@ type GitHubCommitAuthor struct {
 	Email    string `json:"email"`
 	Username string `json:"username"`
 }
+
+// ECNFrontmatter represents the YAML frontmatter of an ECN markdown file.
+type ECNFrontmatter struct {
+	ID              string
+	Title           string
+	Type            string
+	Category        string
+	Disposition     string
+	Severity        string
+	Status          string
+	Source          string
+	Affected        string
+	CrossReferences []string
+	CreatedDate     string
+	UpdatedDate     string
+	Author          string
+	ThreadID        string
+}
