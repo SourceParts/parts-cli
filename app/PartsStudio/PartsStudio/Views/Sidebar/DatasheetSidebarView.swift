@@ -10,6 +10,7 @@ struct DatasheetSidebarView: View {
     @AppStorage("sidebar.datasheetsExpanded") private var datasheetsExpanded: Bool = true
     @AppStorage("sidebar.iqcExpanded") private var iqcExpanded: Bool = true
     @AppStorage("sidebar.ecoExpanded") private var ecoExpanded: Bool = true
+    @AppStorage("sidebar.reportsExpanded") private var reportsExpanded: Bool = true
     @AppStorage("sidebar.assemblyExpanded") private var assemblyExpanded: Bool = true
 
     private var projectStore: ProjectStore { appState.projectStore }
@@ -154,6 +155,17 @@ struct DatasheetSidebarView: View {
                             ECOSidebarSection()
                         } label: {
                             Label("ECO Tracker (\(appState.ecoStore.documents.count))", systemImage: "doc.badge.gearshape")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
+                    }
+
+                    // Reports
+                    if !appState.reportsStore.documents.isEmpty {
+                        DisclosureGroup(isExpanded: $reportsExpanded) {
+                            ReportsSidebarSection()
+                        } label: {
+                            Label("Reports (\(appState.reportsStore.documents.count))", systemImage: "chart.bar.doc.horizontal")
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }

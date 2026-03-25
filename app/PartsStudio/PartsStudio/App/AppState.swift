@@ -94,6 +94,7 @@ class AppState: ObservableObject {
     @Published var showExportPagePNG: Bool = false
     @Published var sidebarSearchText: String = ""
     @Published var selectedECO: ECODocument?
+    @Published var selectedReport: ReportDocument?
     @Published var selectedIQCItem: IQCItem?
     @Published var showCredits: Bool = false
     @Published var showUSBMonitor: Bool = false
@@ -103,6 +104,8 @@ class AppState: ObservableObject {
     @Published var selectedPartNumber: String?
     @AppStorage("showRightPanel") var showRightPanel: Bool = true
     @AppStorage("lastActiveView") var lastActiveView: String = ""
+    @AppStorage("lastSelectedECO") var lastSelectedECOId: String = ""
+    @AppStorage("lastSelectedReport") var lastSelectedReportId: String = ""
     @AppStorage("appearanceMode") var appearanceModeRaw: String = "system"
 
     var appearanceMode: AppearanceMode {
@@ -115,6 +118,7 @@ class AppState: ObservableObject {
     let projectStore = ProjectStore()
     let dataLabelStore = DataLabelStore()
     let ecoStore = ECOStore()
+    let reportsStore = ReportsStore()
     let ecoChatStore = ECOChatStore()
     #if os(macOS)
     let updater = Updater()
@@ -125,6 +129,7 @@ class AppState: ObservableObject {
     let eslrService = ESLRService()
     let deviceTracker = DeviceStateTracker()
     let consoleServer = FELConsoleServer()
+    let pcbVersionStore = PCBVersionStore()
     #endif
     let assemblyStore = AssemblyStore()
     let voiceService = VoiceService()
@@ -558,12 +563,18 @@ class AppState: ObservableObject {
                 self?.assemblyStore.loadDocuments()
                 return "{\"revision\":\"\(config.revision)\",\"assembly\":\"\(config.assemblyPath)\",\"fab_release\":\"\(config.fabReleasePath)\"}"
             }
-            consoleServer.onNavigate = { [weak self] view in
+            consoleServer.onNavigate = { [weak self] navKey in
                 guard let self = self else { return "{\"error\":\"no app state\"}" }
                 DispatchQueue.main.async {
+                    // Parse "view:id" format — id is optional
+                    let parts = navKey.split(separator: ":", maxSplits: 1)
+                    let view = String(parts[0])
+                    let itemId: String? = parts.count > 1 ? String(parts[1]) : nil
+
                     // Clear all view state first
                     self.selectedDatasheet = nil
                     self.selectedECO = nil
+                    self.selectedReport = nil
                     self.selectedIQCItem = nil
                     self.selectedAssemblyDoc = nil
                     self.pdfDocument = nil
@@ -586,14 +597,32 @@ class AppState: ObservableObject {
                     case "ble":
                         self.showBLE = true
                     case "iqc":
-                        // Select first IQC item to show IQC view
                         if let first = self.effectiveIQCItems.first {
                             self.selectedIQCItem = first
                         }
                     case "eco":
-                        // Select first ECO document
-                        if let first = self.ecoStore.documents.first {
+                        // Explicit ID → select that document
+                        // No ID → restore last-viewed, or fall back to first
+                        if let id = itemId,
+                           let doc = self.ecoStore.documents.first(where: { $0.id == id }) {
+                            self.selectedECO = doc
+                            self.lastSelectedECOId = id
+                        } else if !self.lastSelectedECOId.isEmpty,
+                           let last = self.ecoStore.documents.first(where: { $0.id == self.lastSelectedECOId }) {
+                            self.selectedECO = last
+                        } else if let first = self.ecoStore.documents.first {
                             self.selectedECO = first
+                        }
+                    case "reports":
+                        if let id = itemId,
+                           let doc = self.reportsStore.documents.first(where: { $0.id == id }) {
+                            self.selectedReport = doc
+                            self.lastSelectedReportId = id
+                        } else if !self.lastSelectedReportId.isEmpty,
+                           let last = self.reportsStore.documents.first(where: { $0.id == self.lastSelectedReportId }) {
+                            self.selectedReport = last
+                        } else if let first = self.reportsStore.documents.first {
+                            self.selectedReport = first
                         }
                     case "search", "partsq":
                         break // clearing everything shows PartsQView (default)
@@ -610,7 +639,25 @@ class AppState: ObservableObject {
                     NSApplication.shared.activate(ignoringOtherApps: true)
                     NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
                 }
-                return "{\"navigated\":\"\(view)\"}"
+                return "{\"navigated\":\"\(navKey)\"}"
+            }
+            consoleServer.getPCBVersionsJSON = { [weak self] in
+                guard let versions = self?.pcbVersionStore.versions else { return "[]" }
+                let entries = versions.map { v in
+                    "{\"id\":\"\(v.id)\",\"name\":\"\(v.name)\",\"layers\":\(v.layerCount),\"path\":\"\(v.basePath)\"}"
+                }
+                return "[\(entries.joined(separator: ","))]"
+            }
+            consoleServer.getPCBLayersJSON = { [weak self] versionId in
+                guard let version = self?.pcbVersionStore.versions.first(where: { $0.id == versionId }) else {
+                    return "[]"
+                }
+                let entries = version.layers.map { layer in
+                    let visible = layer.isVisible ? "true" : "false"
+                    let escaped = layer.filePath.replacingOccurrences(of: "\"", with: "\\\"")
+                    return "{\"name\":\"\(layer.displayName)\",\"type\":\"\(layer.type.rawValue)\",\"visible\":\(visible),\"file\":\"\(escaped)\"}"
+                }
+                return "[\(entries.joined(separator: ","))]"
             }
             consoleServer.start()
 

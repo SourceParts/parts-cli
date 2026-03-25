@@ -12,6 +12,19 @@ struct ECODetailView: View {
         }
     }
 
+    private var statusColor: Color {
+        let s = document.status.uppercased()
+        if s == "OPEN" { return .green }
+        if s.contains("APPROVED") { return .mint }
+        if s.contains("PENDING") || s.contains("BLOCK") || s.contains("AWAIT") { return .purple }
+        if s.contains("CLOSED") || s.contains("CLOSE") { return .indigo }
+        if s.contains("REVIEW") { return .orange }
+        if s == "IMPLEMENTED" { return .blue }
+        if s.contains("REJECT") { return .red }
+        if s.contains("DEFER") { return .yellow }
+        return .secondary
+    }
+
     private var severityColor: Color {
         switch document.severity.uppercased() {
         case "CRITICAL": return .red
@@ -43,6 +56,23 @@ struct ECODetailView: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                 Spacer()
+                Button { NotificationCenter.default.post(name: .markdownZoomOut, object: nil) } label: {
+                    Image(systemName: "minus.magnifyingglass").font(.caption2)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary).help("Zoom Out")
+
+                Button { NotificationCenter.default.post(name: .markdownZoomReset, object: nil) } label: {
+                    Image(systemName: "1.magnifyingglass").font(.caption2)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary).help("Reset Zoom")
+
+                Button { NotificationCenter.default.post(name: .markdownZoomIn, object: nil) } label: {
+                    Image(systemName: "plus.magnifyingglass").font(.caption2)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary).help("Zoom In")
+
+                Divider().frame(height: 12)
+
                 Button(action: {
                     NSWorkspace.shared.selectFile(document.filePath, inFileViewerRootedAtPath: "")
                 }) {
@@ -95,8 +125,8 @@ struct ECODetailView: View {
                     .fontWeight(.medium)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Color.secondary.opacity(0.15))
-                    .foregroundStyle(.secondary)
+                    .background(statusColor.opacity(0.15))
+                    .foregroundStyle(statusColor)
                     .clipShape(Capsule())
             }
 
@@ -115,6 +145,9 @@ struct ECODetailView: View {
 extension Notification.Name {
     /// Posted when a component reference is clicked in an ECN. UserInfo: ["ref": "U5"]
     static let navigateToComponent = Notification.Name("partsStudioNavigateToComponent")
+    static let markdownZoomIn = Notification.Name("partsStudioMarkdownZoomIn")
+    static let markdownZoomOut = Notification.Name("partsStudioMarkdownZoomOut")
+    static let markdownZoomReset = Notification.Name("partsStudioMarkdownZoomReset")
 }
 
 #if os(iOS)
@@ -133,6 +166,7 @@ struct MarkdownView: View {
 #else
 /// Renders markdown as styled HTML using WKWebView.
 /// Component references (U5, R12, C3, etc.) are auto-linked and clickable.
+/// Supports zoom via .markdownZoomIn / .markdownZoomOut / .markdownZoomReset notifications.
 struct MarkdownView: NSViewRepresentable {
     let markdown: String
 
@@ -143,12 +177,15 @@ struct MarkdownView: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = context.coordinator
+        context.coordinator.webView = webView
+        context.coordinator.startListening()
         loadMarkdown(into: webView)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         webView.navigationDelegate = context.coordinator
+        context.coordinator.webView = webView
         loadMarkdown(into: webView)
     }
 
@@ -157,11 +194,42 @@ struct MarkdownView: NSViewRepresentable {
         webView.loadHTMLString(html, baseURL: nil)
     }
 
-    /// Coordinator intercepts parts:// links for component navigation.
+    /// Coordinator intercepts parts:// links and handles zoom notifications.
     class Coordinator: NSObject, WKNavigationDelegate {
+        weak var webView: WKWebView?
+        private var zoomLevel: Double = 1.0
+        private var observers: [Any] = []
+
+        func startListening() {
+            guard observers.isEmpty else { return }
+            let nc = NotificationCenter.default
+            observers.append(nc.addObserver(forName: .markdownZoomIn, object: nil, queue: .main) { [weak self] _ in
+                self?.adjustZoom(by: 0.1)
+            })
+            observers.append(nc.addObserver(forName: .markdownZoomOut, object: nil, queue: .main) { [weak self] _ in
+                self?.adjustZoom(by: -0.1)
+            })
+            observers.append(nc.addObserver(forName: .markdownZoomReset, object: nil, queue: .main) { [weak self] _ in
+                self?.zoomLevel = 1.0
+                self?.applyZoom()
+            })
+        }
+
+        private func adjustZoom(by delta: Double) {
+            zoomLevel = max(0.5, min(3.0, zoomLevel + delta))
+            applyZoom()
+        }
+
+        private func applyZoom() {
+            webView?.evaluateJavaScript("document.body.style.zoom = '\(zoomLevel)'", completionHandler: nil)
+        }
+
+        deinit {
+            observers.forEach { NotificationCenter.default.removeObserver($0) }
+        }
+
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             if let url = navigationAction.request.url, url.scheme == "parts" {
-                // parts://ref/U5 → navigate to component U5 in schematic
                 if url.host == "ref", let ref = url.pathComponents.last, ref != "/" {
                     NotificationCenter.default.post(
                         name: .navigateToComponent,

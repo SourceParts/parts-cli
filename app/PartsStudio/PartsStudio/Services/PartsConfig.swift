@@ -6,6 +6,7 @@ struct PartsConfig {
     let projectPath: String
     let revision: String
     let ecoPath: String
+    let reportsPath: String
     let bomPath: String
     let pcbPath: String
     let iqcPath: String
@@ -152,6 +153,7 @@ struct PartsConfig {
             projectPath: projectPath,
             revision: rev,
             ecoPath: "\(projectPath)/\(values["directories.eco"] ?? "ECO")",
+            reportsPath: "\(projectPath)/\(values["directories.reports"] ?? "Reports")",
             bomPath: "\(projectPath)/\(values["directories.bom"] ?? "BOM")",
             pcbPath: "\(projectPath)/\(values["directories.pcb"] ?? "PCB")",
             iqcPath: "\(projectPath)/\(values["directories.iqc"] ?? "IQC")",
@@ -173,6 +175,7 @@ struct PartsConfig {
             projectPath: projectPath,
             revision: rev,
             ecoPath: "\(projectPath)/ECO",
+            reportsPath: "\(projectPath)/Reports",
             bomPath: "\(projectPath)/BOM",
             pcbPath: "\(projectPath)/PCB",
             iqcPath: "\(projectPath)/IQC",

@@ -18,6 +18,8 @@ class FELConsoleServer {
     var onSetRevision: ((String) -> String)?
     var onNavigate: ((String) -> String)?
     var getESLRDeviceJSON: (() -> String)?
+    var getPCBVersionsJSON: (() -> String)?
+    var getPCBLayersJSON: ((String) -> String)?
 
     init() {}
 
@@ -187,14 +189,27 @@ class FELConsoleServer {
 
         case "/navigate":
             guard let view = queryMap["view"], !view.isEmpty else {
-                return ("400 Bad Request", "application/json", "{\"error\":\"missing ?view= parameter. Options: fel, iqc, eco, usb, credits, search, datasheets\"}")
+                return ("400 Bad Request", "application/json", "{\"error\":\"missing ?view= parameter. Options: fel, iqc, eco, reports, usb, credits, search, datasheets\"}")
             }
-            let result = onNavigate?(view) ?? "{\"error\":\"no handler\"}"
+            let itemId = queryMap["id"]
+            let navKey = itemId != nil ? "\(view):\(itemId!)" : view
+            let result = onNavigate?(navKey) ?? "{\"error\":\"no handler\"}"
             return ("200 OK", "application/json", result)
+
+        case "/pcb/versions":
+            let json = getPCBVersionsJSON?() ?? "[]"
+            return ("200 OK", "application/json", json)
+
+        case "/pcb/layers":
+            guard let version = queryMap["version"], !version.isEmpty else {
+                return ("400 Bad Request", "application/json", "{\"error\":\"missing ?version= parameter\"}")
+            }
+            let json = getPCBLayersJSON?(version) ?? "[]"
+            return ("200 OK", "application/json", json)
 
         case "/":
             let help = """
-            {"endpoints":{"/cmd?q=<command>":"Execute console command","/log":"Get console log","/device":"Get FEL device info","/eslr":"Get ESLR radio info","/status":"Server status","/reload":"Reload config and refresh assembly","/revision":"Show current revision","/revision?set=EVT1":"Switch board variant","/navigate?view=<name>":"Navigate to view (fel, eslr, iqc, eco, usb, credits, search, datasheets)"}}
+            {"endpoints":{"/cmd?q=<command>":"Execute console command","/log":"Get console log","/device":"Get FEL device info","/eslr":"Get ESLR radio info","/status":"Server status","/reload":"Reload config and refresh assembly","/revision":"Show current revision","/revision?set=EVT1":"Switch board variant","/navigate?view=<name>":"Navigate to view (fel, eslr, iqc, eco, reports, usb, credits, search, datasheets)","/pcb/versions":"List discovered PCB versions","/pcb/layers?version=<id>":"List layers for a PCB version"}}
             """
             return ("200 OK", "application/json", help)
 

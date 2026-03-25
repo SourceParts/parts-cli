@@ -9,7 +9,9 @@ struct ECOSidebarSection: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     appState.selectedECO = doc
+                    appState.lastSelectedECOId = doc.id
                     appState.selectedDatasheet = nil
+                    appState.selectedReport = nil
                     appState.selectedIQCItem = nil
                     appState.selectedAssemblyDoc = nil
                     appState.pdfDocument = nil
@@ -50,15 +52,16 @@ struct ECODocumentRow: View {
     }
 
     private var statusColor: Color {
-        switch document.status.uppercased() {
-        case "OPEN": return .green
-        case "CLOSED": return .gray
-        case "IN-REVIEW", "IN REVIEW", "REVIEW": return .orange
-        case "IMPLEMENTED": return .blue
-        case "REJECTED": return .red
-        case "DEFERRED": return .yellow
-        default: return .secondary
-        }
+        let s = document.status.uppercased()
+        if s == "OPEN" { return .green }
+        if s.contains("APPROVED") { return .mint }
+        if s.contains("PENDING") || s.contains("BLOCK") || s.contains("AWAIT") { return .purple }
+        if s.contains("CLOSED") || s.contains("CLOSE") { return .indigo }
+        if s.contains("REVIEW") { return .orange }
+        if s == "IMPLEMENTED" { return .blue }
+        if s.contains("REJECT") { return .red }
+        if s.contains("DEFER") { return .yellow }
+        return .secondary
     }
 
     private var severityColor: Color {

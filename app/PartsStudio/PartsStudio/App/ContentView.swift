@@ -4,8 +4,21 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @State private var showDevConsole = false
+    @State private var isLoading = true
 
     var body: some View {
+        ZStack {
+        if isLoading {
+            SplashView()
+                .transition(.opacity)
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        withAnimation(.easeOut(duration: 0.4)) {
+                            isLoading = false
+                        }
+                    }
+                }
+        } else {
         ZStack(alignment: .top) {
         NavigationSplitView {
             DatasheetSidebarView()
@@ -32,6 +45,8 @@ struct ContentView: View {
                 } panel: {
                     ECOChatView(document: ECODocument(id: iqc.code, type: .ecn, title: "IQC Report", severity: "", status: iqc.status, filePath: "", body: ""))
                 }
+            } else if let report = appState.selectedReport {
+                ReportDetailView(document: report)
             } else if let eco = appState.selectedECO {
                 detailWithPanel {
                     ECODetailView(document: eco)
@@ -114,11 +129,13 @@ struct ContentView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(100)
             }
-        } // ZStack
+        } // inner ZStack
         .onKeyPress("`") {
             withAnimation(.easeOut(duration: 0.2)) { showDevConsole.toggle() }
             return .handled
         }
+        } // else (main content)
+        } // outer ZStack
     }
 
     @ViewBuilder
