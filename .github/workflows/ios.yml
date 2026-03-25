@@ -54,11 +54,15 @@ jobs:
 
       - name: Collect app bundle
         run: |
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "Parts Studio.app" -path "*/Debug-iphonesimulator/*" | head -1)
+          echo "Searching DerivedData for .app bundles..."
+          find ~/Library/Developer/Xcode/DerivedData -name "*.app" -path "*iphonesimulator*" 2>/dev/null
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" -path "*Debug-iphonesimulator*" | head -1)
           if [ -n "$APP_PATH" ]; then
+            APP_NAME=$(basename "$APP_PATH")
+            echo "Found: $APP_PATH"
             mkdir -p build-output
             cp -R "$APP_PATH" build-output/
-            cd build-output && zip -r PartsStudio-iOS-Simulator.zip "Parts Studio.app"
+            cd build-output && zip -r PartsStudio-iOS-Simulator.zip "$APP_NAME"
           else
             echo "App bundle not found in DerivedData"
             exit 1
