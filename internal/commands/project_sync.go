@@ -151,9 +151,11 @@ func runProjectSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Update config
-	ghcli.WritePartsConfigField(cwd, "last_synced", result.LastSynced)
-	ghcli.WritePartsConfigField(cwd, "last_remote_sha", remoteSHA)
+	// Update local sync state (.parts/sync.json — gitignored)
+	ghcli.WriteSyncState(cwd, &ghcli.SyncState{
+		LastSynced:    result.LastSynced,
+		LastRemoteSHA: remoteSHA,
+	})
 
 	// Output
 	if jsonOut {
