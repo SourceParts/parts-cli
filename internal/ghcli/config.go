@@ -1,6 +1,7 @@
 package ghcli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +11,13 @@ import (
 type PartsConfig struct {
 	Repo          string
 	DefaultBranch string
-	LastSynced    string
-	LastRemoteSHA string
+}
+
+// SyncState holds per-user local sync state from .parts/sync.json.
+// This file is gitignored — it tracks the user's own view of the remote.
+type SyncState struct {
+	LastSynced    string `json:"last_synced"`
+	LastRemoteSHA string `json:"last_remote_sha"`
 }
 
 // ReadPartsConfig walks up from dir to find .parts/config.yaml and
@@ -30,8 +36,38 @@ func ReadPartsConfig(dir string) *PartsConfig {
 	return parseGitHubSection(string(data))
 }
 
+// ReadSyncState reads .parts/sync.json (local-only state).
+func ReadSyncState(dir string) *SyncState {
+	partsDir := findPartsDir(dir)
+	if partsDir == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(partsDir, "sync.json"))
+	if err != nil {
+		return nil
+	}
+	var s SyncState
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil
+	}
+	return &s
+}
+
+// WriteSyncState writes .parts/sync.json (local-only state).
+func WriteSyncState(dir string, state *SyncState) error {
+	partsDir := findPartsDir(dir)
+	if partsDir == "" {
+		return nil
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(partsDir, "sync.json"), data, 0644)
+}
+
 // WritePartsConfigField updates a single field under the github: section
-// in .parts/config.yaml. Creates the section if it doesn't exist.
+// in .parts/config.yaml.
 func WritePartsConfigField(dir, key, value string) error {
 	configPath := findPartsConfig(dir)
 	if configPath == "" {
@@ -46,7 +82,6 @@ func WritePartsConfigField(dir, key, value string) error {
 	content := string(data)
 	yamlKey := "  " + key + ":"
 
-	// Find and replace the line
 	lines := strings.Split(content, "\n")
 	found := false
 	inGithub := false
@@ -71,24 +106,36 @@ func WritePartsConfigField(dir, key, value string) error {
 	}
 
 	if !found {
-		return nil // key not in config, skip
+		return nil
 	}
 
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
-func findPartsConfig(dir string) string {
+func findPartsDir(dir string) string {
 	current := dir
 	for {
-		config := filepath.Join(current, ".parts", "config.yaml")
-		if _, err := os.Stat(config); err == nil {
-			return config
+		partsDir := filepath.Join(current, ".parts")
+		if info, err := os.Stat(partsDir); err == nil && info.IsDir() {
+			return partsDir
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
 			break
 		}
 		current = parent
+	}
+	return ""
+}
+
+func findPartsConfig(dir string) string {
+	partsDir := findPartsDir(dir)
+	if partsDir == "" {
+		return ""
+	}
+	config := filepath.Join(partsDir, "config.yaml")
+	if _, err := os.Stat(config); err == nil {
+		return config
 	}
 	return ""
 }
@@ -103,7 +150,6 @@ func parseGitHubSection(content string) *PartsConfig {
 			inGithub = true
 			continue
 		}
-		// Exit github section when we hit a non-indented non-empty line
 		if inGithub && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && trimmed != "" {
 			break
 		}
@@ -124,10 +170,6 @@ func parseGitHubSection(content string) *PartsConfig {
 			cfg.Repo = val
 		case "default_branch":
 			cfg.DefaultBranch = val
-		case "last_synced":
-			cfg.LastSynced = val
-		case "last_remote_sha":
-			cfg.LastRemoteSHA = val
 		}
 	}
 
