@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/SourceParts/parts-cli/internal/types"
@@ -723,6 +724,53 @@ func (c *Client) ProjectECO(ctx context.Context, projectID string, data types.EC
 	return err
 }
 
+// RegisterDatasheetAlias uploads a PDF to the API chunking endpoint with a SKU alias,
+// so it becomes available via GET /datasheets/{sku}/chunks.
+func (c *Client) RegisterDatasheetAlias(ctx context.Context, alias, contentHash, s3Key, filename, projectID string, w io.Writer) error {
+	filePath := s3Key // s3Key is reused as local file path here
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer f.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return fmt.Errorf("copy file: %w", err)
+	}
+
+	_ = writer.WriteField("sku", alias)
+	_ = writer.WriteField("chunk_pages", "5")
+	_ = writer.WriteField("include_toc", "true")
+	writer.Close()
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, domain.Endpoint_DatasheetChunk, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload failed: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(w, "Registered alias %q — datasheet chunks cached on CDN\n", alias)
+	return nil
+}
+
 // ProjectTransfer transfers project ownership to another user by email
 func (c *Client) ProjectTransfer(ctx context.Context, projectID, email string, w io.Writer) error {
 	url := fmt.Sprintf(domain.Endpoint_ProjectTransfer, projectID)
@@ -1206,7 +1254,9 @@ func (c *Client) Balance(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// Price estimates pricing for a part at a given quantity
+// Price estimates pricing for a part at a given quantity.
+// Falls back to search results when the cost estimate endpoint returns
+// all-zero / unavailable pricing.
 func (c *Client) Price(ctx context.Context, partNumber string, opts types.PriceOptions, w io.Writer) error {
 	url := domain.Endpoint_CostsEstimate
 	c.Logger.Printf("Request URL: %s", url)
@@ -1251,8 +1301,111 @@ func (c *Client) Price(ctx context.Context, partNumber string, opts types.PriceO
 		return err
 	}
 
-	_, err = io.Copy(w, res.Body)
+	// Buffer the response so we can inspect it before writing
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response: %w", err)
+	}
+
+	var priceResp types.PriceResponse
+	if err := json.Unmarshal(body, &priceResp); err != nil {
+		// Can't parse — write raw response through
+		_, writeErr := w.Write(body)
+		return writeErr
+	}
+
+	// If the cost estimate returned useful data, use it directly
+	if !priceResp.Data.AllUnavailable() {
+		_, err = w.Write(body)
+		return err
+	}
+
+	// Fallback: search for the part and use the search result price
+	c.Logger.Printf("Cost estimate unavailable for %s — falling back to search", partNumber)
+
+	unitPrice, stockQty, searchErr := c.searchPartPrice(ctx, partNumber)
+	if searchErr != nil {
+		c.Logger.Printf("Search fallback failed: %v", searchErr)
+		// Return the original (zero) response
+		_, err = w.Write(body)
+		return err
+	}
+
+	// Build enriched response from search data
+	total := unitPrice * float64(quantity)
+	enriched := types.PriceResponse{
+		Status: "success",
+		Data: types.PriceData{
+			Parts: []types.PricePartResult{
+				{
+					PartNumber: partNumber,
+					Quantity:   quantity,
+					UnitPrice:  unitPrice,
+					Total:      total,
+					Available:  stockQty > 0,
+				},
+			},
+			TotalEstimate: total,
+			Currency:      currency,
+		},
+	}
+
+	enrichedJSON, err := json.Marshal(enriched)
+	if err != nil {
+		_, writeErr := w.Write(body)
+		return writeErr
+	}
+
+	_, err = w.Write(enrichedJSON)
 	return err
+}
+
+// searchPartPrice queries the search endpoint for a part and returns
+// the unit price and stock quantity from the first result with pricing.
+func (c *Client) searchPartPrice(ctx context.Context, partNumber string) (float64, int, error) {
+	searchURL := *c.Endpoint_Search
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	values := req.URL.Query()
+	values.Add("q", partNumber)
+	values.Add("limit", "5")
+	req.URL.RawQuery = values.Encode()
+
+	c.Logger.Printf("Search fallback for pricing: %s", partNumber)
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("search request failed: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return 0, 0, err
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error reading search response: %w", err)
+	}
+
+	var searchResp types.SearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return 0, 0, fmt.Errorf("error parsing search response: %w", err)
+	}
+
+	for _, p := range searchResp.Data.Parts {
+		if p.Price != nil && *p.Price != "" {
+			price, parseErr := strconv.ParseFloat(*p.Price, 64)
+			if parseErr == nil && price > 0 {
+				return price, p.StockQuantity, nil
+			}
+		}
+	}
+
+	return 0, 0, fmt.Errorf("no priced results found for %s", partNumber)
 }
 
 // CreditsBalance fetches the current sourcing credit balance

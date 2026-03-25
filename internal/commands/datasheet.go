@@ -1,12 +1,14 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/SourceParts/parts-cli/internal/storage"
@@ -81,8 +83,14 @@ Use --alias to set a friendly name for quick retrieval.`,
 			fmt.Printf("Alias:   %s -> sha256_%s/%s\n", dsAlias, contentHash, filepath.Base(localPath))
 		}
 
-		// Show scoped remote path if team/project provided
-		if dsProject != "" {
+		// Upload to API and register alias when --project is provided
+		if dsProject != "" && dsAlias != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+			if err := Client.RegisterDatasheetAlias(ctx, dsAlias, contentHash, localPath, filepath.Base(localPath), dsProject, os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: remote registration failed: %v\n", err)
+			}
+		} else if dsProject != "" {
 			user := os.Getenv("USER")
 			scope := storage.NewScope(user, dsTeam, dsProject)
 			remotePath := scope.DatasheetPath(contentHash, filepath.Base(localPath))

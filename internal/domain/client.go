@@ -83,6 +83,9 @@ type Client interface {
 	QSMD(ctx context.Context, code string, w io.Writer) error
 	QResistorColors(ctx context.Context, bands string, w io.Writer) error
 
+	// Datasheets
+	RegisterDatasheetAlias(ctx context.Context, alias, contentHash, s3Key, filename, projectID string, w io.Writer) error
+
 	// Local operations
 	Init(ctx context.Context, w io.Writer) error
 	Log(ctx context.Context, input string, w io.Writer) error
