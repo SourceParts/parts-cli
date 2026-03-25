@@ -85,6 +85,7 @@ type Client interface {
 
 	// Datasheets
 	RegisterDatasheetAlias(ctx context.Context, alias, contentHash, s3Key, filename, projectID string, w io.Writer) error
+	PollDatasheetChunkStatus(ctx context.Context, jobID string, w io.Writer) error
 
 	// Local operations
 	Init(ctx context.Context, w io.Writer) error
