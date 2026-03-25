@@ -117,6 +117,20 @@ extension Notification.Name {
     static let navigateToComponent = Notification.Name("partsStudioNavigateToComponent")
 }
 
+#if os(iOS)
+/// Simple markdown fallback for iOS — renders as plain text in a ScrollView.
+struct MarkdownView: View {
+    let markdown: String
+    var body: some View {
+        ScrollView {
+            Text(markdown)
+                .font(.body)
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+#else
 /// Renders markdown as styled HTML using WKWebView.
 /// Component references (U5, R12, C3, etc.) are auto-linked and clickable.
 struct MarkdownView: NSViewRepresentable {
@@ -458,3 +472,4 @@ struct MarkdownView: NSViewRepresentable {
         return inner.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 }
+#endif

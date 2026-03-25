@@ -246,6 +246,7 @@ struct IQCDocumentationView: View {
     }
 }
 
+#if os(macOS)
 // MARK: - Local Image View
 
 struct LocalImageView: View {
@@ -479,3 +480,4 @@ struct IQCEmailView: NSViewRepresentable {
             .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\n", with: "<br>")
     }
 }
+#endif
