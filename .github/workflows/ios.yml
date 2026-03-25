@@ -37,26 +37,26 @@ jobs:
 
       - name: Build iOS (Simulator)
         run: |
-          set -o pipefail
           xcodebuild build \
             -project PartsStudio.xcodeproj \
             -scheme PartsStudio-iOS \
             -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
             -configuration Debug \
+            -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tee /tmp/xcodebuild.log | grep -E "error:|warning:.*error|BUILD|Linking|Compiling" || true
-          # Show errors if build failed
-          if grep -q "BUILD FAILED" /tmp/xcodebuild.log; then
+            2>&1 | tee /tmp/xcodebuild.log
+          BUILD_EXIT=$?
+          if [ $BUILD_EXIT -ne 0 ]; then
             echo "=== COMPILE ERRORS ==="
-            grep "error:" /tmp/xcodebuild.log | head -50
+            grep "error:" /tmp/xcodebuild.log | sort -u | head -50
             exit 1
           fi
 
       - name: Collect app bundle
         run: |
-          echo "Searching DerivedData for .app bundles..."
-          find ~/Library/Developer/Xcode/DerivedData -name "*.app" -path "*iphonesimulator*" 2>/dev/null
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" -path "*Debug-iphonesimulator*" | head -1)
+          echo "Searching for .app bundles..."
+          find build/DerivedData -name "*.app" -path "*iphonesimulator*" 2>/dev/null || true
+          APP_PATH=$(find build/DerivedData -name "*.app" -path "*iphonesimulator*" | head -1)
           if [ -n "$APP_PATH" ]; then
             APP_NAME=$(basename "$APP_PATH")
             echo "Found: $APP_PATH"
@@ -64,7 +64,8 @@ jobs:
             cp -R "$APP_PATH" build-output/
             cd build-output && zip -r PartsStudio-iOS-Simulator.zip "$APP_NAME"
           else
-            echo "App bundle not found in DerivedData"
+            echo "App bundle not found"
+            find build/DerivedData/Build/Products -type d -maxdepth 3 2>/dev/null || true
             exit 1
           fi
 
