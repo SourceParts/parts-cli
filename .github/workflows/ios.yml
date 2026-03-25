@@ -2,7 +2,7 @@ name: Build iOS
 
 on:
   push:
-    branches: [main]
+    branches: [main, internal/fel-integration]
     paths:
       - 'app/PartsStudio/**'
       - '.github/workflows/ios.yml'
