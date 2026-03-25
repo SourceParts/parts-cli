@@ -19,6 +19,7 @@ type ReportNotifyRequest struct {
 	ClientName      string `json:"client_name"`
 	IssuesCount     int    `json:"issues_count,omitempty"`
 	Summary         string `json:"summary,omitempty"`
+	ThreadID        string `json:"thread_id,omitempty"`
 	MarkdownContent string `json:"markdown_content"`
 }
 
