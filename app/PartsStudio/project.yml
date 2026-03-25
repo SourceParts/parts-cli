@@ -31,7 +31,10 @@ targets:
     type: application
     platform: iOS
     sources:
-      - PartsStudio
+      - path: PartsStudio
+        excludes:
+          - "FEL/**"
+          - "CGerbv/**"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: parts.studio.ios
