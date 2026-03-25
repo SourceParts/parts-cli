@@ -103,6 +103,7 @@ func init() {
 	githubReport.Flags().String("repository", "", "Repository name (default: GITHUB_REPOSITORY env or \"unknown\")")
 	githubReport.Flags().String("branch", "", "Branch name (default: GITHUB_REF_NAME env or \"main\")")
 	githubReport.Flags().StringP("summary", "s", "", "Engineer's notes / summary text")
+	githubReport.Flags().String("thread-id", "", "Thread ID for email conversation threading")
 
 	_ = githubReport.MarkFlagRequired("type")
 	_ = githubReport.MarkFlagRequired("file")
@@ -256,6 +257,7 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 	repository, _ := cmd.Flags().GetString("repository")
 	branch, _ := cmd.Flags().GetString("branch")
 	summary, _ := cmd.Flags().GetString("summary")
+	threadID, _ := cmd.Flags().GetString("thread-id")
 
 	// Validate report type
 	if !validReportTypes[reportType] {
@@ -312,6 +314,7 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 		ClientName:      clientName,
 		IssuesCount:     issuesCount,
 		Summary:         summary,
+		ThreadID:        threadID,
 		MarkdownContent: string(content),
 	}
 
