@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 /// Counter-Strike / Quake-style drop-down developer console.
@@ -283,3 +284,4 @@ struct DevConsoleView: View {
         return lines.joined(separator: "\n")
     }
 }
+#endif
