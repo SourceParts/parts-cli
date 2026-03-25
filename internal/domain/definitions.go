@@ -45,6 +45,9 @@ const Endpoint_Datasheet = V1Prefix + `/parts/%s/datasheet`
 // Endpoint_DatasheetChunk uploads and chunks a datasheet PDF
 const Endpoint_DatasheetChunk = V1Prefix + `/datasheets/chunk`
 
+// Endpoint_DatasheetChunkStatus gets async chunking job status
+const Endpoint_DatasheetChunkStatus = V1Prefix + `/datasheets/chunk/%s/status`
+
 // Endpoint_Marking retrieves part marking information
 const Endpoint_Marking = V1Prefix + `/parts/%s/marking`
 

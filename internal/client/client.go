@@ -724,8 +724,8 @@ func (c *Client) ProjectECO(ctx context.Context, projectID string, data types.EC
 	return err
 }
 
-// RegisterDatasheetAlias uploads a PDF to the API chunking endpoint with a SKU alias,
-// so it becomes available via GET /datasheets/{sku}/chunks.
+// RegisterDatasheetAlias uploads a PDF to the async chunking endpoint,
+// then polls for completion. The API returns 202 with a job_id.
 func (c *Client) RegisterDatasheetAlias(ctx context.Context, alias, contentHash, s3Key, filename, projectID string, w io.Writer) error {
 	filePath := s3Key // s3Key is reused as local file path here
 
@@ -749,6 +749,9 @@ func (c *Client) RegisterDatasheetAlias(ctx context.Context, alias, contentHash,
 	_ = writer.WriteField("sku", alias)
 	_ = writer.WriteField("chunk_pages", "5")
 	_ = writer.WriteField("include_toc", "true")
+	if projectID != "" {
+		_ = writer.WriteField("project_id", projectID)
+	}
 	writer.Close()
 
 	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, domain.Endpoint_DatasheetChunk, &body)
@@ -763,12 +766,92 @@ func (c *Client) RegisterDatasheetAlias(ctx context.Context, alias, contentHash,
 	}
 	defer res.Body.Close()
 
-	if err := c.handleHTTPResponse(res); err != nil {
-		return err
+	// Handle both 200 (sync, legacy) and 202 (async) responses
+	if res.StatusCode == http.StatusOK {
+		fmt.Fprintf(w, "Registered alias %q — datasheet chunks cached on CDN\n", alias)
+		return nil
 	}
 
-	fmt.Fprintf(w, "Registered alias %q — datasheet chunks cached on CDN\n", alias)
-	return nil
+	if res.StatusCode != http.StatusAccepted {
+		if err := c.handleHTTPResponse(res); err != nil {
+			return err
+		}
+	}
+
+	// Parse job_id from 202 response
+	var acceptedResp struct {
+		Data struct {
+			JobID string `json:"job_id"`
+		} `json:"data"`
+	}
+	respBody, _ := io.ReadAll(res.Body)
+	if err := json.Unmarshal(respBody, &acceptedResp); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+
+	jobID := acceptedResp.Data.JobID
+	if jobID == "" {
+		return fmt.Errorf("no job_id in response")
+	}
+
+	fmt.Fprintf(w, "Chunking started (job: %s) — polling for completion...\n", jobID)
+	return c.PollDatasheetChunkStatus(ctx, jobID, w)
+}
+
+// PollDatasheetChunkStatus polls the chunking job status until completion.
+func (c *Client) PollDatasheetChunkStatus(ctx context.Context, jobID string, w io.Writer) error {
+	pollInterval := 3 * time.Second
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for datasheet chunking to complete")
+		case <-ticker.C:
+			url := fmt.Sprintf(domain.Endpoint_DatasheetChunkStatus, jobID)
+			req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return err
+			}
+
+			res, err := c.Client.Do(req)
+			if err != nil {
+				continue // retry on transient error
+			}
+
+			respBody, _ := io.ReadAll(res.Body)
+			res.Body.Close()
+
+			var status struct {
+				Data struct {
+					Status     string `json:"status"`
+					Progress   int    `json:"progress"`
+					Message    string `json:"message"`
+					TotalPages int    `json:"total_pages"`
+					ChunkCount int    `json:"chunk_count"`
+					Method     string `json:"method"`
+					Error      string `json:"error"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(respBody, &status); err != nil {
+				continue
+			}
+
+			switch status.Data.Status {
+			case "completed":
+				fmt.Fprintf(w, "Chunking complete: %d pages, %d chunks (%s)\n",
+					status.Data.TotalPages, status.Data.ChunkCount, status.Data.Method)
+				return nil
+			case "failed":
+				return fmt.Errorf("chunking failed: %s", status.Data.Error)
+			default:
+				if c.Logger != nil {
+					c.Logger.Printf("  %s (%d%%)", status.Data.Message, status.Data.Progress)
+				}
+			}
+		}
+	}
 }
 
 // ProjectTransfer transfers project ownership to another user by email
