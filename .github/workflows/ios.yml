@@ -54,8 +54,6 @@ jobs:
 
       - name: Collect app bundle
         run: |
-          echo "Searching for .app bundles..."
-          find build/DerivedData -name "*.app" -path "*iphonesimulator*" 2>/dev/null || true
           APP_PATH=$(find build/DerivedData -name "*.app" -path "*iphonesimulator*" | head -1)
           if [ -n "$APP_PATH" ]; then
             APP_NAME=$(basename "$APP_PATH")
@@ -65,13 +63,89 @@ jobs:
             cd build-output && zip -r PartsStudio-iOS-Simulator.zip "$APP_NAME"
           else
             echo "App bundle not found"
-            find build/DerivedData/Build/Products -type d -maxdepth 3 2>/dev/null || true
             exit 1
           fi
+
+      # --- Simulator Testing & Screenshots ---
+
+      - name: Boot simulator
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          for runtime, devices in data['devices'].items():
+              if 'iOS' in runtime:
+                  for d in devices:
+                      if 'iPhone 16' in d['name'] and d['isAvailable']:
+                          print(d['udid'])
+                          sys.exit(0)
+          sys.exit(1)
+          ")
+          echo "DEVICE_ID=$DEVICE_ID" >> $GITHUB_ENV
+          echo "Booting simulator $DEVICE_ID..."
+          xcrun simctl boot "$DEVICE_ID" || true
+          # Wait for boot to complete
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+
+      - name: Install app on simulator
+        run: |
+          APP_PATH=$(find build/DerivedData -name "*.app" -path "*iphonesimulator*" | head -1)
+          echo "Installing $APP_PATH..."
+          xcrun simctl install "$DEVICE_ID" "$APP_PATH"
+
+      - name: Launch app and capture screenshots
+        run: |
+          mkdir -p screenshots
+
+          # Launch the app
+          echo "Launching Parts Studio..."
+          xcrun simctl launch "$DEVICE_ID" parts.studio.ios
+          sleep 5
+
+          # Screenshot 1: Initial view (Datasheets tab)
+          echo "Capturing: Datasheets tab"
+          xcrun simctl io "$DEVICE_ID" screenshot screenshots/01-datasheets-tab.png
+
+          # Tap "Parts" tab (3rd tab) — use simctl UI interaction
+          # Tab bar is at the bottom; Parts tab is roughly at x=50% y=95% on iPhone 16
+          # iPhone 16 logical resolution: 393x852
+          xcrun simctl io "$DEVICE_ID" tap 197 820 2>/dev/null || true
+          sleep 2
+          echo "Capturing: Parts Search tab"
+          xcrun simctl io "$DEVICE_ID" screenshot screenshots/02-parts-search-tab.png
+
+          # Tap "ECO / IQC" tab (2nd tab) — roughly x=25% y=95%
+          xcrun simctl io "$DEVICE_ID" tap 98 820 2>/dev/null || true
+          sleep 2
+          echo "Capturing: ECO/IQC tab"
+          xcrun simctl io "$DEVICE_ID" screenshot screenshots/03-eco-iqc-tab.png
+
+          # Tap "BLE" tab (4th tab) — roughly x=75% y=95%
+          xcrun simctl io "$DEVICE_ID" tap 295 820 2>/dev/null || true
+          sleep 2
+          echo "Capturing: BLE tab"
+          xcrun simctl io "$DEVICE_ID" screenshot screenshots/04-ble-tab.png
+
+          echo "Screenshots captured:"
+          ls -la screenshots/
+
+      - name: Shutdown simulator
+        if: always()
+        run: xcrun simctl shutdown "$DEVICE_ID" 2>/dev/null || true
+
+      # --- Upload artifacts ---
 
       - name: Upload iOS app
         uses: actions/upload-artifact@v4
         with:
           name: parts-studio-ios-simulator
           path: app/PartsStudio/build-output/PartsStudio-iOS-Simulator.zip
+          retention-days: 30
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshots
+          path: app/PartsStudio/screenshots/*.png
           retention-days: 30
