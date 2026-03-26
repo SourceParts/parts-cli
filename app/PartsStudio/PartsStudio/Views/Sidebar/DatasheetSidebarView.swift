@@ -183,7 +183,30 @@ struct DatasheetSidebarView: View {
                         .padding(.vertical, 4)
 
                     Button(action: {
+                        appState.showCAMProcessor = true
+                        appState.showPCBEditor = false
+                        appState.showFEL = false
+                        appState.showUSBMonitor = false
+                        appState.showCredits = false
+                        appState.showBLE = false
+                        appState.showBotInbox = false
+                        appState.selectedDatasheet = nil
+                        appState.selectedECO = nil
+                        appState.selectedIQCItem = nil
+                        appState.selectedAssemblyDoc = nil
+                        appState.pdfDocument = nil
+                    }) {
+                        Label("CAM Processor", systemImage: "gearshape.2")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(appState.showCAMProcessor ? Color.accentColor : .primary)
+
+                    Button(action: {
                         appState.showPCBEditor = true
+                        appState.showCAMProcessor = false
                         appState.showFEL = false
                         appState.showUSBMonitor = false
                         appState.showCredits = false
@@ -208,6 +231,7 @@ struct DatasheetSidebarView: View {
                         appState.showFEL = false
                         appState.showUSBMonitor = false
                         appState.showPCBEditor = false
+                        appState.showCAMProcessor = false
                         appState.selectedDatasheet = nil
                         appState.selectedECO = nil
                         appState.selectedIQCItem = nil
@@ -226,6 +250,8 @@ struct DatasheetSidebarView: View {
                         appState.showUSBMonitor = true
                         appState.showCredits = false
                         appState.showFEL = false
+                        appState.showCAMProcessor = false
+                        appState.showPCBEditor = false
                         appState.selectedDatasheet = nil
                         appState.selectedECO = nil
                         appState.selectedIQCItem = nil
@@ -246,6 +272,8 @@ struct DatasheetSidebarView: View {
                         appState.showCredits = false
                         appState.showFEL = false
                         appState.showBLE = false
+                        appState.showCAMProcessor = false
+                        appState.showPCBEditor = false
                         appState.selectedDatasheet = nil
                         appState.selectedECO = nil
                         appState.selectedIQCItem = nil

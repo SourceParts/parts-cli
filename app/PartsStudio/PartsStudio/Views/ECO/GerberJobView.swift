@@ -72,8 +72,14 @@ struct GerberJob: Codable {
 /// Shows board specs, layer stackup visualization, file list, and design rules.
 struct GerberJobView: View {
     let filePath: String
+    @EnvironmentObject var appState: AppState
     @State private var job: GerberJob?
     @State private var error: String?
+
+    /// Directory containing the .gbrjob and its gerber files.
+    private var gerberDir: String {
+        URL(fileURLWithPath: filePath).deletingLastPathComponent().path
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -94,6 +100,17 @@ struct GerberJobView: View {
                         .foregroundStyle(.purple)
                         .clipShape(Capsule())
                 }
+                Button(action: { openGerberViewer() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "eye")
+                            .font(.caption)
+                        Text("View Layers")
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
                 Button(action: { NSWorkspace.shared.selectFile(filePath, inFileViewerRootedAtPath: "") }) {
                     Image(systemName: "folder")
                         .font(.caption)
@@ -183,6 +200,7 @@ struct GerberJobView: View {
 
             VStack(spacing: 0) {
                 ForEach(Array(stackup.enumerated()), id: \.offset) { _, layer in
+                    let isCopperOrMask = ["Copper", "SolderMask", "SolderPaste", "Legend"].contains(layer.layerType ?? "")
                     HStack(spacing: 0) {
                         // Color bar
                         Rectangle()
@@ -216,11 +234,26 @@ struct GerberJobView: View {
                             }
 
                             Spacer()
+
+                            if isCopperOrMask {
+                                Image(systemName: "eye")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, stackupHeight(layer.layerType ?? "", layer.Thickness))
                     }
                     .background(stackupBgColor(layer.layerType ?? ""))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if isCopperOrMask { openGerberViewer() }
+                    }
+                    .onHover { hovering in
+                        if isCopperOrMask {
+                            hovering ? NSCursor.pointingHand.push() : NSCursor.pop()
+                        }
+                    }
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -298,6 +331,11 @@ struct GerberJobView: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                    .onTapGesture { openGerberViewer(file: file.Path) }
+                    .onHover { hovering in
+                        hovering ? NSCursor.pointingHand.push() : NSCursor.pop()
+                    }
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -332,6 +370,44 @@ struct GerberJobView: View {
             }
         }
         } // if let rules
+    }
+
+    // MARK: - Navigation
+
+    /// Open the Gerber Viewer for all gerber files in the same directory as this .gbrjob.
+    /// Optionally specify a file path (relative from .gbrjob) to focus.
+    private func openGerberViewer(file: String? = nil) {
+        let targetPath: String
+        if let file = file {
+            // Resolve relative path from .gbrjob directory
+            targetPath = "\(gerberDir)/\(file)"
+        } else {
+            // Find the first gerber file in the directory
+            let fm = FileManager.default
+            let files = (try? fm.contentsOfDirectory(atPath: gerberDir)) ?? []
+            let gerberExts: Set<String> = ["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"]
+            let firstGerber = files.first { f in
+                let ext = URL(fileURLWithPath: f).pathExtension.lowercased()
+                return gerberExts.contains(ext) || (ext.hasPrefix("g") && Int(ext.dropFirst()) != nil)
+            }
+            guard let g = firstGerber else { return }
+            targetPath = "\(gerberDir)/\(g)"
+        }
+
+        // Navigate by setting an assembly doc pointing to the gerber file
+        let doc = AssemblyDocument(
+            id: targetPath,
+            name: URL(fileURLWithPath: targetPath).lastPathComponent,
+            category: "Fab",
+            path: targetPath,
+            size: 0,
+            revision: ""
+        )
+        appState.selectedAssemblyDoc = doc
+        appState.selectedDatasheet = nil
+        appState.selectedECO = nil
+        appState.selectedIQCItem = nil
+        appState.pdfDocument = nil
     }
 
     // MARK: - Helpers

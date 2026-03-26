@@ -152,6 +152,9 @@ class AppState: ObservableObject {
     @Published var showPCBEditor: Bool = false {
         didSet { if showPCBEditor { lastActiveView = "pcb" } }
     }
+    @Published var showCAMProcessor: Bool = false {
+        didSet { if showCAMProcessor { lastActiveView = "cam" } }
+    }
     #endif
     @Published var selectedAssemblyDoc: AssemblyDocument?
 
@@ -806,6 +809,60 @@ class AppState: ObservableObject {
         showCredits = false
         showBLE = false
         lastActiveView = "part"
+    }
+
+    // MARK: - File Open (external)
+
+    /// Open a file by path — used by AppDelegate when files are opened externally
+    /// (double-click, `open -a PartsStudio`, drag-and-drop, CLI args).
+    func openFile(at path: String) {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        let filename = URL(fileURLWithPath: path).lastPathComponent
+
+        // Clear all active views
+        selectedDatasheet = nil
+        selectedECO = nil
+        selectedIQCItem = nil
+        selectedReport = nil
+        pdfDocument = nil
+        #if os(macOS)
+        showFEL = false
+        showESLR = false
+        showUSBMonitor = false
+        showPCBEditor = false
+        showCAMProcessor = false
+        #endif
+        showCredits = false
+        showBLE = false
+        showBotInbox = false
+
+        // Gerber extensions
+        let gerberExts: Set<String> = ["gbr", "gtl", "gbl", "gts", "gbs", "gto", "gbo", "gtp", "gbp", "gm1", "gko", "drl", "xln"]
+        let isGerber = gerberExts.contains(ext) || (ext.hasPrefix("g") && ext.count <= 4 && Int(ext.dropFirst()) != nil)
+
+        if ext == "pdf" {
+            loadPDF(at: path)
+        } else if isGerber || ext == "gbrjob" || ext == "csv" || ext == "dxf" || ext == "json" || ext == "md" || ext == "step" || ext == "stp" {
+            #if os(macOS)
+            let category: String
+            switch ext {
+            case "csv": category = "BOM"
+            case "dxf", "step", "stp": category = "3D Model"
+            case "md": category = "Assembly"
+            default: category = "Fab"
+            }
+
+            let doc = AssemblyDocument(
+                id: path,
+                name: filename,
+                category: category,
+                path: path,
+                size: (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0,
+                revision: ""
+            )
+            selectedAssemblyDoc = doc
+            #endif
+        }
     }
 
     func selectDatasheet(_ datasheet: CachedDatasheet) {

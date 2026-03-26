@@ -3,10 +3,43 @@ import SwiftUI
 struct SplashView: View {
     @State private var bounce: Bool = false
 
+    /// Load the app icon — try the .icns next to the source tree first, then fall back to the bundle icon.
+    private var appIcon: NSImage? {
+        // SwiftPM builds don't embed the icon in the app bundle, so load from the known path.
+        let iconPaths = [
+            Bundle.main.path(forResource: "PartsStudio", ofType: "icns"),
+            Bundle.main.path(forResource: "AppIcon", ofType: "png"),
+        ].compactMap { $0 }
+
+        for path in iconPaths {
+            if let img = NSImage(contentsOfFile: path) { return img }
+        }
+
+        // Fallback: try alongside the binary (SwiftPM debug layout)
+        if let execURL = Bundle.main.executableURL {
+            let sibling = execURL.deletingLastPathComponent()
+            for name in ["PartsStudio.icns", "AppIcon.png"] {
+                let url = sibling.appendingPathComponent(name)
+                if let img = NSImage(contentsOf: url) { return img }
+            }
+            // Walk up to find the project root (where build.sh lives)
+            var dir = execURL.deletingLastPathComponent()
+            for _ in 0..<10 {
+                let icns = dir.appendingPathComponent("PartsStudio.icns")
+                if FileManager.default.fileExists(atPath: icns.path),
+                   let img = NSImage(contentsOf: icns) {
+                    return img
+                }
+                dir = dir.deletingLastPathComponent()
+            }
+        }
+
+        return NSApplication.shared.applicationIconImage
+    }
+
     var body: some View {
         VStack(spacing: 20) {
-            // Use the app icon (picker claw logo) from the bundle
-            if let icon = NSApplication.shared.applicationIconImage {
+            if let icon = appIcon {
                 Image(nsImage: icon)
                     .resizable()
                     .aspectRatio(contentMode: .fit)

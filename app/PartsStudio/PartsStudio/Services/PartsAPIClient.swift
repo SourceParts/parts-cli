@@ -320,6 +320,277 @@ class PartsAPIClient {
         )
     }
 
+    // MARK: - Placement Generation
+
+    struct PlacementResult {
+        var zipURL: URL  // Local path to downloaded ZIP
+        var topImagePath: String?
+        var bottomImagePath: String?
+        var pdfPath: String?
+        var csvPath: String?
+        var feederMapPath: String?
+        var metadataPath: String?
+    }
+
+    /// Upload position file (+ optional BOM, gerbers) to generate placement files.
+    /// Returns a ZIP file saved to a temporary directory.
+    func generatePlacement(
+        positionFile: URL,
+        bomFile: URL? = nil,
+        gerbersZip: URL? = nil,
+        boardName: String = "",
+        rows: Int = 1,
+        cols: Int = 1,
+        side: String = "both"
+    ) async throws -> PlacementResult {
+        guard let apiKey = APIKeychain.loadAPIKey() else { throw APIError.noAPIKey }
+        guard let url = URL(string: "\(baseURL)/v1/manufacturing/placement") else { throw APIError.invalidURL }
+
+        let boundary = UUID().uuidString
+        var body = Data()
+
+        // Position file (required)
+        appendFile(to: &body, boundary: boundary, fieldName: "file", fileURL: positionFile)
+
+        // Optional BOM
+        if let bom = bomFile {
+            appendFile(to: &body, boundary: boundary, fieldName: "bom", fileURL: bom)
+        }
+
+        // Optional gerbers ZIP
+        if let gerbers = gerbersZip {
+            appendFile(to: &body, boundary: boundary, fieldName: "gerbers", fileURL: gerbers)
+        }
+
+        // Form fields
+        if !boardName.isEmpty { appendField(to: &body, boundary: boundary, name: "board_name", value: boardName) }
+        if rows > 1 { appendField(to: &body, boundary: boundary, name: "rows", value: "\(rows)") }
+        if cols > 1 { appendField(to: &body, boundary: boundary, name: "cols", value: "\(cols)") }
+        appendField(to: &body, boundary: boundary, name: "side", value: side)
+
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("PartsStudio/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        request.timeoutInterval = 120
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw APIError.httpError(http.statusCode, msg)
+        }
+
+        // Save ZIP to temp directory
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("parts_placement_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let zipPath = tempDir.appendingPathComponent("placement.zip")
+        try data.write(to: zipPath)
+
+        // Unzip
+        let unzipDir = tempDir.appendingPathComponent("output")
+        try FileManager.default.createDirectory(at: unzipDir, withIntermediateDirectories: true)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = ["-o", zipPath.path, "-d", unzipDir.path]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+
+        // Find output files
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: unzipDir.path)) ?? []
+        return PlacementResult(
+            zipURL: zipPath,
+            topImagePath: files.first(where: { $0.contains("top") && $0.hasSuffix(".png") }).map { "\(unzipDir.path)/\($0)" },
+            bottomImagePath: files.first(where: { $0.contains("bottom") && $0.hasSuffix(".png") }).map { "\(unzipDir.path)/\($0)" },
+            pdfPath: files.first(where: { $0.hasSuffix(".pdf") }).map { "\(unzipDir.path)/\($0)" },
+            csvPath: files.first(where: { $0.hasSuffix(".csv") && $0.contains("panelized") }).map { "\(unzipDir.path)/\($0)" },
+            feederMapPath: files.first(where: { $0.contains("feeder") && $0.hasSuffix(".csv") }).map { "\(unzipDir.path)/\($0)" },
+            metadataPath: files.first(where: { $0.hasSuffix(".json") }).map { "\(unzipDir.path)/\($0)" }
+        )
+    }
+
+    // MARK: - BOM Upload
+
+    struct BOMUploadResult {
+        var jobId: String
+    }
+
+    struct BOMStatus {
+        var status: String  // "processing", "complete", "failed"
+        var progress: Int   // 0-100
+        var bomId: String?
+        var totalLines: Int
+        var matched: Int
+        var unmatched: Int
+    }
+
+    struct BOMLine {
+        var reference: String
+        var value: String
+        var footprint: String
+        var manufacturer: String
+        var mpn: String
+        var matched: Bool
+        var unitPrice: Double?
+    }
+
+    struct BOMDetail {
+        var bomId: String
+        var lines: [BOMLine]
+    }
+
+    func uploadBOM(fileURL: URL) async throws -> BOMUploadResult {
+        guard let apiKey = APIKeychain.loadAPIKey() else { throw APIError.noAPIKey }
+        guard let url = URL(string: "\(baseURL)/v1/bom") else { throw APIError.invalidURL }
+
+        let boundary = UUID().uuidString
+        var body = Data()
+        appendFile(to: &body, boundary: boundary, fieldName: "file", fileURL: fileURL)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("PartsStudio/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        request.timeoutInterval = 60
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw APIError.httpError(http.statusCode, msg)
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resultData = json["data"] as? [String: Any],
+              let jobId = resultData["job_id"] as? String else {
+            throw APIError.invalidResponse
+        }
+        return BOMUploadResult(jobId: jobId)
+    }
+
+    func checkBOMStatus(jobId: String) async throws -> BOMStatus {
+        let data = try await apiGet("/v1/bom/\(jobId)/status")
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resultData = json["data"] as? [String: Any] else {
+            throw APIError.invalidResponse
+        }
+
+        let summary = resultData["summary"] as? [String: Any] ?? [:]
+        return BOMStatus(
+            status: resultData["status"] as? String ?? "unknown",
+            progress: resultData["progress"] as? Int ?? 0,
+            bomId: resultData["bom_id"] as? String,
+            totalLines: summary["total_lines"] as? Int ?? 0,
+            matched: summary["matched"] as? Int ?? 0,
+            unmatched: summary["unmatched"] as? Int ?? 0
+        )
+    }
+
+    func getBOMDetail(bomId: String, includePricing: Bool = true) async throws -> BOMDetail {
+        let pricing = includePricing ? "?include_pricing=true" : ""
+        let data = try await apiGet("/v1/bom/\(bomId)\(pricing)")
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resultData = json["data"] as? [String: Any],
+              let linesData = resultData["lines"] as? [[String: Any]] else {
+            throw APIError.invalidResponse
+        }
+
+        let lines = linesData.map { item in
+            BOMLine(
+                reference: item["reference"] as? String ?? "",
+                value: item["value"] as? String ?? "",
+                footprint: item["footprint"] as? String ?? "",
+                manufacturer: item["manufacturer"] as? String ?? "",
+                mpn: item["mpn"] as? String ?? "",
+                matched: item["matched"] as? Bool ?? false,
+                unitPrice: item["unit_price"] as? Double
+            )
+        }
+
+        return BOMDetail(bomId: bomId, lines: lines)
+    }
+
+    // MARK: - COGS / Assembly Quote
+
+    struct COGSResult {
+        var bomCostPerUnit: Double
+        var bomCostTotal: Double
+        var laborPerBoard: Double
+        var laborTotal: Double
+        var overheadPerBoard: Double
+        var overheadTotal: Double
+        var cogsPerUnit: Double
+        var cogsTotal: Double
+        var buildQuantity: Int
+    }
+
+    func calculateCOGS(bomId: String, buildQuantity: Int = 1) async throws -> COGSResult {
+        let data = try await apiPost("/v1/costs/cogs", body: [
+            "source_type": "bom_id",
+            "source_value": bomId,
+            "build_quantity": buildQuantity,
+            "currency": "USD"
+        ])
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let resultData = json["data"] as? [String: Any],
+              let breakdown = resultData["breakdown"] as? [String: Any] else {
+            throw APIError.invalidResponse
+        }
+
+        let bomCost = breakdown["bom_cost"] as? [String: Any] ?? [:]
+        let labor = breakdown["labor_cost"] as? [String: Any] ?? [:]
+        let overhead = breakdown["overhead"] as? [String: Any] ?? [:]
+        let cogs = breakdown["cogs"] as? [String: Any] ?? [:]
+
+        return COGSResult(
+            bomCostPerUnit: bomCost["unit_cost"] as? Double ?? 0,
+            bomCostTotal: bomCost["total_cost"] as? Double ?? 0,
+            laborPerBoard: labor["per_board"] as? Double ?? 0,
+            laborTotal: labor["total"] as? Double ?? 0,
+            overheadPerBoard: overhead["per_board"] as? Double ?? 0,
+            overheadTotal: overhead["total"] as? Double ?? 0,
+            cogsPerUnit: cogs["per_unit"] as? Double ?? 0,
+            cogsTotal: cogs["total"] as? Double ?? 0,
+            buildQuantity: resultData["build_quantity"] as? Int ?? buildQuantity
+        )
+    }
+
+    // MARK: - Multipart Helpers
+
+    private func appendFile(to body: inout Data, boundary: String, fieldName: String, fileURL: URL) {
+        guard let fileData = try? Data(contentsOf: fileURL) else { return }
+        let filename = fileURL.lastPathComponent
+        let ext = fileURL.pathExtension.lowercased()
+        let mimeType: String
+        switch ext {
+        case "csv": mimeType = "text/csv"
+        case "xlsx": mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "xls": mimeType = "application/vnd.ms-excel"
+        case "json": mimeType = "application/json"
+        case "xml": mimeType = "application/xml"
+        case "zip": mimeType = "application/zip"
+        default: mimeType = "application/octet-stream"
+        }
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+    }
+
+    private func appendField(to body: inout Data, boundary: String, name: String, value: String) {
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(value)\r\n".data(using: .utf8)!)
+    }
+
     // MARK: - HTTP Helpers
 
     enum APIError: LocalizedError {

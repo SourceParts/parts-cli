@@ -57,6 +57,8 @@ struct ContentView: View {
                 CSVViewerView(filePath: asmDoc.path)
             } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".gbrjob") {
                 GerberJobView(filePath: asmDoc.path)
+            } else if appState.showCAMProcessor {
+                CAMProcessorView()
             } else if appState.showPCBEditor {
                 PCBEditorView()
             } else if let asmDoc = appState.selectedAssemblyDoc, isGerberFile(asmDoc.path) {
@@ -133,6 +135,20 @@ struct ContentView: View {
         .onKeyPress("`") {
             withAnimation(.easeOut(duration: 0.2)) { showDevConsole.toggle() }
             return .handled
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openFileInStudio)) { notification in
+            if let path = notification.object as? String {
+                appState.openFile(at: path)
+            }
+        }
+        .onAppear {
+            // Process files passed as CLI arguments or via open-before-ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                for path in AppDelegate.pendingFiles {
+                    appState.openFile(at: path)
+                }
+                AppDelegate.pendingFiles.removeAll()
+            }
         }
         } // else (main content)
         } // outer ZStack

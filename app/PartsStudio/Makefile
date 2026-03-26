@@ -47,6 +47,105 @@ app: build
 	<true/>\n\
 	<key>com.apple.security.device.usb</key>\n\
 	<true/>\n\
+	<key>CFBundleDocumentTypes</key>\n\
+	<array>\n\
+		<dict>\n\
+			<key>CFBundleTypeName</key>\n\
+			<string>Gerber File</string>\n\
+			<key>CFBundleTypeRole</key>\n\
+			<string>Viewer</string>\n\
+			<key>CFBundleTypeExtensions</key>\n\
+			<array>\n\
+				<string>gbr</string>\n\
+				<string>gtl</string>\n\
+				<string>gbl</string>\n\
+				<string>gts</string>\n\
+				<string>gbs</string>\n\
+				<string>gto</string>\n\
+				<string>gbo</string>\n\
+				<string>gtp</string>\n\
+				<string>gbp</string>\n\
+				<string>gm1</string>\n\
+				<string>gko</string>\n\
+				<string>drl</string>\n\
+				<string>xln</string>\n\
+			</array>\n\
+			<key>LSHandlerRank</key>\n\
+			<string>Default</string>\n\
+		</dict>\n\
+		<dict>\n\
+			<key>CFBundleTypeName</key>\n\
+			<string>Gerber Job File</string>\n\
+			<key>CFBundleTypeRole</key>\n\
+			<string>Viewer</string>\n\
+			<key>CFBundleTypeExtensions</key>\n\
+			<array>\n\
+				<string>gbrjob</string>\n\
+			</array>\n\
+			<key>LSHandlerRank</key>\n\
+			<string>Owner</string>\n\
+		</dict>\n\
+		<dict>\n\
+			<key>CFBundleTypeName</key>\n\
+			<string>CSV File</string>\n\
+			<key>CFBundleTypeRole</key>\n\
+			<string>Viewer</string>\n\
+			<key>CFBundleTypeExtensions</key>\n\
+			<array>\n\
+				<string>csv</string>\n\
+			</array>\n\
+			<key>LSHandlerRank</key>\n\
+			<string>Alternate</string>\n\
+		</dict>\n\
+		<dict>\n\
+			<key>CFBundleTypeName</key>\n\
+			<string>DXF File</string>\n\
+			<key>CFBundleTypeRole</key>\n\
+			<string>Viewer</string>\n\
+			<key>CFBundleTypeExtensions</key>\n\
+			<array>\n\
+				<string>dxf</string>\n\
+			</array>\n\
+			<key>LSHandlerRank</key>\n\
+			<string>Alternate</string>\n\
+		</dict>\n\
+		<dict>\n\
+			<key>CFBundleTypeName</key>\n\
+			<string>STEP File</string>\n\
+			<key>CFBundleTypeRole</key>\n\
+			<string>Viewer</string>\n\
+			<key>CFBundleTypeExtensions</key>\n\
+			<array>\n\
+				<string>step</string>\n\
+				<string>stp</string>\n\
+			</array>\n\
+			<key>LSHandlerRank</key>\n\
+			<string>Alternate</string>\n\
+		</dict>\n\
+		<dict>\n\
+			<key>CFBundleTypeName</key>\n\
+			<string>PDF Document</string>\n\
+			<key>CFBundleTypeRole</key>\n\
+			<string>Viewer</string>\n\
+			<key>CFBundleTypeExtensions</key>\n\
+			<array>\n\
+				<string>pdf</string>\n\
+			</array>\n\
+			<key>LSHandlerRank</key>\n\
+			<string>Alternate</string>\n\
+		</dict>\n\
+	</array>\n\
+	<key>CFBundleURLTypes</key>\n\
+	<array>\n\
+		<dict>\n\
+			<key>CFBundleURLName</key>\n\
+			<string>Parts Studio</string>\n\
+			<key>CFBundleURLSchemes</key>\n\
+			<array>\n\
+				<string>parts</string>\n\
+			</array>\n\
+		</dict>\n\
+	</array>\n\
 </dict>\n\
 </plist>' > $(APP_BUNDLE)/Contents/Info.plist
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE) 2>/dev/null \
