@@ -71,8 +71,11 @@ func main() {
 		// EDA
 		commands.EDA,
 		commands.AOI,
+		commands.Assembly,
 		commands.QC,
 		commands.Publish,
+		// Sales
+		commands.Sales,
 		// QuarterMaster (smart query)
 		commands.Q,
 		commands.History,
