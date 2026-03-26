@@ -84,6 +84,143 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 	return result, nil
 }
 
+// --- Station 0a: ERC ---
+
+var edaCtrlERC = &cobra.Command{
+	Use:   "erc <file.kicad_sch>",
+	Short: "Run Electrical Rules Check on a schematic",
+	Long: `Upload a .kicad_sch file to the API and run ERC.
+
+Returns a violation report with error/warning counts.
+Review the results before proceeding to netlist-diff.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		schPath := args[0]
+		jsonOut, _ := cmd.Flags().GetBool("json")
+
+		fmt.Printf("Running ERC on %s...\n", filepath.Base(schPath))
+		result, err := uploadAndGetJSON(schPath, "/v1/eda/erc", nil)
+		if err != nil {
+			return err
+		}
+
+		if jsonOut {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(result)
+		}
+
+		errors := result["error_count"]
+		warnings := result["warning_count"]
+		status := "PASS"
+		if errors != nil && errors.(float64) > 0 {
+			status = "FAIL"
+		}
+
+		fmt.Printf("\nERC %s: %v errors, %v warnings\n", status, errors, warnings)
+
+		if violations, ok := result["violations"].([]interface{}); ok && len(violations) > 0 {
+			fmt.Println("\nViolations:")
+			for i, v := range violations {
+				if i >= 10 {
+					fmt.Printf("  ... and %d more\n", len(violations)-10)
+					break
+				}
+				m := v.(map[string]interface{})
+				fmt.Printf("  [%v] %v\n", m["severity"], m["type"])
+			}
+		}
+
+		if status == "PASS" {
+			fmt.Println("\nNext: parts eda ctrl netlist-diff --old <old.kicad_sch> --new <new.kicad_sch>")
+		} else {
+			fmt.Println("\nFix ERC errors, then re-run: parts eda ctrl erc <file>")
+		}
+		return nil
+	},
+}
+
+// --- Station 0b: Netlist Diff ---
+
+var edaCtrlNetlistDiff = &cobra.Command{
+	Use:   "netlist-diff",
+	Short: "Compare two schematic netlists for connectivity changes",
+	Long: `Upload old and new .kicad_sch files and diff their netlists.
+
+Shows added/removed/changed nets and components.
+The changed nets are the ones that need PCB rerouting.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		oldPath, _ := cmd.Flags().GetString("old")
+		newPath, _ := cmd.Flags().GetString("new")
+		jsonOut, _ := cmd.Flags().GetBool("json")
+
+		if oldPath == "" || newPath == "" {
+			return fmt.Errorf("--old and --new are required")
+		}
+
+		fmt.Printf("Diffing netlists: %s → %s\n", filepath.Base(oldPath), filepath.Base(newPath))
+
+		// Upload both files as multipart
+		var requestBody bytes.Buffer
+		writer := multipart.NewWriter(&requestBody)
+		if err := addFileToMultipart(writer, "old_file", oldPath); err != nil {
+			return err
+		}
+		if err := addFileToMultipart(writer, "new_file", newPath); err != nil {
+			return err
+		}
+		writer.Close()
+
+		url := fmt.Sprintf("https://%s/v1/eda/netlist/diff", domain.API)
+		req, err := http.NewRequest("POST", url, &requestBody)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+		if apiKey := Client.GetAPIKey(); apiKey != "" {
+			req.Header.Set("X-API-Key", apiKey)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		}
+
+		var result map[string]interface{}
+		json.Unmarshal(body, &result)
+
+		if jsonOut {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(result)
+		}
+
+		fmt.Printf("\n%s\n", result["summary"])
+
+		if nets, ok := result["nets"].(map[string]interface{}); ok {
+			if changed, ok := nets["changed_detail"].(map[string]interface{}); ok && len(changed) > 0 {
+				fmt.Println("\nChanged nets (need PCB rerouting):")
+				for name, info := range changed {
+					m := info.(map[string]interface{})
+					added := m["added_connections"]
+					removed := m["removed_connections"]
+					fmt.Printf("  %s: +%v -%v connections\n", name, added, removed)
+				}
+			}
+		}
+
+		fmt.Println("\nNext: parts eda ctrl analyze <file.kicad_pcb> --nets <changed-net-names>")
+		return nil
+	},
+}
+
 // --- Station 1: Analyze ---
 
 var edaCtrlAnalyze = &cobra.Command{
@@ -343,7 +480,17 @@ func init() {
 	// Export flags
 	edaCtrlExport.Flags().StringP("output", "o", "", "Output directory (default: CAM/ next to PCB)")
 
+	// ERC flags
+	edaCtrlERC.Flags().BoolP("json", "j", false, "Output raw JSON")
+
+	// Netlist diff flags
+	edaCtrlNetlistDiff.Flags().String("old", "", "Path to old .kicad_sch (required)")
+	edaCtrlNetlistDiff.Flags().String("new", "", "Path to new .kicad_sch (required)")
+	edaCtrlNetlistDiff.Flags().BoolP("json", "j", false, "Output raw JSON")
+
 	// Wire up
+	edaCtrl.AddCommand(edaCtrlERC)
+	edaCtrl.AddCommand(edaCtrlNetlistDiff)
 	edaCtrl.AddCommand(edaCtrlAnalyze)
 	edaCtrl.AddCommand(edaCtrlProposeRipup)
 	edaCtrl.AddCommand(edaCtrlExecuteRipup)
