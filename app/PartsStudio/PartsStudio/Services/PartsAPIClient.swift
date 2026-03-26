@@ -591,6 +591,80 @@ class PartsAPIClient {
         body.append("\(value)\r\n".data(using: .utf8)!)
     }
 
+    // MARK: - EDA Control (KiCad-Ctrl Pipeline)
+
+    func edaAnalyze(pcbPath: String, netNames: [String] = []) async throws -> [String: Any] {
+        let boundary = UUID().uuidString
+        var body = Data()
+        appendFile(to: &body, boundary: boundary, fieldName: "file", fileURL: URL(fileURLWithPath: pcbPath))
+        if !netNames.isEmpty {
+            let json = try JSONSerialization.data(withJSONObject: netNames)
+            appendField(to: &body, boundary: boundary, name: "net_names_json", value: String(data: json, encoding: .utf8) ?? "[]")
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        return try await edaUpload(path: "/v1/eda/analyze", body: body, boundary: boundary)
+    }
+
+    func edaProposeRipup(pcbPath: String, netNames: [String]) async throws -> [String: Any] {
+        let boundary = UUID().uuidString
+        var body = Data()
+        appendFile(to: &body, boundary: boundary, fieldName: "file", fileURL: URL(fileURLWithPath: pcbPath))
+        let json = try JSONSerialization.data(withJSONObject: netNames)
+        appendField(to: &body, boundary: boundary, name: "net_names_json", value: String(data: json, encoding: .utf8) ?? "[]")
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        return try await edaUpload(path: "/v1/eda/ripup/propose", body: body, boundary: boundary)
+    }
+
+    func edaExecuteRipup(pcbPath: String, netNames: [String]) async throws -> [String: Any] {
+        let boundary = UUID().uuidString
+        var body = Data()
+        appendFile(to: &body, boundary: boundary, fieldName: "file", fileURL: URL(fileURLWithPath: pcbPath))
+        let json = try JSONSerialization.data(withJSONObject: netNames)
+        appendField(to: &body, boundary: boundary, name: "net_names_json", value: String(data: json, encoding: .utf8) ?? "[]")
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        return try await edaUpload(path: "/v1/eda/ripup/execute", body: body, boundary: boundary)
+    }
+
+    func edaDRC(pcbPath: String) async throws -> [String: Any] {
+        let boundary = UUID().uuidString
+        var body = Data()
+        appendFile(to: &body, boundary: boundary, fieldName: "file", fileURL: URL(fileURLWithPath: pcbPath))
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        return try await edaUpload(path: "/v1/eda/drc", body: body, boundary: boundary)
+    }
+
+    func edaExport(pcbPath: String) async throws -> [String: Any] {
+        let boundary = UUID().uuidString
+        var body = Data()
+        appendFile(to: &body, boundary: boundary, fieldName: "file", fileURL: URL(fileURLWithPath: pcbPath))
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        return try await edaUpload(path: "/v1/eda/export", body: body, boundary: boundary)
+    }
+
+    private func edaUpload(path: String, body: Data, boundary: String) async throws -> [String: Any] {
+        guard let apiKey = APIKeychain.loadAPIKey() else { throw APIError.noAPIKey }
+        guard let url = URL(string: "\(baseURL)\(path)") else { throw APIError.invalidURL }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("PartsStudio/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        request.timeoutInterval = 120
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw APIError.httpError(http.statusCode, msg)
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.invalidResponse
+        }
+        return json
+    }
+
     // MARK: - HTTP Helpers
 
     enum APIError: LocalizedError {

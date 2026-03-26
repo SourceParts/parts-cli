@@ -57,6 +57,8 @@ struct ContentView: View {
                 CSVViewerView(filePath: asmDoc.path)
             } else if let asmDoc = appState.selectedAssemblyDoc, asmDoc.path.lowercased().hasSuffix(".gbrjob") {
                 GerberJobView(filePath: asmDoc.path)
+            } else if appState.showKiCadCtrl {
+                KiCadCtrlView()
             } else if appState.showCAMProcessor {
                 CAMProcessorView()
             } else if appState.showPCBEditor {

@@ -155,6 +155,9 @@ class AppState: ObservableObject {
     @Published var showCAMProcessor: Bool = false {
         didSet { if showCAMProcessor { lastActiveView = "cam" } }
     }
+    @Published var showKiCadCtrl: Bool = false {
+        didSet { if showKiCadCtrl { lastActiveView = "kicad-ctrl" } }
+    }
     #endif
     @Published var selectedAssemblyDoc: AssemblyDocument?
 

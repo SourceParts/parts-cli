@@ -673,4 +673,5 @@ func init() {
 	EDA.AddCommand(edaDRC)
 	EDA.AddCommand(edaImport)
 	EDA.AddCommand(edaDXF)
+	EDA.AddCommand(edaCtrl)
 }

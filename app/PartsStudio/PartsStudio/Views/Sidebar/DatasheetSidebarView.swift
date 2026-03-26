@@ -205,8 +205,32 @@ struct DatasheetSidebarView: View {
                     .foregroundStyle(appState.showCAMProcessor ? Color.accentColor : .primary)
 
                     Button(action: {
+                        appState.showKiCadCtrl = true
+                        appState.showCAMProcessor = false
+                        appState.showPCBEditor = false
+                        appState.showFEL = false
+                        appState.showUSBMonitor = false
+                        appState.showCredits = false
+                        appState.showBLE = false
+                        appState.showBotInbox = false
+                        appState.selectedDatasheet = nil
+                        appState.selectedECO = nil
+                        appState.selectedIQCItem = nil
+                        appState.selectedAssemblyDoc = nil
+                        appState.pdfDocument = nil
+                    }) {
+                        Label("KiCad Control", systemImage: "pencil.and.ruler")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(appState.showKiCadCtrl ? Color.accentColor : .primary)
+
+                    Button(action: {
                         appState.showPCBEditor = true
                         appState.showCAMProcessor = false
+                        appState.showKiCadCtrl = false
                         appState.showFEL = false
                         appState.showUSBMonitor = false
                         appState.showCredits = false
