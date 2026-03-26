@@ -951,36 +951,76 @@ class FELService: ObservableObject {
         try awFELWrite(data: thunkCode, offset: socInfo.thunkAddr)
 
         // Execute SPL. The BROM sends CSW+status before executing, so this
-        // returns instantly. DRAM init then kills USB permanently — the only
-        // recovery is physical USB replug.
+        // returns instantly. DRAM init reconfigures PLL11 which corrupts the
+        // USB PHY state on the A64. We issue an IOKit ResetDevice() to force
+        // macOS to re-enumerate the bus without cutting VBUS power.
         appendLogSync("SPL executing...")
         try awFELExecute(offset: socInfo.thunkAddr)
-        appendLogSync("SPL acknowledged — DRAM init running, USB will die")
+        appendLogSync("SPL acknowledged — DRAM init running")
 
-        // Close dead handles and wait for replug
-        closeDevice()
-        DispatchQueue.main.async { self.needsUSBReplug = true }
-        appendLogSync(">>> REPLUG USB NOW — waiting 60s <<<")
+        // Wait for DRAM init to complete and USB PHY to settle
+        appendLogSync("Waiting 3s for DRAM init + PHY settle...")
+        Thread.sleep(forTimeInterval: 3.0)
 
+        // Reset USB bus (data lines only — VBUS stays powered)
+        resetUSBDevice()
+        appendLogSync("USB bus reset sent — waiting for re-enumeration...")
+
+        // Give macOS time to process the reset and re-enumerate
+        Thread.sleep(forTimeInterval: 2.0)
+
+        // Poll for device re-enumeration (30s timeout)
         var reconnected = false
-        let deadline = Date().addingTimeInterval(60)
+        let deadline = Date().addingTimeInterval(30)
         while Date() < deadline {
             Thread.sleep(forTimeInterval: 0.5)
             do {
                 try openUSBDevice()
                 try findAndOpenInterface()
+
+                // Clear any stale pipe state from the PHY disruption
+                if let iface = interfaceInterface {
+                    if pipeIn != 0 {
+                        iface.pointee.pointee.ClearPipeStallBothEnds(iface, pipeIn)
+                    }
+                    if pipeOut != 0 {
+                        iface.pointee.pointee.ClearPipeStallBothEnds(iface, pipeOut)
+                    }
+                }
+
                 _ = try getVersionSync()
                 reconnected = true
-                appendLogSync("USB reconnected!")
+                appendLogSync("USB reconnected after reset — no replug needed!")
                 break
             } catch {
                 closeDevice()
             }
         }
 
-        DispatchQueue.main.async { self.needsUSBReplug = false }
+        // Fallback: if reset didn't work, ask for manual replug
+        if !reconnected {
+            DispatchQueue.main.async { self.needsUSBReplug = true }
+            appendLogSync("USB reset failed — please replug USB cable (30s)")
+
+            let fallbackDeadline = Date().addingTimeInterval(30)
+            while Date() < fallbackDeadline {
+                Thread.sleep(forTimeInterval: 0.5)
+                do {
+                    try openUSBDevice()
+                    try findAndOpenInterface()
+                    _ = try getVersionSync()
+                    reconnected = true
+                    appendLogSync("USB reconnected after replug!")
+                    break
+                } catch {
+                    closeDevice()
+                }
+            }
+            DispatchQueue.main.async { self.needsUSBReplug = false }
+        }
+
         guard reconnected else {
-            throw FELError.protocolError("Replug timeout — replug USB and run boot again")
+            throw FELError.protocolError("USB reconnection failed — replug USB and run boot again")
         }
 
         // Verify DRAM initialized — eGON.FEL signature
