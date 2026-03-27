@@ -66,7 +66,7 @@ func main() {
 		// Project operations
 		commands.Project,
 		// Manufacturing
-		commands.DFM,
+		commands.DFMPipeline,
 		commands.Fab,
 		// EDA
 		commands.EDA,
