@@ -325,6 +325,46 @@ class AppState: ObservableObject {
                     let addr: UInt32 = parts.count >= 2 ? (UInt32(parts[1].replacingOccurrences(of: "0x", with: ""), radix: 16) ?? 0x4a000000) : 0x4a000000
                     self.felService.executeAt(address: addr) { _ in }
                     return "executing at 0x\(String(format: "%x", addr))"
+                case "backlight":
+                    guard self.felService.connectionState == .connected else { return "not connected" }
+                    let blParts = cmd.split(separator: " ").map(String.init)
+                    let brightness: UInt32 = blParts.count >= 2 ? (UInt32(blParts[1]) ?? 128) : 128
+                    self.felService.appendLog("Backlight: brightness=\(brightness)/255")
+
+                    let srcURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/backlight_on.bin")
+                    guard var thunkData = try? Data(contentsOf: srcURL) else {
+                        return "cannot load backlight_on.bin"
+                    }
+
+                    // Patch brightness at offset 0x88
+                    thunkData.replaceSubrange(0x88..<0x8C, with: withUnsafeBytes(of: brightness.littleEndian) { Data($0) })
+
+                    let thunkAddr: UInt32 = 0x00011000  // scratch area (164 bytes, fits easily)
+                    let sem = DispatchSemaphore(value: 0)
+                    var blResult = ""
+
+                    self.felService.writeMemory(address: thunkAddr, data: thunkData) { writeResult in
+                        switch writeResult {
+                        case .failure(let e):
+                            blResult = "write failed: \(e.localizedDescription)"
+                            sem.signal()
+                            return
+                        case .success: break
+                        }
+
+                        self.felService.executeAt(address: thunkAddr) { execResult in
+                            switch execResult {
+                            case .failure(let e):
+                                blResult = "exec failed: \(e.localizedDescription)"
+                            case .success:
+                                blResult = "backlight ON (brightness=\(brightness)/255)"
+                                self.felService.appendLog("Backlight: ON")
+                            }
+                            sem.signal()
+                        }
+                    }
+                    sem.wait()
+                    return blResult
                 case "mmc":
                     guard self.felService.connectionState == .connected else { return "not connected" }
                     let mmcParts = cmd.split(separator: " ").map(String.init)
