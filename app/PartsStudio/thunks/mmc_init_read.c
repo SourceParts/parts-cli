@@ -391,8 +391,9 @@ static int mmc_read_sector(u32 base, u32 sector, u8 *buf) {
 
 void __attribute__((naked, section(".text.entry"))) _start(void) {
     asm volatile(
-        "ldr sp, =0x00018000\n"   /* stack at top of SRAM A1 */
+        "push {r4-r11, lr}\n"    /* save BROM's registers on BROM's stack */
         "bl  main\n"
+        "pop  {r4-r11, lr}\n"    /* restore BROM's registers */
         "bx  lr\n"               /* return to FEL/BROM */
     );
 }

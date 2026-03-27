@@ -343,12 +343,12 @@ class AppState: ObservableObject {
                     }
 
                     // Layout: binary loaded at 0x1A200 (SRAM C / thunk area)
-                    // _start entry at offset 0x5E4 (execute at 0x1A7E4)
-                    // g_params struct at offset 0x15F0 (address 0x1B7F0)
-                    // Data output at 0x12000 (scratch area, after status)
+                    // _start entry at offset 0x5D8 (execute at 0x1A7D8)
+                    // g_params struct at offset 0x15E8 (address 0x1B7E8)
+                    // Uses BROM's stack (push/pop callee-saved regs)
                     let thunkAddr: UInt32 = 0x0001A200
-                    let entryAddr: UInt32 = 0x0001A7E4
-                    let paramsOffset = 0x15F0  // offset in binary to g_params
+                    let entryAddr: UInt32 = 0x0001A7D8
+                    let paramsOffset = 0x15E8  // offset in binary to g_params
                     let bufAddr: UInt32 = 0x00012000   // data output in SRAM A
                     let statAddr: UInt32 = 0x00011F00   // status in scratch area
 
