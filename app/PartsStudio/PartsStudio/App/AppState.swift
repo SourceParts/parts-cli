@@ -331,13 +331,13 @@ class AppState: ObservableObject {
                     let brightness: UInt32 = blParts.count >= 2 ? (UInt32(blParts[1]) ?? 128) : 128
                     self.felService.appendLog("Backlight: brightness=\(brightness)/255")
 
-                    let srcURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/backlight_on.bin")
+                    let srcURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/lcd_power_on.bin")
                     guard var thunkData = try? Data(contentsOf: srcURL) else {
-                        return "cannot load backlight_on.bin"
+                        return "cannot load lcd_power_on.bin"
                     }
 
-                    // Patch brightness at offset 0x88
-                    thunkData.replaceSubrange(0x88..<0x8C, with: withUnsafeBytes(of: brightness.littleEndian) { Data($0) })
+                    // Patch brightness at offset 0x188
+                    thunkData.replaceSubrange(0x188..<0x18C, with: withUnsafeBytes(of: brightness.littleEndian) { Data($0) })
 
                     let thunkAddr: UInt32 = 0x00011000  // scratch area (164 bytes, fits easily)
                     let sem = DispatchSemaphore(value: 0)
@@ -365,6 +365,42 @@ class AppState: ObservableObject {
                     }
                     sem.wait()
                     return blResult
+                case "i2cscan":
+                    guard self.felService.connectionState == .connected else { return "not connected" }
+                    self.felService.appendLog("I2C: scanning TWI0/1/2 + PMIC...")
+                    let i2cURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/i2c_scan.bin")
+                    guard let i2cData = try? Data(contentsOf: i2cURL) else { return "cannot load i2c_scan.bin" }
+                    let i2cThunkAddr: UInt32 = 0x0001A200
+                    let i2cEntryAddr: UInt32 = 0x0001A4B8
+                    let i2cBufAddr: UInt32 = 0x00012000
+                    let i2cStatAddr: UInt32 = 0x00011F00
+                    var i2cPatched = i2cData
+                    i2cPatched.replaceSubrange(0x12C8..<0x12CC, with: withUnsafeBytes(of: i2cBufAddr.littleEndian) { Data($0) })
+                    i2cPatched.replaceSubrange(0x12CC..<0x12D0, with: withUnsafeBytes(of: i2cStatAddr.littleEndian) { Data($0) })
+                    let i2cSem = DispatchSemaphore(value: 0)
+                    var i2cResult = ""
+                    self.felService.writeMemory(address: i2cThunkAddr, data: i2cPatched) { wr in
+                        guard case .success = wr else { i2cResult = "write failed"; i2cSem.signal(); return }
+                        self.felService.executeAt(address: i2cEntryAddr) { ex in
+                            guard case .success = ex else { i2cResult = "exec failed"; i2cSem.signal(); return }
+                            self.felService.readMemory(address: i2cBufAddr, length: 58) { rd in
+                                guard case .success(let data) = rd else { i2cResult = "read failed"; i2cSem.signal(); return }
+                                var lines: [String] = []
+                                let twi0Count = min(Int(data[0]), 16)
+                                lines.append("TWI0: \(twi0Count) device(s)" + (twi0Count > 0 ? " — " + (0..<twi0Count).map { "0x\(String(format: "%02x", data[1+$0]))" }.joined(separator: " ") : ""))
+                                let twi1Count = min(Int(data[17]), 16)
+                                lines.append("TWI1: \(twi1Count) device(s)" + (twi1Count > 0 ? " — " + (0..<twi1Count).map { "0x\(String(format: "%02x", data[18+$0]))" }.joined(separator: " ") : ""))
+                                let twi2Count = min(Int(data[34]), 16)
+                                lines.append("TWI2: \(twi2Count) device(s)" + (twi2Count > 0 ? " — " + (0..<twi2Count).map { "0x\(String(format: "%02x", data[35+$0]))" }.joined(separator: " ") : ""))
+                                lines.append("PMIC: CTRL2=0x\(String(format: "%02x", data[51])) CTRL1=0x\(String(format: "%02x", data[52])) CTRL3=0x\(String(format: "%02x", data[53])) GPIO0=0x\(String(format: "%02x", data[54])) IO0_V=0x\(String(format: "%02x", data[55])) STATUS=0x\(String(format: "%02x", data[56]))")
+                                for line in lines { self.felService.appendLog("I2C: \(line)") }
+                                i2cResult = lines.joined(separator: "\n")
+                                i2cSem.signal()
+                            }
+                        }
+                    }
+                    i2cSem.wait()
+                    return i2cResult
                 case "mmc":
                     guard self.felService.connectionState == .connected else { return "not connected" }
                     let mmcParts = cmd.split(separator: " ").map(String.init)

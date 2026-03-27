@@ -525,12 +525,7 @@ struct GerberViewerView: View {
 
 // MARK: - Board Bounds
 
-struct GerberBounds {
-    let left: Double
-    let right: Double
-    let bottom: Double
-    let top: Double
-}
+typealias GerberBounds = GerbvRenderer.GerberBounds
 
 // MARK: - Draggable Scroll View
 
