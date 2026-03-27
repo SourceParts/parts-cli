@@ -336,28 +336,39 @@ class AppState: ObservableObject {
                     let count = mmcParts.count >= 4 ? (UInt32(mmcParts[3]) ?? 1) : 1
                     self.felService.appendLog("MMC: reading \(count) sector(s) from LBA \(sector)...")
 
-                    // Load thunk binary
-                    let thunkURL = Bundle.main.bundleURL
-                        .deletingLastPathComponent() // .build/debug/
-                        .deletingLastPathComponent() // .build/
-                        .deletingLastPathComponent() // PartsStudio/
-                        .appendingPathComponent("thunks/mmc_read.bin")
-                    // Also try relative to source
-                    let srcThunkURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/mmc_read.bin")
-                    guard let thunkData = (try? Data(contentsOf: thunkURL)) ?? (try? Data(contentsOf: srcThunkURL)) else {
-                        return "cannot load mmc_read.bin thunk"
+                    // Load thunk binary (C-based, full SD init + read)
+                    let srcThunkURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/mmc_init_read.bin")
+                    guard let thunkData = try? Data(contentsOf: srcThunkURL) else {
+                        return "cannot load mmc_init_read.bin thunk"
                     }
 
-                    // Patch literal pool: thunk is loaded at 0x11000
+                    // Layout: binary loaded at 0x11000
+                    // _start entry at offset 0x5E4 (execute at 0x115E4)
+                    // g_params struct at offset 0x15F0 (address 0x125F0)
+                    // Params: mmc_base(4), sector_start(4), sector_count(4), buf_addr(4), stat_addr(4), is_emmc(4)
                     let thunkAddr: UInt32 = 0x00011000
-                    let bufAddr: UInt32 = 0x00012000   // data output after thunk
-                    let statAddr: UInt32 = 0x00011F00   // status output
+                    let entryAddr: UInt32 = 0x000115E4
+                    let paramsOffset = 0x15F0  // offset in binary to g_params
+                    let bufAddr: UInt32 = 0x00013000   // data output (after thunk+params)
+                    let statAddr: UInt32 = 0x00011F00   // status output (in scratch area)
+
+                    // Determine bus: "mmc read emmc <sector> [count]" for eMMC
+                    let mmcParts2 = cmd.split(separator: " ").map(String.init)
+                    let isEMMC: UInt32 = (mmcParts2.count >= 3 && mmcParts2[2].lowercased() == "emmc") ? 1 : 0
+                    let sectorArg = isEMMC == 1 ? (mmcParts2.count >= 4 ? (UInt32(mmcParts2[3]) ?? 0) : 0) : sector
+                    let countArg = isEMMC == 1 ? (mmcParts2.count >= 5 ? (UInt32(mmcParts2[4]) ?? 1) : 1) : count
+                    let mmcBase: UInt32 = isEMMC == 1 ? 0x01C11000 : 0x01C0F000
+
+                    self.felService.appendLog("MMC: bus=\(isEMMC == 1 ? "eMMC (MMC2)" : "SD (MMC0)") base=0x\(String(format: "%x", mmcBase))")
+
                     var patched = thunkData
-                    // Offsets from disassembly: mmc_base=0xFC, sector_start=0x100, sector_count=0x104, buf_addr=0x108, stat_addr=0x10C
-                    patched.replaceSubrange(0x100..<0x104, with: withUnsafeBytes(of: sector.littleEndian) { Data($0) })
-                    patched.replaceSubrange(0x104..<0x108, with: withUnsafeBytes(of: count.littleEndian) { Data($0) })
-                    patched.replaceSubrange(0x108..<0x10C, with: withUnsafeBytes(of: bufAddr.littleEndian) { Data($0) })
-                    patched.replaceSubrange(0x10C..<0x110, with: withUnsafeBytes(of: statAddr.littleEndian) { Data($0) })
+                    // Patch g_params struct at paramsOffset
+                    patched.replaceSubrange(paramsOffset..<paramsOffset+4, with: withUnsafeBytes(of: mmcBase.littleEndian) { Data($0) })
+                    patched.replaceSubrange(paramsOffset+4..<paramsOffset+8, with: withUnsafeBytes(of: sectorArg.littleEndian) { Data($0) })
+                    patched.replaceSubrange(paramsOffset+8..<paramsOffset+12, with: withUnsafeBytes(of: countArg.littleEndian) { Data($0) })
+                    patched.replaceSubrange(paramsOffset+12..<paramsOffset+16, with: withUnsafeBytes(of: bufAddr.littleEndian) { Data($0) })
+                    patched.replaceSubrange(paramsOffset+16..<paramsOffset+20, with: withUnsafeBytes(of: statAddr.littleEndian) { Data($0) })
+                    patched.replaceSubrange(paramsOffset+20..<paramsOffset+24, with: withUnsafeBytes(of: isEMMC.littleEndian) { Data($0) })
 
                     let sem = DispatchSemaphore(value: 0)
                     var mmcResult = ""
@@ -373,8 +384,8 @@ class AppState: ObservableObject {
                             self.felService.appendLog("MMC: thunk loaded at 0x\(String(format: "%x", thunkAddr))")
                         }
 
-                        // Execute thunk
-                        self.felService.executeAt(address: thunkAddr) { execResult in
+                        // Execute thunk at _start entry point
+                        self.felService.executeAt(address: entryAddr) { execResult in
                             switch execResult {
                             case .failure(let e):
                                 mmcResult = "exec failed: \(e.localizedDescription)"
@@ -384,8 +395,8 @@ class AppState: ObservableObject {
                                 self.felService.appendLog("MMC: thunk returned, reading status...")
                             }
 
-                            // Read status (8 bytes: error code + sectors read)
-                            self.felService.readMemory(address: statAddr, length: 8) { statusResult in
+                            // Read status (16 bytes: error, sectors_read, rca, debug)
+                            self.felService.readMemory(address: statAddr, length: 16) { statusResult in
                                 switch statusResult {
                                 case .failure(let e):
                                     mmcResult = "read status failed: \(e.localizedDescription)"
@@ -394,8 +405,11 @@ class AppState: ObservableObject {
                                 case .success(let statusData):
                                     let errCode = statusData.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt32.self) }
                                     let sectorsRead = statusData.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt32.self) }
+                                    let rca = statusData.withUnsafeBytes { $0.load(fromByteOffset: 8, as: UInt32.self) }
+                                    let debug = statusData.withUnsafeBytes { $0.load(fromByteOffset: 12, as: UInt32.self) }
+                                    self.felService.appendLog("MMC: err=\(errCode) sectors=\(sectorsRead) rca=0x\(String(format: "%08x", rca)) debug=0x\(String(format: "%08x", debug))")
                                     if errCode != 0 {
-                                        mmcResult = "MMC error \(errCode), \(sectorsRead) sectors read"
+                                        mmcResult = "MMC error \(errCode), \(sectorsRead) sectors read (debug=0x\(String(format: "%08x", debug)))"
                                         sem.signal()
                                         return
                                     }

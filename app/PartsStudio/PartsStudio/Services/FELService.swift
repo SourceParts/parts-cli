@@ -317,6 +317,26 @@ class FELService: ObservableObject {
     }
 
     private func openUSBDevice() throws {
+        // Skip if already open
+        if deviceInterface != nil { return }
+
+        // Retry up to 5 times with increasing delay for exclusive access
+        var lastError: Int32 = 0
+        for attempt in 1...5 {
+            do {
+                try openUSBDeviceOnce()
+                return  // success
+            } catch FELError.openFailed(let code) where code == -536870203 {
+                // kIOReturnExclusiveAccess — another driver claimed it temporarily
+                lastError = code
+                let delay = Double(attempt) * 0.5  // 0.5s, 1s, 1.5s, 2s, 2.5s
+                Thread.sleep(forTimeInterval: delay)
+            }
+        }
+        throw FELError.openFailed(lastError)
+    }
+
+    private func openUSBDeviceOnce() throws {
         let matchingDict = IOServiceMatching(kIOUSBDeviceClassName) as NSMutableDictionary
         matchingDict[kUSBVendorID] = AW_USB_VENDOR_ID
         matchingDict[kUSBProductID] = AW_USB_PRODUCT_ID
@@ -356,15 +376,20 @@ class FELService: ObservableObject {
             throw FELError.openFailed(Int32(queryResult ?? -1))
         }
 
-        deviceInterface = rawPtr.assumingMemoryBound(
+        let devIf = rawPtr.assumingMemoryBound(
             to: UnsafeMutablePointer<IOUSBDeviceInterface>.self
         )
 
         // Open the device
-        let openResult = deviceInterface!.pointee.pointee.USBDeviceOpen(deviceInterface!)
+        let openResult = devIf.pointee.pointee.USBDeviceOpen(devIf)
         guard openResult == KERN_SUCCESS else {
+            // Release the interface ref since we couldn't open
+            devIf.pointee.pointee.Release(devIf)
             throw FELError.openFailed(openResult)
         }
+
+        // Only set instance var after successful open
+        deviceInterface = devIf
 
         // Configure
         var configNum: UInt8 = 0
