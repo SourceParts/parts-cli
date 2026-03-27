@@ -181,16 +181,25 @@ static int mmc_update_clk(u32 base) {
  * ========================================================= */
 
 static void mmc_clock_init(u32 is_emmc) {
+    /*
+     * CRITICAL: Preserve USB OTG bits when modifying CCU registers.
+     * AHB gate (0x060) bit 23 = USB OTG, bit 24 = USB EHCI/OHCI
+     * Bus reset (0x2C0) bit 23 = USB OTG, bit 24 = USB EHCI/OHCI
+     * If we clobber these, FEL USB dies and we can't read results back.
+     */
+    u32 gate = CCU_BUS_CLK_GATE0;
+    u32 rst = CCU_BUS_SOFT_RST0;
+
     if (is_emmc) {
         /* MMC2 (eMMC): enable AHB gate (bit 10), deassert reset (bit 10) */
-        CCU_BUS_CLK_GATE0 |= (1 << 10);
-        CCU_BUS_SOFT_RST0 |= (1 << 10);
+        CCU_BUS_CLK_GATE0 = gate | (1 << 10);
+        CCU_BUS_SOFT_RST0 = rst | (1 << 10);
         /* Set MMC2 clock: OSC24M source (0), divider 1, enable */
         CCU_SDMMC2_CLK = (1u << 31) | (0 << 24) | 0;  /* 24MHz */
     } else {
         /* MMC0 (SD card): enable AHB gate (bit 8), deassert reset (bit 8) */
-        CCU_BUS_CLK_GATE0 |= (1 << 8);
-        CCU_BUS_SOFT_RST0 |= (1 << 8);
+        CCU_BUS_CLK_GATE0 = gate | (1 << 8);
+        CCU_BUS_SOFT_RST0 = rst | (1 << 8);
         /* Set MMC0 clock: OSC24M source (0), divider 1, enable */
         CCU_SDMMC0_CLK = (1u << 31) | (0 << 24) | 0;  /* 24MHz */
     }

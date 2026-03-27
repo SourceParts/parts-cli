@@ -380,8 +380,10 @@ class FELService: ObservableObject {
             to: UnsafeMutablePointer<IOUSBDeviceInterface>.self
         )
 
-        // Open the device
-        let openResult = devIf.pointee.pointee.USBDeviceOpen(devIf)
+        // Open the device — use Seize to take it from any kernel driver (DriverKit)
+        // that matched on VID 0x1F3A. Regular USBDeviceOpen fails with
+        // kIOReturnExclusiveAccess when a DEXT has claimed the device.
+        let openResult = devIf.pointee.pointee.USBDeviceOpenSeize(devIf)
         guard openResult == KERN_SUCCESS else {
             // Release the interface ref since we couldn't open
             devIf.pointee.pointee.Release(devIf)
@@ -518,7 +520,14 @@ class FELService: ObservableObject {
 
     private var usbTimeoutMS: UInt32 = 10000 // 10 second USB timeout (adjustable for SPL)
 
-    /// Send data to the OUT bulk endpoint.
+    /// Clear stalled pipe and retry. Returns true if stall was cleared.
+    private func clearPipeStall(pipe: UInt8) -> Bool {
+        guard let iface = interfaceInterface else { return false }
+        let kr = iface.pointee.pointee.ClearPipeStallBothEnds(iface, pipe)
+        return kr == KERN_SUCCESS
+    }
+
+    /// Send data to the OUT bulk endpoint. Auto-clears pipe stall on first failure.
     private func bulkSend(_ data: Data) throws {
         guard let iface = interfaceInterface else { throw FELError.deviceNotFound }
 
@@ -526,7 +535,7 @@ class FELService: ObservableObject {
         while offset < data.count {
             let chunkSize = min(AW_USB_MAX_BULK_SEND, data.count - offset)
             let chunk = data[offset..<offset + chunkSize]
-            let kr = chunk.withUnsafeBytes { ptr in
+            var kr = chunk.withUnsafeBytes { ptr in
                 iface.pointee.pointee.WritePipeTO(
                     iface, pipeOut,
                     UnsafeMutableRawPointer(mutating: ptr.baseAddress!),
@@ -534,24 +543,51 @@ class FELService: ObservableObject {
                     usbTimeoutMS, usbTimeoutMS
                 )
             }
+            // Auto-recover from pipe stall: clear and retry once
+            if kr == -536854447 { // kIOUSBPipeStalled
+                if clearPipeStall(pipe: pipeOut) {
+                    kr = chunk.withUnsafeBytes { ptr in
+                        iface.pointee.pointee.WritePipeTO(
+                            iface, pipeOut,
+                            UnsafeMutableRawPointer(mutating: ptr.baseAddress!),
+                            UInt32(chunkSize),
+                            usbTimeoutMS, usbTimeoutMS
+                        )
+                    }
+                }
+            }
             guard kr == KERN_SUCCESS else { throw FELError.sendFailed(kr) }
             offset += chunkSize
         }
     }
 
-    /// Receive data from the IN bulk endpoint (with timeout).
+    /// Receive data from the IN bulk endpoint (with timeout). Auto-clears pipe stall.
     private func bulkRecv(_ length: Int) throws -> Data {
         guard let iface = interfaceInterface else { throw FELError.deviceNotFound }
 
         var buffer = Data(count: length)
         var actualLength = UInt32(length)
-        let kr = buffer.withUnsafeMutableBytes { ptr in
+        var kr = buffer.withUnsafeMutableBytes { ptr in
             iface.pointee.pointee.ReadPipeTO(
                 iface, pipeIn,
                 ptr.baseAddress!,
                 &actualLength,
                 usbTimeoutMS, usbTimeoutMS
             )
+        }
+        // Auto-recover from pipe stall: clear and retry once
+        if kr == -536854447 { // kIOUSBPipeStalled
+            if clearPipeStall(pipe: pipeIn) {
+                actualLength = UInt32(length)
+                kr = buffer.withUnsafeMutableBytes { ptr in
+                    iface.pointee.pointee.ReadPipeTO(
+                        iface, pipeIn,
+                        ptr.baseAddress!,
+                        &actualLength,
+                        usbTimeoutMS, usbTimeoutMS
+                    )
+                }
+            }
         }
         guard kr == KERN_SUCCESS else { throw FELError.recvFailed(kr) }
         return Data(buffer.prefix(Int(actualLength)))
