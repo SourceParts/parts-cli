@@ -112,10 +112,12 @@ static u32 rreg(u32 base, u32 off) { return REG(base, off); }
 struct params {
     u32 mmc_base;       /* MMC0 or MMC2 base address */
     u32 sector_start;   /* LBA start sector */
-    u32 sector_count;   /* number of 512-byte sectors */
+    u32 sector_count;   /* number of 512-byte sectors (max 8 per call) */
     u32 buf_addr;       /* output data buffer (SRAM) */
     u32 stat_addr;      /* status output (SRAM) */
     u32 is_emmc;        /* 0 = SD card (MMC0), 1 = eMMC (MMC2) */
+    u32 skip_init;      /* nonzero = skip card init (card already initialized) */
+    u32 saved_rca;      /* RCA from previous init (used when skip_init=1) */
 };
 
 /* Linker places this right after code */
@@ -127,6 +129,8 @@ volatile struct params g_params = {
     .buf_addr     = 0x00012000,
     .stat_addr    = 0x00011F00,
     .is_emmc      = 0,
+    .skip_init    = 0,
+    .saved_rca    = 0,
 };
 
 struct status {
@@ -440,14 +444,23 @@ void main(void) {
         return;
     }
 
-    /* 4. Initialize card — with step-by-step debug */
+    /* 4. Initialize card (or skip if already initialized) */
     u32 rca = 0;
     int ret;
-    st->debug = 0xA0;  /* marker: starting init */
 
-    if (p->is_emmc) {
+    if (p->skip_init) {
+        /* Card already initialized — just select it with saved RCA */
+        rca = p->saved_rca;
+        st->debug = 0xB0;  /* marker: skipping init */
+        st->rca = rca;
+        /* CMD7: SELECT_CARD (in case it was deselected) */
+        mmc_send_cmd(base, 7, rca, CMD_RESP | CMD_CHK_CRC);
+        ret = 0;
+    } else if (p->is_emmc) {
+        st->debug = 0xA0;
         ret = emmc_init(base, &rca);
     } else {
+        st->debug = 0xA0;
         /* Step-by-step SD init with debug markers */
         /* CMD0: GO_IDLE_STATE */
         mmc_send_cmd(base, 0, 0, CMD_SEND_INIT);

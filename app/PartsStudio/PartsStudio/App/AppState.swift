@@ -343,12 +343,13 @@ class AppState: ObservableObject {
                     }
 
                     // Layout: binary loaded at 0x1A200 (SRAM C / thunk area)
-                    // _start entry at offset 0x6A4 (execute at 0x1A8A4)
-                    // g_params struct at offset 0x16B4 (address 0x1B8B4)
-                    // Uses BROM's stack (push/pop callee-saved regs)
+                    // _start entry at offset 0x6E0 (execute at 0x1A8E0)
+                    // g_params struct at offset 0x16F0 (address 0x1B8F0)
+                    // Params: mmc_base(4), sector_start(4), sector_count(4), buf_addr(4),
+                    //         stat_addr(4), is_emmc(4), skip_init(4), saved_rca(4)
                     let thunkAddr: UInt32 = 0x0001A200
-                    let entryAddr: UInt32 = 0x0001A8A4
-                    let paramsOffset = 0x16B4  // offset in binary to g_params
+                    let entryAddr: UInt32 = 0x0001A8E0
+                    let paramsOffset = 0x16F0  // offset in binary to g_params
                     let bufAddr: UInt32 = 0x00012000   // data output in SRAM A
                     let statAddr: UInt32 = 0x00011F00   // status in scratch area
 
@@ -369,6 +370,11 @@ class AppState: ObservableObject {
                     patched.replaceSubrange(paramsOffset+12..<paramsOffset+16, with: withUnsafeBytes(of: bufAddr.littleEndian) { Data($0) })
                     patched.replaceSubrange(paramsOffset+16..<paramsOffset+20, with: withUnsafeBytes(of: statAddr.littleEndian) { Data($0) })
                     patched.replaceSubrange(paramsOffset+20..<paramsOffset+24, with: withUnsafeBytes(of: isEMMC.littleEndian) { Data($0) })
+                    // skip_init and saved_rca default to 0 in the binary (first call inits)
+                    let skipInit: UInt32 = 0
+                    let savedRca: UInt32 = 0
+                    patched.replaceSubrange(paramsOffset+24..<paramsOffset+28, with: withUnsafeBytes(of: skipInit.littleEndian) { Data($0) })
+                    patched.replaceSubrange(paramsOffset+28..<paramsOffset+32, with: withUnsafeBytes(of: savedRca.littleEndian) { Data($0) })
 
                     let sem = DispatchSemaphore(value: 0)
                     var mmcResult = ""
