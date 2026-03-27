@@ -119,6 +119,7 @@ func init() {
 	githubReport.Flags().StringP("client", "c", "", "Client full name")
 	githubReport.Flags().StringP("email", "e", "", "Client email address")
 	githubReport.Flags().String("cc", "", "CC email address")
+	githubReport.Flags().String("bcc", "", "BCC email address")
 	githubReport.Flags().StringP("api-key", "k", "", "API key (overrides env var)")
 	githubReport.Flags().String("version", "", "File version (auto-extracted from filename if omitted)")
 	githubReport.Flags().String("repository", "", "Repository name (default: GITHUB_REPOSITORY env or \"unknown\")")
@@ -286,6 +287,7 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 	clientName, _ := cmd.Flags().GetString("client")
 	email, _ := cmd.Flags().GetString("email")
 	cc, _ := cmd.Flags().GetString("cc")
+	bcc, _ := cmd.Flags().GetString("bcc")
 	version, _ := cmd.Flags().GetString("version")
 	repository, _ := cmd.Flags().GetString("repository")
 	branch, _ := cmd.Flags().GetString("branch")
@@ -309,6 +311,10 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return fmt.Errorf("report file is empty: %s", filePath)
 	}
+
+	// Try to extract ECN frontmatter for structured metadata
+	// Don't fail on parse error — frontmatter is optional for non-ECN reports
+	fm, _, _ := parseECNFrontmatter(string(content))
 
 	// Resolve defaults
 	fileName := filepath.Base(filePath)
@@ -344,11 +350,27 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 		ProjectName:     project,
 		ClientEmail:     email,
 		ClientCCEmail:   cc,
+		ClientBCCEmail:  bcc,
 		ClientName:      clientName,
 		IssuesCount:     issuesCount,
 		Summary:         summary,
 		ThreadID:        threadID,
 		MarkdownContent: string(content),
+	}
+
+	// Populate ECN frontmatter fields if parsed successfully
+	if fm != nil {
+		payload.ECNID = fm.ID
+		payload.ECNTitle = fm.Title
+		payload.ECNSeverity = fm.Severity
+		payload.ECNStatus = fm.Status
+		payload.ECNType = fm.Type
+		payload.ECNDisposition = fm.Disposition
+		payload.ECNAuthor = fm.Author
+		payload.ECNUpdatedDate = fm.UpdatedDate
+		if threadID == "" && fm.ThreadID != "" {
+			payload.ThreadID = fm.ThreadID
+		}
 	}
 
 	// Display info
@@ -357,6 +379,9 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Client:     %s <%s>\n", clientName, email)
 	if cc != "" {
 		fmt.Printf("  CC:         %s\n", cc)
+	}
+	if bcc != "" {
+		fmt.Printf("  BCC:        %s\n", bcc)
 	}
 	fmt.Printf("  File:       %s\n", fileName)
 	if version != "" {
