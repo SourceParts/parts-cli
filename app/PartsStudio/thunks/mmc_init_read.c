@@ -76,7 +76,10 @@ typedef volatile u32 vu32;
 #define RINT_CMD_DONE   (1u << 2)
 #define RINT_DATA_OVER  (1u << 3)
 #define RINT_RX_REQ     (1u << 5)
-#define RINT_ERROR      0x0000BFFE
+/* Error bits: 1(resp_error), 6(resp_crc), 7(data_crc), 8(resp_timeout),
+ * 9(data_timeout), 10(voltage), 11(fifo_run), 12(hw_locked),
+ * 13(start_bit), 15(end_bit). Exclude bits 2-5 (CMD_DONE, DATA_OVER, etc) */
+#define RINT_ERROR      0x0000BFC2
 
 /* Status bits */
 #define STATUS_FIFO_EMPTY (1u << 2)
@@ -352,33 +355,49 @@ static int emmc_init(u32 base, u32 *rca_out) {
  * ========================================================= */
 
 static int mmc_read_sector(u32 base, u32 sector, u8 *buf) {
-    /* Clear interrupts */
-    wreg(base, MMC_RINT, 0xFFFFFFFF);
-
     /* Block size = 512, byte count = 512 */
     wreg(base, MMC_BLKSZ, 512);
     wreg(base, MMC_BYTECNT, 512);
 
-    /* CMD17: READ_SINGLE_BLOCK (sector address for SDHC) */
-    int ret = mmc_send_cmd(base, 17, sector,
-                           CMD_RESP | CMD_CHK_CRC | CMD_DATA | CMD_WAIT_PRE);
-    if (ret) return -1;
+    /* Clear all interrupts BEFORE issuing command */
+    wreg(base, MMC_RINT, 0xFFFFFFFF);
 
-    /* Read 128 words from FIFO */
+    /* Set argument */
+    wreg(base, MMC_ARG, sector);
+
+    /* CMD17: READ_SINGLE_BLOCK — issue directly (not via mmc_send_cmd
+     * which clears RINT and might race with data transfer) */
+    u32 cmd_val = CMD_START | CMD_RESP | CMD_CHK_CRC | CMD_DATA | CMD_WAIT_PRE | 17;
+    wreg(base, MMC_CMD, cmd_val);
+
+    /* Wait for command accepted */
+    for (u32 i = 0; i < 500000; i++) {
+        u32 rint = rreg(base, MMC_RINT);
+        if (rint & RINT_ERROR) return -1;
+        if (rint & RINT_CMD_DONE) break;
+        delay(1);
+    }
+
+    /* Read 128 words from FIFO as data arrives */
     u32 *dst = (u32 *)buf;
     for (int i = 0; i < 128; i++) {
-        /* Wait for FIFO data */
-        u32 timeout = 100000;
-        while ((rreg(base, MMC_STATUS) & STATUS_FIFO_EMPTY) && --timeout)
-            delay(1);
+        /* Wait for FIFO to have data (check FIFO level in status register) */
+        u32 timeout = 500000;
+        while (timeout--) {
+            u32 status = rreg(base, MMC_STATUS);
+            if (!(status & STATUS_FIFO_EMPTY)) break;
+            /* Also check for errors during data transfer */
+            if (rreg(base, MMC_RINT) & RINT_ERROR) return -2;
+        }
         if (!timeout) return -2;
         dst[i] = rreg(base, MMC_FIFO);
     }
 
     /* Wait for data transfer complete */
     for (u32 i = 0; i < 500000; i++) {
-        if (rreg(base, MMC_RINT) & RINT_DATA_OVER)
-            break;
+        u32 rint = rreg(base, MMC_RINT);
+        if (rint & RINT_DATA_OVER) break;
+        if (rint & RINT_ERROR) return -3;
         delay(1);
     }
 
@@ -421,13 +440,77 @@ void main(void) {
         return;
     }
 
-    /* 4. Initialize card */
+    /* 4. Initialize card — with step-by-step debug */
     u32 rca = 0;
     int ret;
+    st->debug = 0xA0;  /* marker: starting init */
+
     if (p->is_emmc) {
         ret = emmc_init(base, &rca);
     } else {
-        ret = sd_init(base, &rca);
+        /* Step-by-step SD init with debug markers */
+        /* CMD0: GO_IDLE_STATE */
+        mmc_send_cmd(base, 0, 0, CMD_SEND_INIT);
+        delay(50000);
+        st->debug = 0xA1;  /* past CMD0 */
+
+        /* CMD8: SEND_IF_COND */
+        ret = mmc_send_cmd(base, 8, 0x1AA, CMD_RESP | CMD_CHK_CRC);
+        int is_sdhc = (ret == 0);
+        st->debug = is_sdhc ? 0xA2 : 0xA3;  /* A2=SDHC, A3=not SDHC */
+
+        /* ACMD41 loop */
+        u32 ocr_resp = 0;
+        for (int i = 0; i < 100; i++) {
+            mmc_send_cmd(base, 55, 0, CMD_RESP | CMD_CHK_CRC);
+            u32 ocr_arg = 0x40300000;  /* HCS + 3.2-3.4V */
+            mmc_send_cmd(base, 41, ocr_arg, CMD_RESP);
+            ocr_resp = rreg(base, MMC_RESP0);
+            if (ocr_resp & (1u << 31)) break;
+            delay(50000);
+        }
+        st->debug = ocr_resp;  /* OCR response (bit 31 = ready) */
+
+        if (!(ocr_resp & (1u << 31))) {
+            st->error = 21;  /* ACMD41 never ready */
+            st->rca = 0;
+            return;
+        }
+
+        /* CMD2: ALL_SEND_CID */
+        ret = mmc_send_cmd(base, 2, 0, CMD_RESP | CMD_LONG_RESP | CMD_CHK_CRC);
+        if (ret) {
+            st->error = 22;
+            st->debug = rreg(base, MMC_RINT);
+            return;
+        }
+
+        /* CMD3: SEND_RELATIVE_ADDR */
+        ret = mmc_send_cmd(base, 3, 0, CMD_RESP | CMD_CHK_CRC);
+        if (ret) {
+            st->error = 23;
+            st->debug = rreg(base, MMC_RINT);
+            return;
+        }
+        rca = rreg(base, MMC_RESP0) & 0xFFFF0000;
+
+        /* Switch to faster clock */
+        mmc_set_clock(base, 0);
+
+        /* CMD7: SELECT_CARD */
+        ret = mmc_send_cmd(base, 7, rca, CMD_RESP | CMD_CHK_CRC);
+        if (ret) {
+            st->error = 24;
+            st->debug = rreg(base, MMC_RINT);
+            return;
+        }
+
+        /* ACMD6: SET_BUS_WIDTH 4-bit */
+        mmc_send_cmd(base, 55, rca, CMD_RESP | CMD_CHK_CRC);
+        mmc_send_cmd(base, 6, 2, CMD_RESP | CMD_CHK_CRC);
+        wreg(base, MMC_WIDTH, 1);
+
+        ret = 0;
     }
     if (ret) {
         st->error = 20 + (u32)(-ret);
