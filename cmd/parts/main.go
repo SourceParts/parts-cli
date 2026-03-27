@@ -72,6 +72,7 @@ func main() {
 		commands.EDA,
 		commands.AOI,
 		commands.Assembly,
+		commands.Logistics,
 		commands.QC,
 		commands.Publish,
 		// Sales
