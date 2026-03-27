@@ -336,10 +336,10 @@ class AppState: ObservableObject {
                         return "cannot load lcd_power_on.bin"
                     }
 
-                    // Patch brightness at offset 0x188
-                    thunkData.replaceSubrange(0x188..<0x18C, with: withUnsafeBytes(of: brightness.littleEndian) { Data($0) })
+                    // Patch brightness at offset 0x220
+                    thunkData.replaceSubrange(0x220..<0x224, with: withUnsafeBytes(of: brightness.littleEndian) { Data($0) })
 
-                    let thunkAddr: UInt32 = 0x00011000  // scratch area (164 bytes, fits easily)
+                    let thunkAddr: UInt32 = 0x0001A200  // SRAM C thunk area (avoids corrupting BROM scratch)
                     let sem = DispatchSemaphore(value: 0)
                     var blResult = ""
 
