@@ -325,6 +325,112 @@ class AppState: ObservableObject {
                     let addr: UInt32 = parts.count >= 2 ? (UInt32(parts[1].replacingOccurrences(of: "0x", with: ""), radix: 16) ?? 0x4a000000) : 0x4a000000
                     self.felService.executeAt(address: addr) { _ in }
                     return "executing at 0x\(String(format: "%x", addr))"
+                case "mmc":
+                    guard self.felService.connectionState == .connected else { return "not connected" }
+                    let mmcParts = cmd.split(separator: " ").map(String.init)
+                    // mmc read <sector> [count] — read SD card sectors via bare-metal thunk
+                    guard mmcParts.count >= 3, mmcParts[1].lowercased() == "read" else {
+                        return "usage: mmc read <sector> [count]"
+                    }
+                    let sector = UInt32(mmcParts[2]) ?? 0
+                    let count = mmcParts.count >= 4 ? (UInt32(mmcParts[3]) ?? 1) : 1
+                    self.felService.appendLog("MMC: reading \(count) sector(s) from LBA \(sector)...")
+
+                    // Load thunk binary
+                    let thunkURL = Bundle.main.bundleURL
+                        .deletingLastPathComponent() // .build/debug/
+                        .deletingLastPathComponent() // .build/
+                        .deletingLastPathComponent() // PartsStudio/
+                        .appendingPathComponent("thunks/mmc_read.bin")
+                    // Also try relative to source
+                    let srcThunkURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/mmc_read.bin")
+                    guard let thunkData = (try? Data(contentsOf: thunkURL)) ?? (try? Data(contentsOf: srcThunkURL)) else {
+                        return "cannot load mmc_read.bin thunk"
+                    }
+
+                    // Patch literal pool: thunk is loaded at 0x11000
+                    let thunkAddr: UInt32 = 0x00011000
+                    let bufAddr: UInt32 = 0x00012000   // data output after thunk
+                    let statAddr: UInt32 = 0x00011F00   // status output
+                    var patched = thunkData
+                    // Offsets from disassembly: mmc_base=0xFC, sector_start=0x100, sector_count=0x104, buf_addr=0x108, stat_addr=0x10C
+                    patched.replaceSubrange(0x100..<0x104, with: withUnsafeBytes(of: sector.littleEndian) { Data($0) })
+                    patched.replaceSubrange(0x104..<0x108, with: withUnsafeBytes(of: count.littleEndian) { Data($0) })
+                    patched.replaceSubrange(0x108..<0x10C, with: withUnsafeBytes(of: bufAddr.littleEndian) { Data($0) })
+                    patched.replaceSubrange(0x10C..<0x110, with: withUnsafeBytes(of: statAddr.littleEndian) { Data($0) })
+
+                    let sem = DispatchSemaphore(value: 0)
+                    var mmcResult = ""
+
+                    // Write thunk to SRAM
+                    self.felService.writeMemory(address: thunkAddr, data: patched) { writeResult in
+                        switch writeResult {
+                        case .failure(let e):
+                            mmcResult = "write thunk failed: \(e.localizedDescription)"
+                            sem.signal()
+                            return
+                        case .success:
+                            self.felService.appendLog("MMC: thunk loaded at 0x\(String(format: "%x", thunkAddr))")
+                        }
+
+                        // Execute thunk
+                        self.felService.executeAt(address: thunkAddr) { execResult in
+                            switch execResult {
+                            case .failure(let e):
+                                mmcResult = "exec failed: \(e.localizedDescription)"
+                                sem.signal()
+                                return
+                            case .success:
+                                self.felService.appendLog("MMC: thunk returned, reading status...")
+                            }
+
+                            // Read status (8 bytes: error code + sectors read)
+                            self.felService.readMemory(address: statAddr, length: 8) { statusResult in
+                                switch statusResult {
+                                case .failure(let e):
+                                    mmcResult = "read status failed: \(e.localizedDescription)"
+                                    sem.signal()
+                                    return
+                                case .success(let statusData):
+                                    let errCode = statusData.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt32.self) }
+                                    let sectorsRead = statusData.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt32.self) }
+                                    if errCode != 0 {
+                                        mmcResult = "MMC error \(errCode), \(sectorsRead) sectors read"
+                                        sem.signal()
+                                        return
+                                    }
+                                    self.felService.appendLog("MMC: \(sectorsRead) sector(s) read OK")
+
+                                    // Read sector data
+                                    let dataLen = UInt32(sectorsRead) * 512
+                                    self.felService.readMemory(address: bufAddr, length: dataLen) { dataResult in
+                                        switch dataResult {
+                                        case .failure(let e):
+                                            mmcResult = "read data failed: \(e.localizedDescription)"
+                                        case .success(let sectorData):
+                                            // Save to Desktop
+                                            let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+                                            let filename = "mmc_sector\(sector)_x\(sectorsRead).bin"
+                                            let fileURL = desktop.appendingPathComponent(filename)
+                                            do {
+                                                try sectorData.write(to: fileURL)
+                                                mmcResult = "saved \(sectorData.count) bytes to \(fileURL.path)"
+                                                self.felService.appendLog("MMC: \(mmcResult)")
+                                                // Show first 32 bytes as hex
+                                                let preview = sectorData.prefix(32).map { String(format: "%02x", $0) }.joined(separator: " ")
+                                                self.felService.appendLog("MMC: \(preview) ...")
+                                            } catch {
+                                                mmcResult = "save failed: \(error.localizedDescription)"
+                                            }
+                                        }
+                                        sem.signal()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    sem.wait()
+                    return mmcResult
                 case "serial":
                     if self.felService.connectionState == .connected {
                         return "cannot open serial while FEL is active"
