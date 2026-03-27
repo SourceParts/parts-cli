@@ -73,10 +73,15 @@ func main() {
 		commands.AOI,
 		commands.Assembly,
 		commands.Logistics,
+		commands.Design,
 		commands.QC,
 		commands.Publish,
+		// Quality & Compliance
+		commands.Quality,
 		// Sales
 		commands.Sales,
+		// Supply Chain
+		commands.SupplyChain,
 		// QuarterMaster (smart query)
 		commands.Q,
 		commands.History,
@@ -119,7 +124,9 @@ func main() {
 		commands.Push,
 		commands.Tag,
 		commands.Release,
-		commands.Test,
+		commands.TestValidation,
+		// Post-Production
+		commands.PostProduction,
 		// Update
 		commands.Update,
 	)
