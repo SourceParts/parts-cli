@@ -93,6 +93,7 @@ type Client interface {
 	FirmwareList(ctx context.Context, opts types.FirmwareListOptions, w io.Writer) error
 	RawGet(ctx context.Context, url string, w io.Writer) error
 	RawPatch(ctx context.Context, url string, jsonBody string, w io.Writer) error
+	RawPost(ctx context.Context, url string, jsonBody string, w io.Writer) error
 
 	// Local operations
 	Init(ctx context.Context, w io.Writer) error
