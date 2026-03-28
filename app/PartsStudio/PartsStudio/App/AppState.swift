@@ -331,13 +331,13 @@ class AppState: ObservableObject {
                     let brightness: UInt32 = blParts.count >= 2 ? (UInt32(blParts[1]) ?? 128) : 128
                     self.felService.appendLog("Backlight: brightness=\(brightness)/255")
 
-                    let srcURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/lcd_power_on.bin")
+                    let srcURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/thunks/sun50i/display/backlight_only.bin")
                     guard var thunkData = try? Data(contentsOf: srcURL) else {
-                        return "cannot load lcd_power_on.bin"
+                        return "cannot load backlight_only.bin"
                     }
 
-                    // Patch brightness at offset 0x220
-                    thunkData.replaceSubrange(0x220..<0x224, with: withUnsafeBytes(of: brightness.littleEndian) { Data($0) })
+                    // Patch brightness at offset 0x9C
+                    thunkData.replaceSubrange(0x9C..<0xA0, with: withUnsafeBytes(of: brightness.littleEndian) { Data($0) })
 
                     let thunkAddr: UInt32 = 0x0001A200  // SRAM C thunk area (avoids corrupting BROM scratch)
                     let sem = DispatchSemaphore(value: 0)
@@ -368,7 +368,7 @@ class AppState: ObservableObject {
                 case "i2cscan":
                     guard self.felService.connectionState == .connected else { return "not connected" }
                     self.felService.appendLog("I2C: scanning TWI0/1/2 + PMIC...")
-                    let i2cURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/i2c_scan.bin")
+                    let i2cURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/thunks/sun50i/i2c/i2c_scan.bin")
                     guard let i2cData = try? Data(contentsOf: i2cURL) else { return "cannot load i2c_scan.bin" }
                     let i2cThunkAddr: UInt32 = 0x0001A200
                     let i2cEntryAddr: UInt32 = 0x0001A4B8
@@ -413,7 +413,7 @@ class AppState: ObservableObject {
                     self.felService.appendLog("MMC: reading \(count) sector(s) from LBA \(sector)...")
 
                     // Load thunk binary (C-based, full SD init + read)
-                    let srcThunkURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/parts-cli/app/PartsStudio/thunks/mmc_init_read.bin")
+                    let srcThunkURL = URL(fileURLWithPath: "\(FileManager.default.homeDirectoryForCurrentUser.path)/Work/SourceParts/thunks/sun50i/mmc/mmc_init_read.bin")
                     guard let thunkData = try? Data(contentsOf: srcThunkURL) else {
                         return "cannot load mmc_init_read.bin thunk"
                     }
@@ -562,7 +562,8 @@ class AppState: ObservableObject {
                     if dumpParts.count >= 2 && dumpParts[1].lowercased() == "brom" {
                         dumpAddr = 0x00000000
                         dumpLen = 0x8000
-                        filename = "a64-brom.bin"
+                        let socName = (self.felService.deviceInfo?.socInfo.name ?? "unknown").lowercased()
+                        filename = "\(socName)-brom.bin"
                     } else if dumpParts.count >= 3,
                               let a = UInt32(dumpParts[1].replacingOccurrences(of: "0x", with: ""), radix: 16),
                               let l = UInt32(dumpParts[2]) {
@@ -594,6 +595,178 @@ class AppState: ObservableObject {
                     }
                     sem2.wait()
                     return dumpResult
+                case "flash":
+                    guard self.felService.connectionState == .connected else { return "not connected" }
+                    let spiParts = cmd.split(separator: " ").map(String.init)
+                    guard spiParts.count >= 3, spiParts[1].lowercased() == "spi" else {
+                        return "usage: flash spi id | status | uid | otp [page] | read <off> <len> | dump <off> <len>"
+                    }
+                    let spiSub = spiParts[2].lowercased()
+                    let spiSem = DispatchSemaphore(value: 0)
+                    var spiResult = ""
+
+                    if spiSub == "id" {
+                        self.felService.readSPIFlashID { res in
+                            switch res {
+                            case .success(let data) where data.count >= 3:
+                                let mfr = String(format: "0x%02x", data[0])
+                                let devH = String(format: "0x%02x", data[1])
+                                let devL = String(format: "0x%02x", data[2])
+                                // Decode known chips
+                                var chip = "unknown"
+                                if data[0] == 0xEF && data[1] == 0xAA && data[2] == 0x21 {
+                                    chip = "Winbond W25N01GV 128MB NAND"
+                                } else if data[0] == 0xEF && data[1] == 0xAB && data[2] == 0x21 {
+                                    chip = "Winbond W25N02KV 256MB NAND"
+                                } else if data[0] == 0xEF {
+                                    chip = "Winbond"
+                                }
+                                let line = "JEDEC ID: \(mfr) \(devH) \(devL) (\(chip))"
+                                self.felService.appendLog(line)
+                                spiResult = line
+                            case .success:
+                                spiResult = "unexpected response"
+                            case .failure(let err):
+                                spiResult = "ERROR: \(err.localizedDescription)"
+                            }
+                            spiSem.signal()
+                        }
+                        spiSem.wait()
+
+                    } else if spiSub == "status" {
+                        // Read all 3 status registers: SR1 (0xA0), SR2 (0xB0), SR3 (0xC0)
+                        let regs: [(String, UInt8)] = [("SR1 (Protection)", 0xA0), ("SR2 (Config)", 0xB0), ("SR3 (Status)", 0xC0)]
+                        var lines: [String] = []
+                        var readError: Error?
+                        let group = DispatchGroup()
+                        for (name, addr) in regs {
+                            group.enter()
+                            self.felService.spiFlashTransfer(txData: Data([0x0F, addr]), rxLen: 1) { res in
+                                switch res {
+                                case .success(let data) where data.count >= 1:
+                                    let val = data[0]
+                                    var bits = String(val, radix: 2)
+                                    bits = String(repeating: "0", count: 8 - bits.count) + bits
+                                    lines.append("\(name): 0x\(String(format: "%02x", val)) (\(bits))")
+                                case .failure(let err):
+                                    readError = err
+                                default: break
+                                }
+                                group.leave()
+                            }
+                            group.wait()  // sequential to share SPI bus
+                        }
+                        if let err = readError {
+                            spiResult = "ERROR: \(err.localizedDescription)"
+                        } else {
+                            for line in lines { self.felService.appendLog(line) }
+                            spiResult = lines.joined(separator: "\n")
+                        }
+                        spiSem.signal()
+                        spiSem.wait()
+
+                    } else if spiSub == "uid" || spiSub == "otp" {
+                        // Read OTP page from W25N01GV NAND
+                        // uid: reads page 0 (die unique ID), otp: reads specified page
+                        let otpPage: UInt8 = spiSub == "uid" ? 0 : (spiParts.count >= 4 ? UInt8(spiParts[3]) ?? 0 : 0)
+                        self.felService.appendLog("Reading OTP page \(otpPage)...")
+                        self.felService.readNANDOTPPage(page: otpPage) { res in
+                            switch res {
+                            case .success(let data):
+                                // Check if all zeros (empty OTP)
+                                let allZero = data.allSatisfy { $0 == 0x00 }
+                                let allFF = data.allSatisfy { $0 == 0xFF }
+                                if allZero || allFF {
+                                    let line = "OTP page \(otpPage): empty (\(allZero ? "0x00" : "0xFF"))"
+                                    self.felService.appendLog(line)
+                                    spiResult = line
+                                } else {
+                                    // Hex dump
+                                    var lines: [String] = ["OTP page \(otpPage):"]
+                                    for row in stride(from: 0, to: data.count, by: 16) {
+                                        let hex = data[row..<min(row+16, data.count)].map { String(format: "%02x", $0) }.joined(separator: " ")
+                                        let ascii = data[row..<min(row+16, data.count)].map { (0x20...0x7E).contains($0) ? String(UnicodeScalar($0)) : "." }.joined()
+                                        lines.append(String(format: "  %04x: %@  %@", row, hex, ascii))
+                                    }
+                                    // Extract die UID if page 0 (typically first 8-16 bytes)
+                                    if otpPage == 0 {
+                                        let uid = data.prefix(16).map { String(format: "%02x", $0) }.joined(separator: ":")
+                                        lines.append("Die UID: \(uid)")
+                                    }
+                                    for line in lines { self.felService.appendLog(line) }
+                                    spiResult = lines.joined(separator: "\n")
+                                }
+                            case .failure(let err):
+                                spiResult = "ERROR: \(err.localizedDescription)"
+                            }
+                            spiSem.signal()
+                        }
+                        spiSem.wait()
+
+                    } else if spiSub == "read" || spiSub == "dump" {
+                        guard spiParts.count >= 5,
+                              let spiOff = UInt32(spiParts[3].replacingOccurrences(of: "0x", with: ""), radix: 16),
+                              let spiLen = UInt32(spiParts[4].replacingOccurrences(of: "0x", with: ""), radix: 16) ?? UInt32(spiParts[4])
+                        else {
+                            return "usage: flash spi \(spiSub) <offset> <len>"
+                        }
+                        guard spiLen <= 0x8000000 else { return "max 128MB" }
+                        self.felService.appendLog("SPI flash \(spiSub): offset=0x\(String(spiOff, radix: 16)) len=\(spiLen)")
+
+                        if spiSub == "dump" {
+                            // Dump runs async — returns immediately, progress in console log
+                            let sizeMB = String(format: "%.1f", Double(spiLen) / 1048576.0)
+                            self.felService.readSPIFlash(offset: spiOff, length: spiLen) { res in
+                                switch res {
+                                case .success(let data):
+                                    let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+                                    let ts = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+                                    let fname = "spiflash-\(String(format: "%06x", spiOff))-\(data.count)-\(ts).bin"
+                                    let fileURL = desktop.appendingPathComponent(fname)
+                                    do {
+                                        try data.write(to: fileURL)
+                                        self.felService.appendLog("dump complete: saved \(data.count) bytes to \(fileURL.path)")
+                                    } catch {
+                                        self.felService.appendLog("dump ERROR: \(error.localizedDescription)")
+                                    }
+                                case .failure(let err):
+                                    self.felService.appendLog("dump ERROR: \(err.localizedDescription)")
+                                }
+                            }
+                            spiResult = "dumping \(sizeMB)MB — progress in console..."
+                            spiSem.signal()
+                            spiSem.wait()
+                        } else {
+                            // Read: synchronous, returns hex dump
+                            guard spiLen <= 0x10000 else { return "use 'flash spi dump' for reads > 64KB" }
+                            self.felService.readSPIFlash(offset: spiOff, length: spiLen) { res in
+                                switch res {
+                                case .success(let data):
+                                    let preview = min(data.count, 256)
+                                    var lines: [String] = []
+                                    for row in stride(from: 0, to: preview, by: 16) {
+                                        let addr = String(format: "%06x", spiOff + UInt32(row))
+                                        let hex = data[row..<min(row+16, preview)].map { String(format: "%02x", $0) }.joined(separator: " ")
+                                        let ascii = data[row..<min(row+16, preview)].map { (0x20...0x7E).contains($0) ? String(UnicodeScalar($0)) : "." }.joined()
+                                        lines.append("\(addr): \(hex)  \(ascii)")
+                                    }
+                                    if data.count > 256 {
+                                        lines.append("... (\(data.count) bytes total)")
+                                    }
+                                    for line in lines { self.felService.appendLog(line) }
+                                    spiResult = lines.joined(separator: "\n")
+                                case .failure(let err):
+                                    spiResult = "ERROR: \(err.localizedDescription)"
+                                }
+                                spiSem.signal()
+                            }
+                            spiSem.wait()
+                        }
+                    } else {
+                        spiResult = "usage: flash spi id | status | uid | otp [page] | read <off> <len> | dump <off> <len>"
+                    }
+                    return spiResult
+
                 case "sync":
                     guard let sid = self.felService.deviceInfo?.sid else { return "no device SID" }
                     let sem3 = DispatchSemaphore(value: 0)

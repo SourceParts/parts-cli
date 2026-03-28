@@ -1,4 +1,5 @@
 import Foundation
+import CommonCrypto
 
 /// A registered PocketPC device identified by its SID (eFuse serial ID).
 struct RegisteredDevice: Codable, Identifiable {
@@ -156,9 +157,22 @@ class DeviceRegistry: ObservableObject {
     // MARK: - Device Serial & Fingerprint
 
     /// Generate a human-readable board serial from the SID.
-    /// Format: PP-<SOC>-<SID_SHORT> (e.g., PP-A64-92C0F6BA)
+    /// For SoC eFuse SID: PP-<SOC>-<SID_FIRST_8> (e.g., PP-A64-92C0F6BA)
+    /// For NAND die UID: PP-<SOC>-<SALTED_HASH> (e.g., PP-F1C200s-F5D7F701)
     static func generateSerial(sid: String, socName: String) -> String {
-        let short = sid.prefix(8).uppercased()
+        // NAND die UIDs contain colons (e.g., "c2:62:24:07:67:23:32:32")
+        if sid.contains(":") && sid.count > 16 {
+            let salt = "popstick"
+            let input = "\(salt)\(sid)"
+            var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+            input.withCString { ptr in
+                CC_SHA256(ptr, CC_LONG(strlen(ptr)), &hash)
+            }
+            let short = hash.prefix(4).map { String(format: "%02X", $0) }.joined()
+            return "PP-\(socName)-\(short)"
+        }
+        // Standard SoC eFuse SID
+        let short = sid.replacingOccurrences(of: ":", with: "").prefix(8).uppercased()
         return "PP-\(socName)-\(short)"
     }
 

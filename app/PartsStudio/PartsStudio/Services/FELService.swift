@@ -134,7 +134,7 @@ class FELService: ObservableObject {
 
     init() {
         appendLog("Parts Studio FEL Console")
-        appendLog("Commands: help, status, info, read, watch, stop, scratch, sram, boot, clear")
+        appendLog("Commands: help, status, info, read, watch, stop, scratch, sram, boot, flash, clear")
         appendLog("")
         appendLog("Waiting for device (VID 0x1F3A / PID 0xEFE8)...")
         startDeviceWatcher()
@@ -687,11 +687,31 @@ class FELService: ObservableObject {
     }
 
     /// Read SID asynchronously and update deviceInfo.
+    /// Falls back to SPI NAND die UID (OTP page 0) if SoC has no SID registers.
     private func readSIDAsync(socInfo: SoCInfo) {
         usbQueue.async { [weak self] in
             guard let self = self else { return }
             do {
-                let sid = try self.readSID(socInfo: socInfo)
+                var sid = try self.readSID(socInfo: socInfo)
+
+                // Fallback: read NAND die UID from OTP page 0 if no SoC SID
+                if sid == "unavailable" {
+                    do {
+                        let nandUID = try self.readNANDDieUIDSync(socInfo: socInfo)
+                        if nandUID != "unavailable" { sid = nandUID }
+                    } catch {
+                        DispatchQueue.main.async {
+                            self.appendLog("NAND UID read failed: \(error.localizedDescription)")
+                        }
+                    }
+                    // Also read ONFI parameter page for device info
+                    if let onfi = try? self.readNANDONFISync(socInfo: socInfo) {
+                        DispatchQueue.main.async {
+                            self.appendLog("NAND: \(onfi.manufacturer) \(onfi.model)")
+                        }
+                    }
+                }
+
                 DispatchQueue.main.async {
                     self.deviceInfo?.sid = sid
                     self.appendLog("SID: \(sid)")
@@ -751,6 +771,99 @@ class FELService: ObservableObject {
         }
 
         return words.map { String(format: "%08x", $0) }.joined(separator: ":")
+    }
+
+    /// Run a simple SPI transaction synchronously (must be called on usbQueue).
+    /// Pass socInfo explicitly to avoid race with main-thread deviceInfo updates.
+    private func spiTransferSync(tx: Data, rxLen: UInt32, socInfo: SoCInfo? = nil) throws -> Data {
+        guard let soc = socInfo ?? deviceInfo?.socInfo else { throw FELError.deviceNotFound }
+        let scratch = soc.scratchAddr
+        let txBuf = scratch + 0x200
+        let rxBuf = scratch + 0x300
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let thunkPath = "\(home)/Work/SourceParts/thunks/suniv/spi/spi_flash.bin"
+        guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
+            throw FELError.protocolError("Cannot load spi_flash.bin")
+        }
+        thunk.replaceSubrange(Self.spiParamTxLen..<Self.spiParamTxLen+4,
+            with: withUnsafeBytes(of: UInt32(tx.count).littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamRxLen..<Self.spiParamRxLen+4,
+            with: withUnsafeBytes(of: rxLen.littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamTxBuf..<Self.spiParamTxBuf+4,
+            with: withUnsafeBytes(of: txBuf.littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamRxBuf..<Self.spiParamRxBuf+4,
+            with: withUnsafeBytes(of: rxBuf.littleEndian) { Data($0) })
+
+        try awFELWrite(data: tx, offset: txBuf)
+        try awFELWrite(data: thunk, offset: scratch)
+        try awFELExecute(offset: scratch)
+        return rxLen > 0 ? try awFELRead(offset: rxBuf, length: rxLen) : Data()
+    }
+
+    /// Read NAND die unique ID from OTP page 0 synchronously (must be on usbQueue).
+    /// Enables OTP mode, reads page 0, disables OTP mode. Returns formatted UID string.
+    private func readNANDDieUIDSync(socInfo: SoCInfo? = nil) throws -> String {
+        // Read current SR2
+        let sr2Data = try spiTransferSync(tx: Data([0x0F, 0xB0]), rxLen: 1, socInfo: socInfo)
+        let sr2 = sr2Data.first ?? 0x18
+
+        // Enable OTP mode: Write Enable + set OTP-E bit in SR2
+        try _ = spiTransferSync(tx: Data([0x06]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x1F, 0xB0, sr2 | 0x40]), rxLen: 0, socInfo: socInfo)
+
+        // Page Data Read of OTP page 0
+        try _ = spiTransferSync(tx: Data([0x13, 0x00, 0x00, 0x00]), rxLen: 0, socInfo: socInfo)
+
+        // Poll status until not busy
+        for _ in 0..<100 {
+            let status = try spiTransferSync(tx: Data([0x0F, 0xC0]), rxLen: 1, socInfo: socInfo)
+            if (status.first ?? 1) & 0x01 == 0 { break }
+        }
+
+        // Read from cache (first 56 bytes of OTP page 0)
+        let otpData = try spiTransferSync(tx: Data([0x03, 0x00, 0x00, 0x00]), rxLen: 56, socInfo: socInfo)
+
+        // Disable OTP mode: restore SR2
+        try _ = spiTransferSync(tx: Data([0x06]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x1F, 0xB0, sr2]), rxLen: 0, socInfo: socInfo)
+
+        // Extract die UID: first 8 non-padding bytes
+        let uid = otpData.prefix(8)
+        guard !uid.allSatisfy({ $0 == 0x00 || $0 == 0xFF }) else {
+            return "unavailable"
+        }
+        return uid.map { String(format: "%02x", $0) }.joined(separator: ":")
+    }
+
+    /// Read and parse ONFI parameter page from OTP page 1 synchronously (must be on usbQueue).
+    /// Returns (manufacturer, model) tuple.
+    private func readNANDONFISync(socInfo: SoCInfo? = nil) throws -> (manufacturer: String, model: String)? {
+        let sr2Data = try spiTransferSync(tx: Data([0x0F, 0xB0]), rxLen: 1, socInfo: socInfo)
+        let sr2 = sr2Data.first ?? 0x18
+
+        try _ = spiTransferSync(tx: Data([0x06]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x1F, 0xB0, sr2 | 0x40]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x13, 0x00, 0x00, 0x01]), rxLen: 0, socInfo: socInfo)
+
+        for _ in 0..<100 {
+            let status = try spiTransferSync(tx: Data([0x0F, 0xC0]), rxLen: 1, socInfo: socInfo)
+            if (status.first ?? 1) & 0x01 == 0 { break }
+        }
+
+        let onfiData = try spiTransferSync(tx: Data([0x03, 0x00, 0x00, 0x00]), rxLen: 56, socInfo: socInfo)
+
+        try _ = spiTransferSync(tx: Data([0x06]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x1F, 0xB0, sr2]), rxLen: 0, socInfo: socInfo)
+
+        // Parse ONFI: "ONFI" at offset 0, manufacturer at offset 0x20 (12 bytes), model at offset 0x2C (12 bytes)
+        guard onfiData.count >= 0x38,
+              String(data: onfiData[0..<4], encoding: .ascii) == "ONFI" else {
+            return nil
+        }
+        let mfr = String(data: onfiData[0x20..<0x2C], encoding: .ascii)?.trimmingCharacters(in: .whitespaces) ?? ""
+        let model = String(data: onfiData[0x2C..<0x38], encoding: .ascii)?.trimmingCharacters(in: .whitespaces) ?? ""
+        return (mfr, model)
     }
 
     /// Read SID via ARM thunk (for SoCs that need the register-based workaround).
@@ -907,6 +1020,295 @@ class FELService: ObservableObject {
                 DispatchQueue.main.async { completion(.success(())) }
             } catch {
                 DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    // MARK: - SPI Flash
+
+    /// Thunk parameter offsets (from spi_flash.bin, see `nm spi_flash.o`).
+    private static let spiParamTxLen: Int  = 0x11C
+    private static let spiParamRxLen: Int  = 0x120
+    private static let spiParamTxBuf: Int  = 0x124
+    private static let spiParamRxBuf: Int  = 0x128
+
+    /// Run one SPI flash transaction via the ARM thunk.
+    /// `txData` is the SPI command+address bytes, `rxLen` is how many data bytes to read back.
+    /// Returns the RX data bytes (excluding the TX echo).
+    func spiFlashTransfer(txData: Data, rxLen: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        guard UInt32(txData.count) + rxLen <= 64 else {
+            completion(.failure(FELError.protocolError("SPI transfer too large (max 64 bytes total)")))
+            return
+        }
+
+        let scratch = socInfo.scratchAddr
+        let txBuf = scratch + 0x200   // TX data at scratch+0x200
+        let rxBuf = scratch + 0x300   // RX data at scratch+0x300
+
+        // Load thunk binary
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let thunkPath = "\(home)/Work/SourceParts/thunks/suniv/spi/spi_flash.bin"
+        guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
+            completion(.failure(FELError.protocolError("Cannot load spi_flash.bin")))
+            return
+        }
+
+        // Patch parameters in literal pool
+        thunk.replaceSubrange(Self.spiParamTxLen..<Self.spiParamTxLen+4,
+            with: withUnsafeBytes(of: UInt32(txData.count).littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamRxLen..<Self.spiParamRxLen+4,
+            with: withUnsafeBytes(of: rxLen.littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamTxBuf..<Self.spiParamTxBuf+4,
+            with: withUnsafeBytes(of: txBuf.littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamRxBuf..<Self.spiParamRxBuf+4,
+            with: withUnsafeBytes(of: rxBuf.littleEndian) { Data($0) })
+
+        usbQueue.async { [weak self] in
+            do {
+                // 1. Write TX command data to scratch+0x200
+                try self?.awFELWrite(data: txData, offset: txBuf)
+                // 2. Write thunk code to scratch
+                try self?.awFELWrite(data: thunk, offset: scratch)
+                // 3. Execute thunk (inits SPI0, does transaction)
+                try self?.awFELExecute(offset: scratch)
+                // 4. Read back RX data from scratch+0x300
+                let result = try self?.awFELRead(offset: rxBuf, length: rxLen) ?? Data()
+                DispatchQueue.main.async { completion(.success(result)) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// Read SPI flash JEDEC ID.
+    /// W25N01GV: 0x9F + 1 dummy byte → 3 ID bytes (MFR + DevID_H + DevID_L).
+    func readSPIFlashID(completion: @escaping (Result<Data, Error>) -> Void) {
+        spiFlashTransfer(txData: Data([0x9F, 0x00]), rxLen: 3, completion: completion)
+    }
+
+    /// Read W25N01GV OTP page. Enables OTP mode, reads one page, disables OTP mode.
+    /// OTP pages 0-9: page 0 has unique die ID, pages 1-9 are user OTP.
+    func readNANDOTPPage(page: UInt8, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        guard page <= 9 else {
+            completion(.failure(FELError.protocolError("OTP pages 0-9 only")))
+            return
+        }
+
+        let scratch = socInfo.scratchAddr
+        let txBuf = scratch + 0x200
+        let rxBuf = scratch + 0x300
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let thunkPath = "\(home)/Work/SourceParts/thunks/suniv/spi/spi_flash.bin"
+        guard let thunkTemplate = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
+            completion(.failure(FELError.protocolError("Cannot load spi_flash.bin")))
+            return
+        }
+
+        // Helper to patch and run a simple SPI transaction
+        func runSPI(tx: Data, rxLen: UInt32, done: @escaping (Result<Data, Error>) -> Void) {
+            var thunk = thunkTemplate
+            thunk.replaceSubrange(Self.spiParamTxLen..<Self.spiParamTxLen+4,
+                with: withUnsafeBytes(of: UInt32(tx.count).littleEndian) { Data($0) })
+            thunk.replaceSubrange(Self.spiParamRxLen..<Self.spiParamRxLen+4,
+                with: withUnsafeBytes(of: rxLen.littleEndian) { Data($0) })
+            thunk.replaceSubrange(Self.spiParamTxBuf..<Self.spiParamTxBuf+4,
+                with: withUnsafeBytes(of: txBuf.littleEndian) { Data($0) })
+            thunk.replaceSubrange(Self.spiParamRxBuf..<Self.spiParamRxBuf+4,
+                with: withUnsafeBytes(of: rxBuf.littleEndian) { Data($0) })
+
+            usbQueue.async { [weak self] in
+                do {
+                    try self?.awFELWrite(data: tx, offset: txBuf)
+                    try self?.awFELWrite(data: thunk, offset: scratch)
+                    try self?.awFELExecute(offset: scratch)
+                    let result = rxLen > 0 ? (try self?.awFELRead(offset: rxBuf, length: rxLen) ?? Data()) : Data()
+                    DispatchQueue.main.async { done(.success(result)) }
+                } catch {
+                    DispatchQueue.main.async { done(.failure(error)) }
+                }
+            }
+        }
+
+        // Step 1: Read current SR2
+        runSPI(tx: Data([0x0F, 0xB0]), rxLen: 1) { res in
+            guard case .success(let sr2Data) = res, let sr2 = sr2Data.first else {
+                completion(res.map { _ in Data() })
+                return
+            }
+            let otpSR2 = sr2 | 0x40  // Set OTP-E (bit 6)
+
+            // Step 2: Write Enable
+            runSPI(tx: Data([0x06]), rxLen: 0) { res in
+                guard case .success = res else { completion(res); return }
+
+                // Step 3: Write SR2 with OTP-E enabled
+                runSPI(tx: Data([0x1F, 0xB0, otpSR2]), rxLen: 0) { res in
+                    guard case .success = res else { completion(res); return }
+
+                    // Step 4: Page Data Read of OTP page
+                    runSPI(tx: Data([0x13, 0x00, 0x00, page]), rxLen: 0) { res in
+                        guard case .success = res else { completion(res); return }
+
+                        // Step 5: Poll status until not busy
+                        func pollBusy() {
+                            runSPI(tx: Data([0x0F, 0xC0]), rxLen: 1) { res in
+                                guard case .success(let status) = res else { completion(res.map { _ in Data() }); return }
+                                if (status.first ?? 1) & 0x01 != 0 {
+                                    pollBusy()  // still busy
+                                    return
+                                }
+
+                                // Step 6: Read from Cache (first 64 bytes — FIFO limit)
+                                // For die ID, first 64 bytes of OTP page 0 is enough
+                                runSPI(tx: Data([0x03, 0x00, 0x00, 0x00]), rxLen: 56) { res in
+
+                                    // Step 7: Clear OTP-E (restore SR2)
+                                    runSPI(tx: Data([0x06]), rxLen: 0) { _ in
+                                        runSPI(tx: Data([0x1F, 0xB0, sr2]), rxLen: 0) { _ in
+                                            // Return the OTP data regardless of cleanup result
+                                            completion(res)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        pollBusy()
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - SPI NAND Batch Read
+
+    /// Batch thunk parameter offsets (from spi_nand_batch.bin).
+    private static let batchParamStartPage: Int = 0x224
+    private static let batchParamPageCount: Int = 0x228
+    private static let batchParamRxBuf: Int     = 0x22C
+    private static let batchPagesPerRun: UInt32 = 8
+    private static let nandPageSize: UInt32     = 2048
+
+    /// Read a batch of NAND pages synchronously (must be called on usbQueue).
+    /// Retries up to 3 times on USB errors.
+    private func readNANDBatchSync(startPage: UInt32, pageCount: UInt32,
+                                    scratch: UInt32, paramAddr: UInt32, rxBuf: UInt32) throws -> Data {
+        var params = Data(count: 8)
+        params.withUnsafeMutableBytes { ptr in
+            ptr.storeBytes(of: startPage.littleEndian, toByteOffset: 0, as: UInt32.self)
+            ptr.storeBytes(of: pageCount.littleEndian, toByteOffset: 4, as: UInt32.self)
+        }
+        let readLen = pageCount * Self.nandPageSize
+
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                if attempt > 0 {
+                    Thread.sleep(forTimeInterval: 0.2)
+                    _ = clearPipeStall(pipe: pipeOut)
+                    _ = clearPipeStall(pipe: pipeIn)
+                }
+                try awFELWrite(data: params, offset: paramAddr)
+                try awFELExecute(offset: scratch)
+                return try awFELRead(offset: rxBuf, length: readLen)
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError!
+    }
+
+    /// Read bytes from SPI NAND flash using batch thunk (12 pages per USB round-trip).
+    func readSPIFlash(offset: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        let scratch = socInfo.scratchAddr
+        let rxBuf: UInt32 = scratch + 0xC00
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let thunkPath = "\(home)/Work/SourceParts/thunks/suniv/spi/spi_nand_batch.bin"
+        guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
+            completion(.failure(FELError.protocolError("Cannot load spi_nand_batch.bin")))
+            return
+        }
+        thunk.replaceSubrange(Self.batchParamRxBuf..<Self.batchParamRxBuf+4,
+            with: withUnsafeBytes(of: rxBuf.littleEndian) { Data($0) })
+
+        let paramAddr = scratch + UInt32(Self.batchParamStartPage)
+        let pageSize = Self.nandPageSize
+        let batchSize = Self.batchPagesPerRun
+
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            var result = Data()
+            result.reserveCapacity(Int(length))
+            var remaining = length
+            var byteOffset = offset
+            var lastLogTime = Date()
+            let startTime = Date()
+
+            do {
+                // Upload thunk once
+                try self.awFELWrite(data: thunk, offset: scratch)
+
+                while remaining > 0 {
+                    let startPage = byteOffset / pageSize
+                    let column = byteOffset % pageSize
+                    let bytesNeeded = remaining + column
+                    var pagesToRead = (bytesNeeded + pageSize - 1) / pageSize
+                    pagesToRead = min(pagesToRead, batchSize)
+
+                    let batchData = try self.readNANDBatchSync(
+                        startPage: startPage, pageCount: pagesToRead,
+                        scratch: scratch, paramAddr: paramAddr, rxBuf: rxBuf)
+
+                    let start = Int(column)
+                    let usable = min(Int(remaining), Int(pagesToRead * pageSize) - start)
+                    let end = start + usable
+                    if end <= batchData.count {
+                        result.append(batchData[start..<end])
+                    }
+                    byteOffset += UInt32(usable)
+                    remaining -= UInt32(usable)
+
+                    // Log progress every 2 seconds
+                    let now = Date()
+                    if now.timeIntervalSince(lastLogTime) >= 2.0 || remaining == 0 {
+                        let pct = Int(Double(result.count) / Double(length) * 100)
+                        let mb = String(format: "%.1f", Double(result.count) / 1048576.0)
+                        let elapsed = now.timeIntervalSince(startTime)
+                        let rate = elapsed > 0 ? Double(result.count) / elapsed / 1024.0 : 0
+                        DispatchQueue.main.async {
+                            self.appendLog("  flash: \(mb)MB (\(pct)%) — \(String(format: "%.0f", rate)) KB/s")
+                        }
+                        lastLogTime = now
+                    }
+                }
+                DispatchQueue.main.async { completion(.success(result)) }
+            } catch {
+                let read = result.count
+                let pages = read / Int(pageSize)
+                DispatchQueue.main.async {
+                    self.appendLog("  flash: FAILED after \(read) bytes (\(pages) pages): \(error.localizedDescription)")
+                    completion(.failure(error))
+                }
             }
         }
     }
