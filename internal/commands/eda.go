@@ -858,7 +858,74 @@ func init() {
 	EDA.AddCommand(edaImport)
 	EDA.AddCommand(edaDXF)
 	EDA.AddCommand(edaCtrl)
+	edaSVG.Flags().StringP("output", "o", "", "Output SVG path")
+	EDA.AddCommand(edaSVG)
 	EDA.AddCommand(edaRender)
 	EDA.AddCommand(edaSchRemove)
 	EDA.AddCommand(edaSchAnnotate)
+}
+
+// =============================================================================
+// Schematic SVG Export
+// =============================================================================
+
+var edaSVG = &cobra.Command{
+	Use:   "svg <file.kicad_sch>",
+	Short: "Export a schematic as SVG",
+	Long:  `Upload a .kicad_sch file and export it as SVG via kicad-cli on the server.`,
+	Args:  cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` eda svg power.kicad_sch -o schematic.svg`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		schFile := args[0]
+		if _, err := os.Stat(schFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", schFile)
+		}
+
+		output, _ := cmd.Flags().GetString("output")
+		if output == "" {
+			base := strings.TrimSuffix(filepath.Base(schFile), filepath.Ext(schFile))
+			output = base + ".svg"
+		}
+
+		var buf bytes.Buffer
+		if err := Client.EDAUpload(ctx, domain.V1Prefix+"/eda/schematic/svg", schFile, nil, nil, &buf); err != nil {
+			return err
+		}
+
+		var result struct {
+			Status string `json:"status"`
+			Data   struct {
+				SVGs      map[string]string `json:"svgs"`
+				SVGCount  int               `json:"svg_count"`
+				TotalSize int               `json:"total_size_bytes"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		if result.Error != "" {
+			return fmt.Errorf("SVG export failed: %s", result.Error)
+		}
+
+		for name, svgB64 := range result.Data.SVGs {
+			svgData, err := base64.StdEncoding.DecodeString(svgB64)
+			if err != nil {
+				return fmt.Errorf("failed to decode SVG %s: %w", name, err)
+			}
+			outPath := output
+			if len(result.Data.SVGs) > 1 {
+				outPath = strings.TrimSuffix(output, ".svg") + "_" + name
+			}
+			if err := os.WriteFile(outPath, svgData, 0644); err != nil {
+				return fmt.Errorf("failed to write SVG: %w", err)
+			}
+			fmt.Printf("Exported SVG: %s (%d bytes)\n", outPath, len(svgData))
+		}
+
+		return nil
+	},
 }
