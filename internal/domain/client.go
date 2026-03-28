@@ -87,6 +87,10 @@ type Client interface {
 	RegisterDatasheetAlias(ctx context.Context, alias, contentHash, s3Key, filename, projectID string, w io.Writer) error
 	PollDatasheetChunkStatus(ctx context.Context, jobID string, w io.Writer) error
 
+	// Firmware
+	FirmwareUpload(ctx context.Context, fileName string, opts types.FirmwareUploadOptions, w io.Writer) error
+	FirmwareList(ctx context.Context, opts types.FirmwareListOptions, w io.Writer) error
+
 	// Local operations
 	Init(ctx context.Context, w io.Writer) error
 	Log(ctx context.Context, input string, w io.Writer) error

@@ -68,6 +68,8 @@ func main() {
 		// Manufacturing
 		commands.DFMPipeline,
 		commands.Fab,
+		// Firmware
+		commands.Firmware,
 		// EDA
 		commands.EDA,
 		commands.AOI,

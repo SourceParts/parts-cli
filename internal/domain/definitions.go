@@ -280,6 +280,19 @@ const Endpoint_CLIUpdate = V1Prefix + `/cli/update/latest`
 // WEBHOOKS (source.parts, not api.source.parts)
 // =============================================================================
 
+// =============================================================================
+// FIRMWARE
+// =============================================================================
+
+// Endpoint_FirmwareUpload uploads a firmware dump with metadata
+const Endpoint_FirmwareUpload = V1Prefix + `/firmware/upload`
+
+// Endpoint_FirmwareList lists firmware dumps
+const Endpoint_FirmwareList = V1Prefix + `/firmware`
+
+// Endpoint_FirmwareGet gets a specific firmware dump by ID
+const Endpoint_FirmwareGet = V1Prefix + `/firmware/%s`
+
 const WebhookBase = `https://source.parts`
 
 // Endpoint_ReportNotify sends report notifications with PDF generation
