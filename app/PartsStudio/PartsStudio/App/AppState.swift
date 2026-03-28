@@ -447,8 +447,13 @@ class AppState: ObservableObject {
                         return initResult
                     }
 
+                    // mmc emmc auto — run full eMMC init as micro-thunks
+                    if mmcParts.count >= 3 && mmcParts[1].lowercased() == "emmc" && mmcParts[2].lowercased() == "auto" {
+                        return self.runEMMCAutoInit()
+                    }
+
                     guard mmcParts.count >= 3, mmcParts[1].lowercased() == "read" else {
-                        return "usage: mmc init emmc | mmc read <sector> [count] | mmc read emmc <sector> [count]"
+                        return "usage: mmc init emmc | mmc emmc auto | mmc read <sector> [count] | mmc read emmc <sector> [count]"
                     }
                     let sector = UInt32(mmcParts[2]) ?? 0
                     let count = mmcParts.count >= 4 ? (UInt32(mmcParts[3]) ?? 1) : 1
@@ -1105,6 +1110,175 @@ class AppState: ObservableObject {
     #endif
 
     #if os(macOS)
+    // MARK: - eMMC Micro-Thunk Init
+
+    /// Run full eMMC init as individual micro-thunk commands.
+    /// Each MMC command is a separate FEL execution — no loops, no hangs.
+    private func runEMMCAutoInit() -> String {
+        let fel = felService
+        guard fel.connectionState == .connected else { return "not connected" }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+        // Load thunks
+        let gpioPath = "\(home)/Work/SourceParts/thunks/sun50i/mmc/emmc_gpio_init.bin"
+        let cmdPath = "\(home)/Work/SourceParts/thunks/sun50i/mmc/emmc_cmd.bin"
+        guard let gpioData = try? Data(contentsOf: URL(fileURLWithPath: gpioPath)),
+              let cmdTemplate = try? Data(contentsOf: URL(fileURLWithPath: cmdPath)) else {
+            return "cannot load emmc thunks"
+        }
+
+        let thunkAddr: UInt32 = 0x0001A200
+        let statAddr: UInt32 = 0x00011F00
+        let sem = DispatchSemaphore(value: 0)
+        var result = ""
+
+        // Param offsets in emmc_cmd.bin (from nm emmc_cmd.o)
+        let pBase: Int = 0xA4
+        let pIdx: Int = 0xA8
+        let pArg: Int = 0xAC
+        let pFlags: Int = 0xB0
+
+        // MMC command flags
+        let CMD_RESP: UInt32       = (1 << 6)
+        let CMD_LONG_RESP: UInt32  = (1 << 7)
+        let CMD_CHK_CRC: UInt32    = (1 << 8)
+        let CMD_SEND_INIT: UInt32  = (1 << 15)
+
+        func patchU32(_ data: inout Data, _ offset: Int, _ value: UInt32) {
+            data.replaceSubrange(offset..<offset+4, with: withUnsafeBytes(of: value.littleEndian) { Data($0) })
+        }
+
+        func sendMMCCmd(_ idx: UInt32, _ arg: UInt32, _ flags: UInt32, label: String) -> (rint: UInt32, resp0: UInt32, done: Bool, error: Bool)? {
+            var thunk = cmdTemplate
+            patchU32(&thunk, pBase, 0x01C11000)  // MMC2
+            patchU32(&thunk, pIdx, idx)
+            patchU32(&thunk, pArg, arg)
+            patchU32(&thunk, pFlags, flags)
+
+            let cmdSem = DispatchSemaphore(value: 0)
+            var cmdResult: (UInt32, UInt32, Bool, Bool)?
+
+            fel.writeMemory(address: thunkAddr, data: thunk) { wr in
+                guard case .success = wr else { cmdSem.signal(); return }
+                fel.executeAt(address: thunkAddr) { ex in
+                    guard case .success = ex else { cmdSem.signal(); return }
+                    fel.readMemory(address: statAddr, length: 32) { rd in
+                        guard case .success(let data) = rd, data.count >= 32 else { cmdSem.signal(); return }
+                        let rint = data.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt32.self).littleEndian }
+                        let resp0 = data.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt32.self).littleEndian }
+                        let done = data.withUnsafeBytes { $0.load(fromByteOffset: 24, as: UInt32.self).littleEndian } != 0
+                        let error = data.withUnsafeBytes { $0.load(fromByteOffset: 28, as: UInt32.self).littleEndian } != 0
+                        cmdResult = (rint, resp0, done, error)
+                        cmdSem.signal()
+                    }
+                }
+            }
+            cmdSem.wait()
+            if let r = cmdResult {
+                let status = r.2 ? (r.3 ? "ERROR" : "OK") : "TIMEOUT"
+                fel.appendLog("  \(label): \(status) rint=0x\(String(format: "%04x", r.0)) resp=0x\(String(format: "%08x", r.1))")
+            } else {
+                fel.appendLog("  \(label): USB FAILED")
+            }
+            return cmdResult
+        }
+
+        // Step 1: GPIO + clock init
+        fel.appendLog("eMMC auto-init starting...")
+        let gpioSem = DispatchSemaphore(value: 0)
+        var gpioOK = false
+        fel.writeMemory(address: thunkAddr, data: gpioData) { wr in
+            guard case .success = wr else { gpioSem.signal(); return }
+            fel.executeAt(address: thunkAddr) { ex in
+                gpioOK = (ex != nil)
+                gpioSem.signal()
+            }
+        }
+        gpioSem.wait()
+        if !gpioOK {
+            return "GPIO init failed"
+        }
+        fel.appendLog("  GPIO + clocks: OK")
+
+        // Step 2: MMC controller soft reset
+        // Write GCTRL = 0x07 (soft reset + FIFO reset + DMA reset) directly
+        let resetSem = DispatchSemaphore(value: 0)
+        // Use a tiny thunk to reset MMC and set timeout
+        // Actually, reuse emmc_cmd but with CMD0 + SEND_INIT
+        // First, let's just send CMD0
+
+        // Step 3: CMD0 — GO_IDLE_STATE
+        guard let _ = sendMMCCmd(0, 0, CMD_SEND_INIT, label: "CMD0 GO_IDLE") else {
+            return "CMD0 failed (USB error)"
+        }
+
+        // Brief pause
+        Thread.sleep(forTimeInterval: 0.1)
+
+        // Step 4: CMD1 — SEND_OP_COND (eMMC)
+        // Retry up to 20 times, checking if bit 31 of response is set
+        var ocr: UInt32 = 0
+        var cmd1OK = false
+        for i in 0..<20 {
+            guard let r = sendMMCCmd(1, 0x40FF8080, CMD_RESP, label: "CMD1 attempt \(i+1)") else {
+                return "CMD1 USB error at attempt \(i+1)"
+            }
+            ocr = r.resp0
+            if ocr & (1 << 31) != 0 {
+                cmd1OK = true
+                fel.appendLog("  CMD1 ready: OCR=0x\(String(format: "%08x", ocr))")
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if !cmd1OK {
+            return "eMMC not responding (CMD1 never ready, last OCR=0x\(String(format: "%08x", ocr)))"
+        }
+
+        // Step 5: CMD2 — ALL_SEND_CID
+        guard let cmd2 = sendMMCCmd(2, 0, CMD_RESP | CMD_LONG_RESP | CMD_CHK_CRC, label: "CMD2 ALL_SEND_CID") else {
+            return "CMD2 USB error"
+        }
+        if cmd2.error {
+            return "CMD2 error: eMMC did not send CID"
+        }
+        // Read full CID from status buffer
+        let cidSem = DispatchSemaphore(value: 0)
+        var cidStr = ""
+        fel.readMemory(address: statAddr + 4, length: 16) { rd in
+            if case .success(let data) = rd, data.count >= 16 {
+                cidStr = data.map { String(format: "%02x", $0) }.joined(separator: ":")
+            }
+            cidSem.signal()
+        }
+        cidSem.wait()
+        fel.appendLog("  CID: \(cidStr)")
+
+        // Step 6: CMD3 — SET_RELATIVE_ADDR (eMMC: host assigns RCA=1)
+        guard let cmd3 = sendMMCCmd(3, 0x00010000, CMD_RESP | CMD_CHK_CRC, label: "CMD3 SET_RCA=1") else {
+            return "CMD3 USB error"
+        }
+        if cmd3.error {
+            return "CMD3 error"
+        }
+
+        // Step 7: CMD7 — SELECT_CARD
+        guard let cmd7 = sendMMCCmd(7, 0x00010000, CMD_RESP | CMD_CHK_CRC, label: "CMD7 SELECT") else {
+            return "CMD7 USB error"
+        }
+        if cmd7.error {
+            return "CMD7 error"
+        }
+
+        // Step 8: CMD16 — SET_BLOCKLEN (512)
+        let _ = sendMMCCmd(16, 512, CMD_RESP | CMD_CHK_CRC, label: "CMD16 BLOCKLEN=512")
+
+        result = "eMMC initialized! CID=\(cidStr). Ready for sector read/write."
+        fel.appendLog(result)
+        return result
+    }
+
     // MARK: - Autoboot Sequence
 
     /// Automated boot: halt STM32 → SPL → wait for replug → U-Boot → execute.
