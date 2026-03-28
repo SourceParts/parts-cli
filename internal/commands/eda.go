@@ -863,6 +863,9 @@ func init() {
 	edaPCBSVG.Flags().StringP("output", "o", "", "Output SVG path")
 	edaPCBSVG.Flags().String("layers", "F.Cu,B.Cu,Edge.Cuts,F.SilkS", "Layers to include")
 	EDA.AddCommand(edaPCBSVG)
+	edaPCBHighlight.Flags().String("nets", "", "Comma-separated net names to highlight")
+	edaPCBHighlight.Flags().StringP("output", "o", "highlight.svg", "Output SVG path")
+	EDA.AddCommand(edaPCBHighlight)
 	EDA.AddCommand(edaRender)
 	EDA.AddCommand(edaSchRemove)
 	EDA.AddCommand(edaSchAnnotate)
@@ -987,6 +990,67 @@ var edaPCBSVG = &cobra.Command{
 		}
 
 		fmt.Printf("Exported PCB SVG: %s (%d bytes)\n", output, len(svgData))
+		return nil
+	},
+}
+
+var edaPCBHighlight = &cobra.Command{
+	Use:   "highlight <file.kicad_pcb> --nets <net1,net2,...>",
+	Short: "Export PCB SVG with highlighted nets",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		pcbFile := args[0]
+		if _, err := os.Stat(pcbFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", pcbFile)
+		}
+
+		nets, _ := cmd.Flags().GetString("nets")
+		output, _ := cmd.Flags().GetString("output")
+		if output == "" {
+			output = "highlight.svg"
+		}
+
+		params := fmt.Sprintf(`{"nets":"%s"}`, nets)
+		fields := map[string]string{"params": params}
+
+		var buf bytes.Buffer
+		if err := Client.EDAUpload(ctx, domain.V1Prefix+"/eda/pcb/highlight", pcbFile, fields, nil, &buf); err != nil {
+			return err
+		}
+
+		var result struct {
+			Status string `json:"status"`
+			Data   struct {
+				SVGBase64       string   `json:"svg_base64"`
+				HighlightedNets []string `json:"highlighted_nets"`
+				TotalTracks     int      `json:"total_tracks"`
+				TotalVias       int      `json:"total_vias"`
+				OverlayElements int      `json:"overlay_elements"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		if result.Error != "" {
+			return fmt.Errorf("highlight failed: %s", result.Error)
+		}
+
+		svgData, err := base64.StdEncoding.DecodeString(result.Data.SVGBase64)
+		if err != nil {
+			return fmt.Errorf("failed to decode SVG: %w", err)
+		}
+		if err := os.WriteFile(output, svgData, 0644); err != nil {
+			return fmt.Errorf("failed to write SVG: %w", err)
+		}
+
+		fmt.Printf("Highlight SVG: %s (%d bytes)\n", output, len(svgData))
+		fmt.Printf("Nets: %v\n", result.Data.HighlightedNets)
+		fmt.Printf("Tracks: %d, Vias: %d, Overlay: %d elements\n",
+			result.Data.TotalTracks, result.Data.TotalVias, result.Data.OverlayElements)
 		return nil
 	},
 }
