@@ -115,24 +115,9 @@ _start:
     ldr   r1, =0x103
     str   r1, [r11, #RSB_CCR]
 
-    /* ============================================
-     * STEP 5: Device mode init (switch PMIC from I2C to RSB)
-     * DMCR = DEVICE_MODE_START | DEVICE_MODE_DATA
-     * DATA = 0x7C3E00 (magic init sequence)
-     * ============================================ */
-    ldr   r1, =0x807C3E00       /* START(bit31) | DATA(0x7C3E00) */
-    str   r1, [r11, #RSB_DMCR]
-
-    /* Wait for DMCR START bit to clear */
-    ldr   r3, =100000
-1:  ldr   r1, [r11, #RSB_DMCR]
-    tst   r1, #(1 << 31)
-    beq   2f
-    subs  r3, r3, #1
-    bne   1b
-2:
-    /* Wait for transaction complete (STAT bit 0) */
-    bl    rsb_await_trans
+    /* STEP 5: SKIP DMCR — BROM should have already put PMIC in RSB mode.
+     * If DMCR is sent again, it can disrupt PMIC power state and kill USB.
+     * Proceed directly to STRA. */
 
     /* ============================================
      * STEP 6: Set runtime address (STRA command)
@@ -231,12 +216,6 @@ _start:
     ldr   r0, stat_addr
     mov   r1, #0
     str   r1, [r0]
-
-    /* Read back PWR_CTRL2 for verification */
-    mov   r0, #0x12
-    bl    rsb_read
-    ldr   r1, stat_addr
-    str   r0, [r1, #4]          /* stat[1] = CTRL2 readback */
 
     pop   {r4-r11, lr}
     bx    lr

@@ -52,6 +52,7 @@ type Client interface {
 	DRC(ctx context.Context, fileName string, opts types.DRCOptions, w io.Writer) error
 	ImportAltium(ctx context.Context, fileName string, outputPath string, w io.Writer) error
 	ImportAltiumBytes(ctx context.Context, fileName string) ([]byte, error)
+	EDAUpload(ctx context.Context, endpoint, filePath string, formFields map[string]string, extraFiles map[string]string, w io.Writer) error
 
 	// Inventory & Supply Chain
 	Inventory(ctx context.Context, partNumber string, w io.Writer) error

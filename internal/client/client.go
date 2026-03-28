@@ -1777,7 +1777,7 @@ func (c *Client) Test(ctx context.Context, input string, w io.Writer) error {
 
 // edaUpload uploads a file (and optional secondary file) to a convert-service
 // endpoint and streams the response body to w.
-func (c *Client) edaUpload(ctx context.Context, endpoint, filePath string, formFields map[string]string, extraFiles map[string]string, w io.Writer) error {
+func (c *Client) EDAUpload(ctx context.Context, endpoint, filePath string, formFields map[string]string, extraFiles map[string]string, w io.Writer) error {
 	fileContent, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("error reading file: %w", err)
@@ -1855,14 +1855,14 @@ func (c *Client) edaUpload(ctx context.Context, endpoint, filePath string, formF
 func (c *Client) ERC(ctx context.Context, fileName string, opts types.ERCOptions, w io.Writer) error {
 	fields := map[string]string{"severity": opts.Severity}
 	extras := map[string]string{"rules_file": opts.RulesFile}
-	return c.edaUpload(ctx, domain.Endpoint_ERC, fileName, fields, extras, w)
+	return c.EDAUpload(ctx, domain.Endpoint_ERC, fileName, fields, extras, w)
 }
 
 // DRC runs Design Rules Check on a KiCad PCB.
 func (c *Client) DRC(ctx context.Context, fileName string, opts types.DRCOptions, w io.Writer) error {
 	fields := map[string]string{"severity": opts.Severity}
 	extras := map[string]string{"rules_file": opts.RulesFile}
-	return c.edaUpload(ctx, domain.Endpoint_DRC, fileName, fields, extras, w)
+	return c.EDAUpload(ctx, domain.Endpoint_DRC, fileName, fields, extras, w)
 }
 
 // ImportAltium converts an Altium .SchDoc to KiCad .kicad_sch.
@@ -1870,7 +1870,7 @@ func (c *Client) DRC(ctx context.Context, fileName string, opts types.DRCOptions
 // response is streamed to w.
 func (c *Client) ImportAltium(ctx context.Context, fileName string, outputPath string, w io.Writer) error {
 	var buf bytes.Buffer
-	if err := c.edaUpload(ctx, domain.Endpoint_ImportAltium, fileName, nil, nil, &buf); err != nil {
+	if err := c.EDAUpload(ctx, domain.Endpoint_ImportAltium, fileName, nil, nil, &buf); err != nil {
 		return err
 	}
 
@@ -1888,7 +1888,7 @@ func (c *Client) ImportAltium(ctx context.Context, fileName string, outputPath s
 
 func (c *Client) ImportAltiumBytes(ctx context.Context, fileName string) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := c.edaUpload(ctx, domain.Endpoint_ImportAltium, fileName, nil, nil, &buf); err != nil {
+	if err := c.EDAUpload(ctx, domain.Endpoint_ImportAltium, fileName, nil, nil, &buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

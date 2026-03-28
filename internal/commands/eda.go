@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -647,6 +648,180 @@ func parseDXF(content, filename string) dxfResult {
 // init — Register subcommands and flags
 // =============================================================================
 
+// =============================================================================
+// Schematic Render — export schematic as PDF via API
+// =============================================================================
+
+var edaRender = &cobra.Command{
+	Use:   "render <file.kicad_sch>",
+	Short: "Render a schematic as PDF",
+	Long:  `Upload a .kicad_sch file and render it as PDF via kicad-cli on the server.`,
+	Args:  cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` eda render power.kicad_sch -o schematic.pdf`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		schFile := args[0]
+		if _, err := os.Stat(schFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", schFile)
+		}
+
+		output, _ := cmd.Flags().GetString("output")
+		if output == "" {
+			base := strings.TrimSuffix(filepath.Base(schFile), filepath.Ext(schFile))
+			output = base + ".pdf"
+		}
+
+		var buf bytes.Buffer
+		if err := Client.EDAUpload(ctx, domain.Endpoint_SchematicRender, schFile, nil, nil, &buf); err != nil {
+			return err
+		}
+
+		var result struct {
+			Status string `json:"status"`
+			Data   struct {
+				PDFBase64 string `json:"pdf_base64"`
+				PDFSize   int    `json:"pdf_size_bytes"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		if result.Error != "" {
+			return fmt.Errorf("render failed: %s", result.Error)
+		}
+
+		pdfData, err := base64.StdEncoding.DecodeString(result.Data.PDFBase64)
+		if err != nil {
+			return fmt.Errorf("failed to decode PDF: %w", err)
+		}
+		if err := os.WriteFile(output, pdfData, 0644); err != nil {
+			return fmt.Errorf("failed to write PDF: %w", err)
+		}
+
+		fmt.Printf("Rendered schematic: %s (%d bytes)\n", output, len(pdfData))
+		return nil
+	},
+}
+
+// =============================================================================
+// Schematic Remove — remove a component from a schematic
+// =============================================================================
+
+var edaSchRemove = &cobra.Command{
+	Use:   "sch-remove <file.kicad_sch> <ref>",
+	Short: "Remove a component from a schematic",
+	Long:  `Remove a symbol by reference designator. Returns a unified diff.`,
+	Args:  cobra.ExactArgs(2),
+	Example: domain.BinaryName + ` eda sch-remove audio.kicad_sch R47`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		schFile, ref := args[0], args[1]
+		if _, err := os.Stat(schFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", schFile)
+		}
+
+		params := fmt.Sprintf(`{"ref":"%s"}`, ref)
+		fields := map[string]string{"params": params}
+
+		var buf bytes.Buffer
+		if err := Client.EDAUpload(ctx, domain.Endpoint_SchematicRemove, schFile, fields, nil, &buf); err != nil {
+			return err
+		}
+
+		var result struct {
+			Status string `json:"status"`
+			Data   struct {
+				Diff      string `json:"diff"`
+				DiffLines int    `json:"diff_lines"`
+				Modified  string `json:"modified_content"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		if result.Error != "" {
+			return fmt.Errorf("remove failed: %s", result.Error)
+		}
+
+		apply, _ := cmd.Flags().GetBool("apply")
+		fmt.Printf("Removed %s (%d diff lines)\n", ref, result.Data.DiffLines)
+		fmt.Println(result.Data.Diff)
+
+		if apply && result.Data.Modified != "" {
+			if err := os.WriteFile(schFile, []byte(result.Data.Modified), 0644); err != nil {
+				return fmt.Errorf("failed to apply changes: %w", err)
+			}
+			fmt.Printf("Applied changes to %s\n", schFile)
+		}
+
+		return nil
+	},
+}
+
+// =============================================================================
+// Schematic Annotate — update a component value
+// =============================================================================
+
+var edaSchAnnotate = &cobra.Command{
+	Use:   "sch-annotate <file.kicad_sch> <ref> <property> <new_value>",
+	Short: "Update a component property value",
+	Long:  `Change a property (e.g., Value, Footprint) on a symbol.`,
+	Args:  cobra.ExactArgs(4),
+	Example: domain.BinaryName + ` eda sch-annotate audio.kicad_sch R47 Value 0R`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		schFile, ref, prop, newVal := args[0], args[1], args[2], args[3]
+		if _, err := os.Stat(schFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", schFile)
+		}
+
+		params := fmt.Sprintf(`{"ref":"%s","property":"%s","new_value":"%s"}`, ref, prop, newVal)
+		fields := map[string]string{"params": params}
+
+		var buf bytes.Buffer
+		if err := Client.EDAUpload(ctx, domain.Endpoint_SchematicAnnotate, schFile, fields, nil, &buf); err != nil {
+			return err
+		}
+
+		var result struct {
+			Status string `json:"status"`
+			Data   struct {
+				Diff      string `json:"diff"`
+				DiffLines int    `json:"diff_lines"`
+				Modified  string `json:"modified_content"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		if result.Error != "" {
+			return fmt.Errorf("annotate failed: %s", result.Error)
+		}
+
+		apply, _ := cmd.Flags().GetBool("apply")
+		fmt.Printf("Updated %s.%s = %s (%d diff lines)\n", ref, prop, newVal, result.Data.DiffLines)
+		fmt.Println(result.Data.Diff)
+
+		if apply && result.Data.Modified != "" {
+			if err := os.WriteFile(schFile, []byte(result.Data.Modified), 0644); err != nil {
+				return fmt.Errorf("failed to apply changes: %w", err)
+			}
+			fmt.Printf("Applied changes to %s\n", schFile)
+		}
+
+		return nil
+	},
+}
+
 func init() {
 	// ERC flags
 	edaERC.Flags().StringP("severity", "s", "all", "Filter severity: all, error, warning, exclusion")
@@ -669,9 +844,21 @@ func init() {
 	// Wire up subcommands
 	edaImport.AddCommand(edaImportAltium)
 
+	// Render flags
+	edaRender.Flags().StringP("output", "o", "", "Output PDF path (default: <basename>.pdf)")
+
+	// Sch-remove flags
+	edaSchRemove.Flags().Bool("apply", false, "Apply changes to the file (default: show diff only)")
+
+	// Sch-annotate flags
+	edaSchAnnotate.Flags().Bool("apply", false, "Apply changes to the file (default: show diff only)")
+
 	EDA.AddCommand(edaERC)
 	EDA.AddCommand(edaDRC)
 	EDA.AddCommand(edaImport)
 	EDA.AddCommand(edaDXF)
 	EDA.AddCommand(edaCtrl)
+	EDA.AddCommand(edaRender)
+	EDA.AddCommand(edaSchRemove)
+	EDA.AddCommand(edaSchAnnotate)
 }
