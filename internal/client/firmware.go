@@ -98,6 +98,31 @@ func (c *Client) FirmwareUpload(ctx context.Context, fileName string, opts types
 	return err
 }
 
+// RawGet performs an authenticated GET request and writes the response body.
+func (c *Client) RawGet(ctx context.Context, url string, w io.Writer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, res.Body)
+	return err
+}
+
 // FirmwareList lists firmware dumps from the API.
 func (c *Client) FirmwareList(ctx context.Context, opts types.FirmwareListOptions, w io.Writer) error {
 	url := domain.Endpoint_FirmwareList
