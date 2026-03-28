@@ -77,6 +77,19 @@ var firmwareList = &cobra.Command{
 	},
 }
 
+var firmwareAnalyze = &cobra.Command{
+	Use:   "analyze <sha-prefix>",
+	Short: "Analyze a firmware dump (partition map, signatures)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+
+		url := fmt.Sprintf("https://api.source.parts/v1/firmware/%s/analyze", args[0])
+		return Client.RawGet(ctx, url, os.Stdout)
+	},
+}
+
 func init() {
 	firmwareUpload.Flags().StringVar(&fwChip, "chip", "", "Flash chip model (e.g., W25N01GV)")
 	firmwareUpload.Flags().StringVar(&fwJedecID, "jedec", "", "JEDEC ID (e.g., ef:aa:21)")
@@ -91,4 +104,5 @@ func init() {
 
 	Firmware.AddCommand(firmwareUpload)
 	Firmware.AddCommand(firmwareList)
+	Firmware.AddCommand(firmwareAnalyze)
 }
