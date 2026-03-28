@@ -255,19 +255,29 @@ const Endpoint_Test = V1Prefix + `/test`
 const Endpoint_Health = V1Prefix + `/health`
 
 // =============================================================================
-// EDA (Convert Service)
+// EDA (Main API — all EDA endpoints go through api.source.parts)
 // =============================================================================
 
-const ConvertAPI = `convert.source.parts`
+const ConvertAPI = `convert.source.parts` // legacy — kept for Altium import only
 
 // Endpoint_ERC runs Electrical Rules Check on a KiCad schematic
-const Endpoint_ERC = `https://` + ConvertAPI + `/api/eda/erc`
+const Endpoint_ERC = V1Prefix + `/eda/erc`
 
 // Endpoint_DRC runs Design Rules Check on a KiCad PCB
-const Endpoint_DRC = `https://` + ConvertAPI + `/api/eda/drc`
+const Endpoint_DRC = V1Prefix + `/eda/drc`
 
 // Endpoint_ImportAltium converts an Altium .SchDoc to KiCad .kicad_sch
 const Endpoint_ImportAltium = `https://` + ConvertAPI + `/api/eda/import/altium`
+
+// Schematic editing endpoints
+const Endpoint_SchematicPlace    = V1Prefix + `/eda/schematic/place`
+const Endpoint_SchematicWire     = V1Prefix + `/eda/schematic/wire`
+const Endpoint_SchematicAnnotate = V1Prefix + `/eda/schematic/annotate`
+const Endpoint_SchematicRemove   = V1Prefix + `/eda/schematic/remove`
+const Endpoint_SchematicLabel    = V1Prefix + `/eda/schematic/label`
+const Endpoint_SchematicDiff     = V1Prefix + `/eda/schematic/diff`
+const Endpoint_SchematicRender   = V1Prefix + `/eda/schematic/render`
+const Endpoint_RerouteSuggest    = V1Prefix + `/eda/reroute/suggest`
 
 // =============================================================================
 // CLI UPDATE
