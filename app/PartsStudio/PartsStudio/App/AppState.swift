@@ -405,8 +405,50 @@ class AppState: ObservableObject {
                     guard self.felService.connectionState == .connected else { return "not connected" }
                     let mmcParts = cmd.split(separator: " ").map(String.init)
                     // mmc read <sector> [count] — read SD card sectors via bare-metal thunk
+                    if mmcParts.count >= 3 && mmcParts[1].lowercased() == "init" && mmcParts[2].lowercased() == "emmc" {
+                        // Stage 1: enable eMMC clocks and GPIO only (safe, no MMC commands)
+                        let home = FileManager.default.homeDirectoryForCurrentUser.path
+                        let initURL = URL(fileURLWithPath: "\(home)/Work/SourceParts/thunks/sun50i/mmc/emmc_gpio_init.bin")
+                        guard let initData = try? Data(contentsOf: initURL) else {
+                            return "cannot load emmc_gpio_init.bin"
+                        }
+                        let thunkAddr: UInt32 = 0x0001A200  // use thunkAddr, not scratchAddr (BROM clobbers scratch)
+                        let statAddr: UInt32 = 0x00011F00
+                        let initSem = DispatchSemaphore(value: 0)
+                        var initResult = ""
+                        self.felService.writeMemory(address: thunkAddr, data: initData) { wr in
+                            guard case .success = wr else {
+                                initResult = "write failed"
+                                initSem.signal()
+                                return
+                            }
+                            self.felService.executeAt(address: thunkAddr) { ex in
+                                guard case .success = ex else {
+                                    initResult = "exec failed"
+                                    initSem.signal()
+                                    return
+                                }
+                                self.felService.readMemory(address: statAddr, length: 4) { res in
+                            switch res {
+                            case .success(let data):
+                                let marker = data.withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+                                if marker == 0xE44C0001 {
+                                    self.felService.appendLog("eMMC: clocks + GPIO initialized")
+                                    initResult = "eMMC clocks and GPIO initialized. Now try: mmc read emmc 0 1"
+                                } else {
+                                    initResult = "eMMC init returned unexpected status: 0x\(String(format: "%08x", marker))"
+                                }
+                            case .failure(let err):
+                                initResult = "eMMC init failed: \(err.localizedDescription)"
+                            }
+                            initSem.signal()
+                        }}}
+                        initSem.wait()
+                        return initResult
+                    }
+
                     guard mmcParts.count >= 3, mmcParts[1].lowercased() == "read" else {
-                        return "usage: mmc read <sector> [count]"
+                        return "usage: mmc init emmc | mmc read <sector> [count] | mmc read emmc <sector> [count]"
                     }
                     let sector = UInt32(mmcParts[2]) ?? 0
                     let count = mmcParts.count >= 4 ? (UInt32(mmcParts[3]) ?? 1) : 1
@@ -618,6 +660,12 @@ class AppState: ObservableObject {
                                     chip = "Winbond W25N01GV 128MB NAND"
                                 } else if data[0] == 0xEF && data[1] == 0xAB && data[2] == 0x21 {
                                     chip = "Winbond W25N02KV 256MB NAND"
+                                } else if data[0] == 0xEF && data[1] == 0x40 && data[2] == 0x19 {
+                                    chip = "Winbond W25Q256JV 32MB NOR"
+                                } else if data[0] == 0xEF && data[1] == 0x40 {
+                                    let capBit = Int(data[2])
+                                    let sizeMB = capBit >= 0x11 ? "\(1 << (capBit - 17))MB" : "?"
+                                    chip = "Winbond W25Q \(sizeMB) NOR"
                                 } else if data[0] == 0xEF {
                                     chip = "Winbond"
                                 }

@@ -782,7 +782,7 @@ class FELService: ObservableObject {
         let rxBuf = scratch + 0x300
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let thunkPath = "\(home)/Work/SourceParts/thunks/suniv/spi/spi_flash.bin"
+        let thunkPath = "\(home)/Work/SourceParts/thunks/\(self.spiThunkDir())/spi_flash.bin"
         guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
             throw FELError.protocolError("Cannot load spi_flash.bin")
         }
@@ -1026,6 +1026,18 @@ class FELService: ObservableObject {
 
     // MARK: - SPI Flash
 
+    /// Resolve thunk directory based on connected SoC family.
+    private func spiThunkDir() -> String {
+        let name = deviceInfo?.socInfo.name ?? ""
+        switch name {
+        case "F1C200s":
+            return "suniv/spi"
+        default:
+            // A64, H3, H5, V3s, R40, A83T, H6 — all sun50i/sun8i SPI controller
+            return "sun50i/spi"
+        }
+    }
+
     /// Thunk parameter offsets (from spi_flash.bin, see `nm spi_flash.o`).
     private static let spiParamTxLen: Int  = 0x11C
     private static let spiParamRxLen: Int  = 0x120
@@ -1055,7 +1067,7 @@ class FELService: ObservableObject {
 
         // Load thunk binary
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let thunkPath = "\(home)/Work/SourceParts/thunks/suniv/spi/spi_flash.bin"
+        let thunkPath = "\(home)/Work/SourceParts/thunks/\(self.spiThunkDir())/spi_flash.bin"
         guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
             completion(.failure(FELError.protocolError("Cannot load spi_flash.bin")))
             return
@@ -1089,10 +1101,29 @@ class FELService: ObservableObject {
     }
 
     /// Read SPI flash JEDEC ID.
-    /// W25N01GV: 0x9F + 1 dummy byte → 3 ID bytes (MFR + DevID_H + DevID_L).
+    /// Tries NOR first (0x9F → 3 bytes), falls back to NAND (0x9F + dummy → 3 bytes).
     func readSPIFlashID(completion: @escaping (Result<Data, Error>) -> Void) {
-        spiFlashTransfer(txData: Data([0x9F, 0x00]), rxLen: 3, completion: completion)
+        // NOR: 0x9F → 3 ID bytes directly
+        spiFlashTransfer(txData: Data([0x9F]), rxLen: 3) { [weak self] result in
+            switch result {
+            case .success(let data) where data.count >= 3 && data[0] != 0x00 && data[0] != 0xFF:
+                self?.detectedFlashType = "nor"
+                completion(.success(data))
+            default:
+                // NAND: 0x9F + dummy byte → 3 ID bytes
+                self?.spiFlashTransfer(txData: Data([0x9F, 0x00]), rxLen: 3) { result in
+                    if case .success = result {
+                        self?.detectedFlashType = "nand"
+                    }
+                    completion(result)
+                }
+            }
+        }
     }
+
+    /// Detect if connected SPI flash is NOR or NAND based on JEDEC ID response.
+    /// NOR responds to 0x9F directly; NAND needs a dummy byte.
+    private var detectedFlashType: String? // "nor" or "nand", cached after first ID read
 
     /// Read W25N01GV OTP page. Enables OTP mode, reads one page, disables OTP mode.
     /// OTP pages 0-9: page 0 has unique die ID, pages 1-9 are user OTP.
@@ -1115,7 +1146,7 @@ class FELService: ObservableObject {
         let rxBuf = scratch + 0x300
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let thunkPath = "\(home)/Work/SourceParts/thunks/suniv/spi/spi_flash.bin"
+        let thunkPath = "\(home)/Work/SourceParts/thunks/\(self.spiThunkDir())/spi_flash.bin"
         guard let thunkTemplate = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
             completion(.failure(FELError.protocolError("Cannot load spi_flash.bin")))
             return
@@ -1234,8 +1265,73 @@ class FELService: ObservableObject {
         throw lastError!
     }
 
-    /// Read bytes from SPI NAND flash using batch thunk (12 pages per USB round-trip).
+    /// Read bytes from SPI flash (auto-detects NOR vs NAND).
     func readSPIFlash(offset: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        if detectedFlashType == "nor" {
+            readSPINORFlash(offset: offset, length: length, completion: completion)
+            return
+        }
+        readSPINANDFlash(offset: offset, length: length, completion: completion)
+    }
+
+    /// Read bytes from SPI NOR flash using simple 0x03 READ command, chunked to 60 bytes.
+    private func readSPINORFlash(offset: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        let chunkSize: UInt32 = 60  // 64-byte FIFO - 4 cmd bytes
+        let scratch = socInfo.scratchAddr
+
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            var result = Data()
+            result.reserveCapacity(Int(length))
+            var remaining = length
+            var addr = offset
+            var lastLogTime = Date()
+            let startTime = Date()
+
+            do {
+                while remaining > 0 {
+                    let chunk = min(remaining, chunkSize)
+                    let cmd = Data([
+                        0x03,
+                        UInt8((addr >> 16) & 0xFF),
+                        UInt8((addr >> 8) & 0xFF),
+                        UInt8(addr & 0xFF)
+                    ])
+
+                    let data = try self.spiTransferSync(tx: cmd, rxLen: chunk, socInfo: socInfo)
+                    result.append(data)
+                    addr += chunk
+                    remaining -= chunk
+
+                    let now = Date()
+                    if now.timeIntervalSince(lastLogTime) >= 2.0 || remaining == 0 {
+                        let pct = Int(Double(result.count) / Double(length) * 100)
+                        let mb = String(format: "%.1f", Double(result.count) / 1048576.0)
+                        let elapsed = now.timeIntervalSince(startTime)
+                        let rate = elapsed > 0 ? Double(result.count) / elapsed / 1024.0 : 0
+                        DispatchQueue.main.async {
+                            self.appendLog("  flash: \(mb)MB (\(pct)%) — \(String(format: "%.0f", rate)) KB/s")
+                        }
+                        lastLogTime = now
+                    }
+                }
+                DispatchQueue.main.async { completion(.success(result)) }
+            } catch {
+                let read = result.count
+                DispatchQueue.main.async {
+                    self.appendLog("  flash: FAILED after \(read) bytes: \(error.localizedDescription)")
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    /// Read bytes from SPI NAND flash using batch thunk (8 pages per USB round-trip).
+    private func readSPINANDFlash(offset: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
         guard let socInfo = deviceInfo?.socInfo else {
             completion(.failure(FELError.deviceNotFound))
             return
@@ -1243,7 +1339,7 @@ class FELService: ObservableObject {
         let scratch = socInfo.scratchAddr
         let rxBuf: UInt32 = scratch + 0xC00
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let thunkPath = "\(home)/Work/SourceParts/thunks/suniv/spi/spi_nand_batch.bin"
+        let thunkPath = "\(home)/Work/SourceParts/thunks/\(self.spiThunkDir())/spi_nand_batch.bin"
         guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
             completion(.failure(FELError.protocolError("Cannot load spi_nand_batch.bin")))
             return
