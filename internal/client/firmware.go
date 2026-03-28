@@ -77,6 +77,7 @@ func (c *Client) FirmwareUpload(ctx context.Context, fileName string, opts types
 		return fmt.Errorf("error creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 	if c.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
