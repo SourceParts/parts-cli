@@ -72,6 +72,7 @@ func main() {
 		commands.Firmware,
 		// Quality
 		commands.OQC,
+		commands.Compliance,
 		// EDA
 		commands.EDA,
 		commands.AOI,

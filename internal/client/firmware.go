@@ -149,6 +149,32 @@ func (c *Client) RawPatch(ctx context.Context, url string, jsonBody string, w io
 	return err
 }
 
+// RawPost performs an authenticated POST request with a JSON body.
+func (c *Client) RawPost(ctx context.Context, url string, jsonBody string, w io.Writer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBufferString(jsonBody))
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, res.Body)
+	return err
+}
+
 // FirmwareList lists firmware dumps from the API.
 func (c *Client) FirmwareList(ctx context.Context, opts types.FirmwareListOptions, w io.Writer) error {
 	url := domain.Endpoint_FirmwareList
