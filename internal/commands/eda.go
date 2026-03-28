@@ -711,11 +711,11 @@ var edaRender = &cobra.Command{
 // =============================================================================
 
 var edaSchRemove = &cobra.Command{
-	Use:   "sch-remove <file.kicad_sch> <ref>",
+	Use:   "remove <file.kicad_sch> <ref>",
 	Short: "Remove a component from a schematic",
 	Long:  `Remove a symbol by reference designator. Returns a unified diff.`,
 	Args:  cobra.ExactArgs(2),
-	Example: domain.BinaryName + ` eda sch-remove audio.kicad_sch R47`,
+	Example: domain.BinaryName + ` eda remove audio.kicad_sch R47`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -769,11 +769,11 @@ var edaSchRemove = &cobra.Command{
 // =============================================================================
 
 var edaSchAnnotate = &cobra.Command{
-	Use:   "sch-annotate <file.kicad_sch> <ref> <property> <new_value>",
+	Use:   "annotate <file.kicad_sch> <ref> <property> <new_value>",
 	Short: "Update a component property value",
 	Long:  `Change a property (e.g., Value, Footprint) on a symbol.`,
 	Args:  cobra.ExactArgs(4),
-	Example: domain.BinaryName + ` eda sch-annotate audio.kicad_sch R47 Value 0R`,
+	Example: domain.BinaryName + ` eda annotate audio.kicad_sch R47 Value 0R`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
