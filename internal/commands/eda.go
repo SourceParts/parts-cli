@@ -860,6 +860,9 @@ func init() {
 	EDA.AddCommand(edaCtrl)
 	edaSVG.Flags().StringP("output", "o", "", "Output SVG path")
 	EDA.AddCommand(edaSVG)
+	edaPCBSVG.Flags().StringP("output", "o", "", "Output SVG path")
+	edaPCBSVG.Flags().String("layers", "F.Cu,B.Cu,Edge.Cuts,F.SilkS", "Layers to include")
+	EDA.AddCommand(edaPCBSVG)
 	EDA.AddCommand(edaRender)
 	EDA.AddCommand(edaSchRemove)
 	EDA.AddCommand(edaSchAnnotate)
@@ -926,6 +929,64 @@ var edaSVG = &cobra.Command{
 			fmt.Printf("Exported SVG: %s (%d bytes)\n", outPath, len(svgData))
 		}
 
+		return nil
+	},
+}
+
+var edaPCBSVG = &cobra.Command{
+	Use:   "pcbsvg <file.kicad_pcb>",
+	Short: "Export PCB as SVG",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		pcbFile := args[0]
+		if _, err := os.Stat(pcbFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", pcbFile)
+		}
+
+		output, _ := cmd.Flags().GetString("output")
+		if output == "" {
+			base := strings.TrimSuffix(filepath.Base(pcbFile), filepath.Ext(pcbFile))
+			output = base + ".svg"
+		}
+
+		layers, _ := cmd.Flags().GetString("layers")
+		fields := map[string]string{}
+		if layers != "" {
+			fields["params"] = fmt.Sprintf(`{"layers":"%s"}`, layers)
+		}
+
+		var buf bytes.Buffer
+		if err := Client.EDAUpload(ctx, domain.V1Prefix+"/eda/pcb/svg", pcbFile, fields, nil, &buf); err != nil {
+			return err
+		}
+
+		var result struct {
+			Status string `json:"status"`
+			Data   struct {
+				SVGBase64 string `json:"svg_base64"`
+				SVGSize   int    `json:"svg_size_bytes"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+			return fmt.Errorf("failed to parse response: %w", err)
+		}
+		if result.Error != "" {
+			return fmt.Errorf("export failed: %s", result.Error)
+		}
+
+		svgData, err := base64.StdEncoding.DecodeString(result.Data.SVGBase64)
+		if err != nil {
+			return fmt.Errorf("failed to decode SVG: %w", err)
+		}
+		if err := os.WriteFile(output, svgData, 0644); err != nil {
+			return fmt.Errorf("failed to write SVG: %w", err)
+		}
+
+		fmt.Printf("Exported PCB SVG: %s (%d bytes)\n", output, len(svgData))
 		return nil
 	},
 }
