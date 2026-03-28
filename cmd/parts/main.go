@@ -70,6 +70,8 @@ func main() {
 		commands.Fab,
 		// Firmware
 		commands.Firmware,
+		// Quality
+		commands.OQC,
 		// EDA
 		commands.EDA,
 		commands.AOI,
