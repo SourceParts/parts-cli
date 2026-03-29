@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -29,8 +30,8 @@ Approve each step before proceeding to the next.
 
 Pipeline:
   1. analyze         — identify affected nets
-  2. propose-ripup   — enumerate tracks/vias to remove
-  3. execute-ripup   — remove tracks, return diff
+  2. propose   — enumerate tracks/vias to remove
+  3. ripup     — remove tracks, return diff
   4. validate        — run Design Rule Check
   5. export          — export gerbers + drill + positions`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -229,7 +230,7 @@ var edaCtrlAnalyze = &cobra.Command{
 	Long: `Upload a .kicad_pcb file to the API and identify affected nets.
 
 Returns a net inventory with track/via counts per net.
-Review the results before proceeding to propose-ripup.`,
+Review the results before proceeding to propose.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pcbPath := args[0]
@@ -273,7 +274,7 @@ Review the results before proceeding to propose-ripup.`,
 			layers := m["layers"]
 			fmt.Printf("  %-30s  %v tracks, %v vias  [%v]\n", name, tracks, vias, layers)
 		}
-		fmt.Println("\nNext: parts eda ctrl propose-ripup <file> --nets <net1,net2,...>")
+		fmt.Println("\nNext: parts eda ctrl propose <file> --nets <net1,net2,...>")
 		return nil
 	},
 }
@@ -281,7 +282,7 @@ Review the results before proceeding to propose-ripup.`,
 // --- Station 2: Propose Rip-up ---
 
 var edaCtrlProposeRipup = &cobra.Command{
-	Use:   "propose-ripup <file.kicad_pcb>",
+	Use:   "propose <file.kicad_pcb>",
 	Short: "Enumerate tracks/vias that would be removed",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -319,7 +320,7 @@ var edaCtrlProposeRipup = &cobra.Command{
 				fmt.Printf("  %-30s  %v tracks, %v vias\n", name, m["tracks"], m["vias"])
 			}
 		}
-		fmt.Println("\nNext: parts eda ctrl execute-ripup <file> --nets <...> [--apply]")
+		fmt.Println("\nNext: parts eda ctrl ripup <file> --nets <...> [--apply]")
 		return nil
 	},
 }
@@ -327,7 +328,7 @@ var edaCtrlProposeRipup = &cobra.Command{
 // --- Station 3: Execute Rip-up ---
 
 var edaCtrlExecuteRipup = &cobra.Command{
-	Use:   "execute-ripup <file.kicad_pcb>",
+	Use:   "ripup <file.kicad_pcb>",
 	Short: "Remove tracks/vias and return a diff",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -360,13 +361,31 @@ var edaCtrlExecuteRipup = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("failed to create temp file: %w", err)
 			}
-			tmpFile.WriteString(diff)
+			if _, err := tmpFile.WriteString(diff); err != nil {
+				tmpFile.Close()
+				return fmt.Errorf("failed to write diff: %w", err)
+			}
 			tmpFile.Close()
 			defer os.Remove(tmpFile.Name())
 
 			fmt.Printf("Applying diff to %s...\n", pcbPath)
-			// Apply using simple file replacement approach
-			fmt.Println("Diff applied. Open the PCB in KiCad for manual rerouting.")
+			patchCmd := exec.Command("patch", "-p1", "--no-backup-if-mismatch", "-i", tmpFile.Name(), pcbPath)
+			patchCmd.Stdout = os.Stdout
+			patchCmd.Stderr = os.Stderr
+			if err := patchCmd.Run(); err != nil {
+				fmt.Printf("Warning: patch failed (%v), trying manual apply...\n", err)
+				// Fallback: the API should return modified_content
+				if modified, ok := result["modified_content"].(string); ok && modified != "" {
+					if err := os.WriteFile(pcbPath, []byte(modified), 0644); err != nil {
+						return fmt.Errorf("failed to write modified PCB: %w", err)
+					}
+					fmt.Println("Applied via file replacement.")
+				} else {
+					return fmt.Errorf("patch failed and no modified_content in response")
+				}
+			} else {
+				fmt.Println("Diff applied successfully.")
+			}
 		} else if diff != "" {
 			fmt.Println("\n--- Unified Diff ---")
 			fmt.Println(diff)
