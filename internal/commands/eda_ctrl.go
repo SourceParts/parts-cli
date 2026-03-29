@@ -474,6 +474,163 @@ var edaCtrlRemoveFootprints = &cobra.Command{
 	},
 }
 
+// --- Station 3c: Place Footprints ---
+
+var edaCtrlPlace = &cobra.Command{
+	Use:   "place <file.kicad_pcb>",
+	Short: "Place new footprints on a PCB",
+	Long: `Place footprints at specified coordinates.
+
+Pass placements as JSON via --placements flag:
+  [{"ref":"LED1","footprint":"1010","x":103.25,"y":136.97,"layer":"B.Cu","value":"APA-104"}]
+
+Supported package sizes: 0201, 0402, 0603, 0805, 1010 (4-pad LED)
+Or use KiCad library format: Resistor_SMD:R_0402_1005Metric`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pcbPath := args[0]
+		placementsJSON, _ := cmd.Flags().GetString("placements")
+		apply, _ := cmd.Flags().GetBool("apply")
+
+		if placementsJSON == "" {
+			return fmt.Errorf("--placements is required (JSON array)")
+		}
+
+		// Validate JSON
+		var placements []map[string]interface{}
+		if err := json.Unmarshal([]byte(placementsJSON), &placements); err != nil {
+			return fmt.Errorf("invalid placements JSON: %w", err)
+		}
+
+		fmt.Printf("Placing %d footprints...\n", len(placements))
+		result, err := uploadAndGetJSON(pcbPath, "/v1/eda/pcb/place", map[string]string{
+			"placements_json": placementsJSON,
+		})
+		if err != nil {
+			return err
+		}
+
+		if placed, ok := result["placed"].([]interface{}); ok {
+			fmt.Printf("\nPlaced: %d footprints\n", len(placed))
+			for _, p := range placed {
+				m := p.(map[string]interface{})
+				fmt.Printf("  %v (%v, %v)\n", m["ref"], m["pkg"], m["source"])
+			}
+		}
+		if errs, ok := result["errors"].([]interface{}); ok && len(errs) > 0 {
+			fmt.Printf("\nErrors: %d\n", len(errs))
+			for _, e := range errs {
+				fmt.Printf("  %v\n", e)
+			}
+		}
+
+		if stats, ok := result["board_stats"].(map[string]interface{}); ok && len(stats) > 0 {
+			fmt.Printf("\nBoard: %.1f mm², Fill: %.1f%% (%v footprints)\n",
+				stats["board_area_mm2"], stats["fill_pct"], stats["footprints"])
+		}
+
+		if apply {
+			if modified, ok := result["modified_content"].(string); ok && modified != "" {
+				if err := os.WriteFile(pcbPath, []byte(modified), 0644); err != nil {
+					return fmt.Errorf("failed to write modified PCB: %w", err)
+				}
+				fmt.Printf("Applied to %s\n", pcbPath)
+			} else {
+				return fmt.Errorf("no modified_content in response")
+			}
+		} else {
+			fmt.Println("\nUse --apply to apply changes to the local file.")
+		}
+
+		return nil
+	},
+}
+
+// --- Station 3d: Resize Footprints ---
+
+var edaCtrlResize = &cobra.Command{
+	Use:   "resize <file.kicad_pcb>",
+	Short: "Resize footprint pads to a different package",
+	Long: `Resize footprint pads to a target package size.
+
+Pass resizes as JSON via --resizes flag:
+  [{"ref":"C9","target_pkg":"0805"},{"ref":"C13","target_pkg":"0805"}]
+
+Or use shorthand: --refs C9,C13,C17 --target 0805`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pcbPath := args[0]
+		resizesJSON, _ := cmd.Flags().GetString("resizes")
+		refsFlag, _ := cmd.Flags().GetString("refs")
+		target, _ := cmd.Flags().GetString("target")
+		apply, _ := cmd.Flags().GetBool("apply")
+
+		// Build resizes from either --resizes JSON or --refs + --target
+		if resizesJSON == "" && refsFlag != "" && target != "" {
+			refs := strings.Split(refsFlag, ",")
+			var resizes []map[string]string
+			for _, r := range refs {
+				resizes = append(resizes, map[string]string{
+					"ref": strings.TrimSpace(r), "target_pkg": target,
+				})
+			}
+			b, _ := json.Marshal(resizes)
+			resizesJSON = string(b)
+		}
+
+		if resizesJSON == "" {
+			return fmt.Errorf("--resizes JSON or --refs + --target required")
+		}
+
+		var resizes []map[string]string
+		if err := json.Unmarshal([]byte(resizesJSON), &resizes); err != nil {
+			return fmt.Errorf("invalid resizes JSON: %w", err)
+		}
+
+		fmt.Printf("Resizing %d footprints...\n", len(resizes))
+		result, err := uploadAndGetJSON(pcbPath, "/v1/eda/pcb/resize", map[string]string{
+			"resizes_json": resizesJSON,
+		})
+		if err != nil {
+			return err
+		}
+
+		if resized, ok := result["resized"].([]interface{}); ok {
+			fmt.Printf("\nResized: %d footprints\n", len(resized))
+			for _, r := range resized {
+				m := r.(map[string]interface{})
+				fmt.Printf("  %v: %v → %v\n", m["ref"], m["from"], m["to"])
+			}
+		}
+		if errs, ok := result["errors"].([]interface{}); ok && len(errs) > 0 {
+			fmt.Printf("\nErrors: %d\n", len(errs))
+			for _, e := range errs {
+				fmt.Printf("  %v\n", e)
+			}
+		}
+
+		if stats, ok := result["board_stats"].(map[string]interface{}); ok && len(stats) > 0 {
+			fmt.Printf("\nBoard: %.1f mm², Fill: %.1f%% (%v footprints)\n",
+				stats["board_area_mm2"], stats["fill_pct"], stats["footprints"])
+		}
+
+		if apply {
+			if modified, ok := result["modified_content"].(string); ok && modified != "" {
+				if err := os.WriteFile(pcbPath, []byte(modified), 0644); err != nil {
+					return fmt.Errorf("failed to write modified PCB: %w", err)
+				}
+				fmt.Printf("Applied to %s\n", pcbPath)
+			} else {
+				return fmt.Errorf("no modified_content in response")
+			}
+		} else {
+			fmt.Println("\nUse --apply to apply changes to the local file.")
+		}
+
+		return nil
+	},
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -589,6 +746,16 @@ func init() {
 	edaCtrlRemoveFootprints.Flags().String("refs", "", "Comma-separated reference designators (required)")
 	edaCtrlRemoveFootprints.Flags().Bool("apply", false, "Apply changes to the local file")
 
+	// Place footprints flags
+	edaCtrlPlace.Flags().String("placements", "", "JSON array of placement objects (required)")
+	edaCtrlPlace.Flags().Bool("apply", false, "Apply changes to the local file")
+
+	// Resize footprints flags
+	edaCtrlResize.Flags().String("resizes", "", "JSON array of {ref, target_pkg} objects")
+	edaCtrlResize.Flags().String("refs", "", "Comma-separated refs (use with --target)")
+	edaCtrlResize.Flags().String("target", "", "Target package size (e.g. 0805)")
+	edaCtrlResize.Flags().Bool("apply", false, "Apply changes to the local file")
+
 	// Validate flags
 	edaCtrlValidate.Flags().BoolP("json", "j", false, "Output raw JSON")
 
@@ -610,6 +777,8 @@ func init() {
 	edaCtrl.AddCommand(edaCtrlProposeRipup)
 	edaCtrl.AddCommand(edaCtrlExecuteRipup)
 	edaCtrl.AddCommand(edaCtrlRemoveFootprints)
+	edaCtrl.AddCommand(edaCtrlPlace)
+	edaCtrl.AddCommand(edaCtrlResize)
 	edaCtrl.AddCommand(edaCtrlValidate)
 	edaCtrl.AddCommand(edaCtrlExport)
 }
