@@ -631,6 +631,84 @@ Or use shorthand: --refs C9,C13,C17 --target 0805`,
 	},
 }
 
+// --- Station 3e: Reassign Nets / Move ---
+
+var edaCtrlReassign = &cobra.Command{
+	Use:   "reassign <file.kicad_pcb>",
+	Short: "Reassign pad nets, merge nets, or move footprints",
+	Long: `Reassign nets and move components on a PCB.
+
+Pass assignments as JSON via --assignments flag:
+  [{"net_from":"VOUT1","net_to":"VOUT1V8"}]                    — merge nets
+  [{"ref":"R23","pad":"1","net_name":"TWI0_SDA"}]               — reassign pad
+  [{"ref":"R7","x":96.0,"y":152.0}]                            — move footprint`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pcbPath := args[0]
+		assignmentsJSON, _ := cmd.Flags().GetString("assignments")
+		apply, _ := cmd.Flags().GetBool("apply")
+
+		if assignmentsJSON == "" {
+			return fmt.Errorf("--assignments is required (JSON array)")
+		}
+
+		var assignments []map[string]interface{}
+		if err := json.Unmarshal([]byte(assignmentsJSON), &assignments); err != nil {
+			return fmt.Errorf("invalid assignments JSON: %w", err)
+		}
+
+		fmt.Printf("Applying %d assignments...\n", len(assignments))
+		result, err := uploadAndGetJSON(pcbPath, "/v1/eda/pcb/reassign", map[string]string{
+			"assignments_json": assignmentsJSON,
+		})
+		if err != nil {
+			return err
+		}
+
+		if changes, ok := result["changes"].([]interface{}); ok {
+			fmt.Printf("\nChanges: %d\n", len(changes))
+			for _, c := range changes {
+				m := c.(map[string]interface{})
+				switch m["type"] {
+				case "net_merge":
+					fmt.Printf("  merge: %v → %v (%v pads, %v tracks)\n", m["from"], m["to"], m["pads"], m["tracks"])
+				case "pad_reassign":
+					fmt.Printf("  pad: %v.%v  %v → %v\n", m["ref"], m["pad"], m["from"], m["to"])
+				case "move":
+					fmt.Printf("  move: %v  %v → %v\n", m["ref"], m["from"], m["to"])
+				}
+			}
+		}
+
+		if errs, ok := result["errors"].([]interface{}); ok && len(errs) > 0 {
+			fmt.Printf("\nErrors: %d\n", len(errs))
+			for _, e := range errs {
+				fmt.Printf("  %v\n", e)
+			}
+		}
+
+		if stats, ok := result["board_stats"].(map[string]interface{}); ok && len(stats) > 0 {
+			fmt.Printf("\nBoard: %.1f mm², Fill: %.1f%% (%v footprints)\n",
+				stats["board_area_mm2"], stats["fill_pct"], stats["footprints"])
+		}
+
+		if apply {
+			if modified, ok := result["modified_content"].(string); ok && modified != "" {
+				if err := os.WriteFile(pcbPath, []byte(modified), 0644); err != nil {
+					return fmt.Errorf("failed to write: %w", err)
+				}
+				fmt.Printf("Applied to %s\n", pcbPath)
+			} else {
+				return fmt.Errorf("no modified_content in response")
+			}
+		} else {
+			fmt.Println("\nUse --apply to apply changes to the local file.")
+		}
+
+		return nil
+	},
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -756,6 +834,10 @@ func init() {
 	edaCtrlResize.Flags().String("target", "", "Target package size (e.g. 0805)")
 	edaCtrlResize.Flags().Bool("apply", false, "Apply changes to the local file")
 
+	// Reassign flags
+	edaCtrlReassign.Flags().String("assignments", "", "JSON array of assignment objects (required)")
+	edaCtrlReassign.Flags().Bool("apply", false, "Apply changes to the local file")
+
 	// Validate flags
 	edaCtrlValidate.Flags().BoolP("json", "j", false, "Output raw JSON")
 
@@ -779,6 +861,7 @@ func init() {
 	edaCtrl.AddCommand(edaCtrlRemoveFootprints)
 	edaCtrl.AddCommand(edaCtrlPlace)
 	edaCtrl.AddCommand(edaCtrlResize)
+	edaCtrl.AddCommand(edaCtrlReassign)
 	edaCtrl.AddCommand(edaCtrlValidate)
 	edaCtrl.AddCommand(edaCtrlExport)
 }
