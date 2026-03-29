@@ -514,6 +514,15 @@ var edaCtrlValidate = &cobra.Command{
 
 		fmt.Printf("\nDRC %s: %v errors, %v warnings, %v unconnected\n", status, errors, warnings, unconnected)
 
+		if stats, ok := result["board_stats"].(map[string]interface{}); ok && len(stats) > 0 {
+			fmt.Printf("\nBoard: %.1f x %.1f mm (%.1f mm²)\n",
+				stats["board_width_mm"], stats["board_height_mm"], stats["board_area_mm2"])
+			fmt.Printf("Fill:  %.1f%% (%v footprints, %.1f mm² component area)\n",
+				stats["fill_pct"], stats["footprints"], stats["component_area_mm2"])
+			fmt.Printf("Copper: %v tracks, %v vias, %v zones\n",
+				stats["tracks"], stats["vias"], stats["zones"])
+		}
+
 		if violations, ok := result["violations"].([]interface{}); ok && len(violations) > 0 {
 			fmt.Println("\nViolations:")
 			for i, v := range violations {
