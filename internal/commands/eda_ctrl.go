@@ -398,6 +398,89 @@ var edaCtrlExecuteRipup = &cobra.Command{
 	},
 }
 
+// --- Station 3b: Remove Footprints ---
+
+var edaCtrlRemoveFootprints = &cobra.Command{
+	Use:   "remove <file.kicad_pcb>",
+	Short: "Remove footprints by reference designator",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pcbPath := args[0]
+		refsFlag, _ := cmd.Flags().GetString("refs")
+		apply, _ := cmd.Flags().GetBool("apply")
+
+		if refsFlag == "" {
+			return fmt.Errorf("--refs is required (e.g. --refs Q11,Q12,R4)")
+		}
+
+		refs := strings.Split(refsFlag, ",")
+		for i := range refs {
+			refs[i] = strings.TrimSpace(refs[i])
+		}
+		refsJSON, _ := json.Marshal(refs)
+
+		fmt.Printf("Removing %d footprints...\n", len(refs))
+		result, err := uploadAndGetJSON(pcbPath, "/v1/eda/pcb/remove-footprints", map[string]string{
+			"refs_json": string(refsJSON),
+		})
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("\nRemoved: %v footprints (%v pads)\n",
+			result["footprints_removed"], result["pads_removed"])
+		fmt.Printf("Orphan copper cleaned: %v tracks, %v vias\n",
+			result["orphan_tracks"], result["orphan_vias"])
+
+		if found, ok := result["refs_found"].([]interface{}); ok {
+			fmt.Printf("Found: %v\n", found)
+		}
+		if orphanNets, ok := result["orphan_nets"].([]interface{}); ok && len(orphanNets) > 0 {
+			fmt.Printf("Orphan nets removed: %v\n", orphanNets)
+		}
+
+		if requested, ok := result["refs_requested"].([]interface{}); ok {
+			if found, ok2 := result["refs_found"].([]interface{}); ok2 {
+				if len(found) < len(requested) {
+					fmt.Printf("\nWarning: %d refs not found in PCB\n", len(requested)-len(found))
+				}
+			}
+		}
+
+		if apply {
+			if modified, ok := result["modified_content"].(string); ok && modified != "" {
+				if err := os.WriteFile(pcbPath, []byte(modified), 0644); err != nil {
+					return fmt.Errorf("failed to write modified PCB: %w", err)
+				}
+				fmt.Printf("Applied to %s\n", pcbPath)
+			} else {
+				return fmt.Errorf("no modified_content in response")
+			}
+		} else {
+			diff, _ := result["diff"].(string)
+			if diff != "" {
+				fmt.Println("\n--- Unified Diff ---")
+				fmt.Println(diff[:min(len(diff), 2000)])
+				if len(diff) > 2000 {
+					fmt.Printf("... (%d more lines)\n", result["diff_lines"])
+				}
+				fmt.Println("--- End Diff ---")
+			}
+			fmt.Println("\nUse --apply to apply changes to the local file.")
+		}
+
+		fmt.Println("\nNext: parts eda ctrl validate <file>")
+		return nil
+	},
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // --- Station 4: Validate (DRC) ---
 
 var edaCtrlValidate = &cobra.Command{
@@ -493,6 +576,10 @@ func init() {
 	edaCtrlExecuteRipup.Flags().String("nets", "", "Comma-separated net names (required)")
 	edaCtrlExecuteRipup.Flags().Bool("apply", false, "Apply the diff to the local file")
 
+	// Remove footprints flags
+	edaCtrlRemoveFootprints.Flags().String("refs", "", "Comma-separated reference designators (required)")
+	edaCtrlRemoveFootprints.Flags().Bool("apply", false, "Apply changes to the local file")
+
 	// Validate flags
 	edaCtrlValidate.Flags().BoolP("json", "j", false, "Output raw JSON")
 
@@ -513,6 +600,7 @@ func init() {
 	edaCtrl.AddCommand(edaCtrlAnalyze)
 	edaCtrl.AddCommand(edaCtrlProposeRipup)
 	edaCtrl.AddCommand(edaCtrlExecuteRipup)
+	edaCtrl.AddCommand(edaCtrlRemoveFootprints)
 	edaCtrl.AddCommand(edaCtrlValidate)
 	edaCtrl.AddCommand(edaCtrlExport)
 }
