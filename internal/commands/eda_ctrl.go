@@ -2,6 +2,8 @@ package commands
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,6 +81,11 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 	if apiKey := Client.GetAPIKey(); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("X-API-Key", apiKey)
+	}
+
+	// SHA256 hash for server-side caching
+	if hash := computeFileHash(pcbPath); hash != "" {
+		req.Header.Set("X-PCB-Hash", hash)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -848,6 +855,64 @@ Pass assignments as JSON via --assignments flag:
 	},
 }
 
+func computeFileHash(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// --- Station 3f: Zone Refill ---
+
+var edaCtrlRefill = &cobra.Command{
+	Use:   "refill <file.kicad_pcb>",
+	Short: "Refill all zones (fixes Altium-converted fill polygons)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pcbPath := args[0]
+		apply, _ := cmd.Flags().GetBool("apply")
+
+		fmt.Printf("Refilling zones in %s...\n", filepath.Base(pcbPath))
+		result, err := uploadAndGetJSON(pcbPath, "/v1/eda/pcb/refill", nil)
+		if err != nil {
+			return err
+		}
+
+		changed, _ := result["changed"].(bool)
+		diffLines, _ := result["diff_lines"].(float64)
+
+		if changed {
+			fmt.Printf("Zones refilled (%d lines changed)\n", int(diffLines))
+		} else {
+			fmt.Println("No zones changed")
+		}
+
+		if stats, ok := result["board_stats"].(map[string]interface{}); ok && len(stats) > 0 {
+			fmt.Printf("Board: %.1f mm², Fill: %.1f%%, %v footprints\n",
+				stats["board_area_mm2"], stats["fill_pct"], stats["footprints"])
+		}
+
+		if apply && changed {
+			if modified, ok := result["modified_content"].(string); ok && modified != "" {
+				if err := os.WriteFile(pcbPath, []byte(modified), 0644); err != nil {
+					return fmt.Errorf("failed to write: %w", err)
+				}
+				fmt.Printf("Applied to %s\n", pcbPath)
+			}
+		} else if changed {
+			fmt.Println("Use --apply to save refilled zones to the local file.")
+		}
+
+		return nil
+	},
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -982,6 +1047,9 @@ func init() {
 	edaCtrlReassign.Flags().String("assignments", "", "JSON array of assignment objects (required)")
 	edaCtrlReassign.Flags().Bool("apply", false, "Apply changes to the local file")
 
+	// Refill flags
+	edaCtrlRefill.Flags().Bool("apply", false, "Apply refilled zones to the local file")
+
 	// Validate flags
 	edaCtrlValidate.Flags().BoolP("json", "j", false, "Output raw JSON")
 
@@ -1007,6 +1075,7 @@ func init() {
 	edaCtrl.AddCommand(edaCtrlResize)
 	edaCtrl.AddCommand(edaCtrlReassign)
 	edaCtrl.AddCommand(edaCtrlJob)
+	edaCtrl.AddCommand(edaCtrlRefill)
 	edaCtrl.AddCommand(edaCtrlValidate)
 	edaCtrl.AddCommand(edaCtrlExport)
 }
