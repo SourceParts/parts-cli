@@ -49,6 +49,18 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 		return nil, fmt.Errorf("failed to add file: %w", err)
 	}
 
+	// Auto-upload companion files (.kicad_dru, .kicad_pro) from same directory
+	dir := filepath.Dir(pcbPath)
+	base := strings.TrimSuffix(filepath.Base(pcbPath), filepath.Ext(pcbPath))
+	companions := []string{".kicad_dru", ".kicad_pro"}
+	for _, ext := range companions {
+		compPath := filepath.Join(dir, base+ext)
+		if _, err := os.Stat(compPath); err == nil {
+			fieldName := "companion_" + strings.TrimPrefix(ext, ".")
+			_ = addFileToMultipart(writer, fieldName, compPath)
+		}
+	}
+
 	for key, value := range formFields {
 		if value != "" {
 			writer.WriteField(key, value)
