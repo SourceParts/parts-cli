@@ -68,8 +68,6 @@ func main() {
 		// Manufacturing
 		commands.DFMPipeline,
 		commands.Fab,
-		// Firmware
-		commands.Firmware,
 		// Quality
 		commands.OQC,
 		commands.Compliance,
