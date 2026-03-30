@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/spf13/cobra"
@@ -64,6 +65,7 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 	if apiKey := Client.GetAPIKey(); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("X-API-Key", apiKey)
 	}
 
@@ -74,7 +76,7 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
 	}
 
@@ -83,6 +85,131 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 	return result, nil
+}
+
+// getJSON makes an authenticated GET request and returns JSON.
+func getJSON(endpoint string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+	if apiKey := Client.GetAPIKey(); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("X-API-Key", apiKey)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse: %w", err)
+	}
+	return result, nil
+}
+
+// --- Async PCB Job ---
+
+var edaCtrlJob = &cobra.Command{
+	Use:   "job <file.kicad_pcb>",
+	Short: "Submit an async PCB operation and poll for result",
+	Long: `Submit a heavy PCB operation to the async job queue.
+Bypasses Cloudflare timeout by processing via the worker service.
+
+Examples:
+  parts eda ctrl job board.kicad_pcb --op reassign --payload '{"assignments": [...]}'
+  parts eda ctrl job board.kicad_pcb --op validate
+  parts eda ctrl job board.kicad_pcb --op ripup --payload '{"net_names": ["LED_R1"]}'`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pcbPath := args[0]
+		operation, _ := cmd.Flags().GetString("op")
+		payloadJSON, _ := cmd.Flags().GetString("payload")
+		noWait, _ := cmd.Flags().GetBool("no-wait")
+
+		if operation == "" {
+			return fmt.Errorf("--op is required (validate, reassign, place, resize, ripup, remove-footprints, export)")
+		}
+		if payloadJSON == "" {
+			payloadJSON = "{}"
+		}
+
+		fmt.Printf("Submitting async %s job...\n", operation)
+		result, err := uploadAndGetJSON(pcbPath, "/v1/eda/pcb/job", map[string]string{
+			"operation":    operation,
+			"payload_json": payloadJSON,
+		})
+		if err != nil {
+			return err
+		}
+
+		jobID, _ := result["job_id"].(string)
+		statusURL, _ := result["status_url"].(string)
+		fmt.Printf("Job submitted: %s\n", jobID)
+		fmt.Printf("Status URL: %s\n", statusURL)
+
+		if noWait {
+			fmt.Println("Use --no-wait=false to poll for completion.")
+			return nil
+		}
+
+		// Poll for completion
+		fmt.Print("Waiting")
+		for i := 0; i < 150; i++ { // 5 min max (150 * 2s)
+			time.Sleep(2 * time.Second)
+			fmt.Print(".")
+
+			status, err := getJSON(statusURL)
+			if err != nil {
+				fmt.Printf("\nPoll error: %v\n", err)
+				continue
+			}
+
+			s, _ := status["status"].(string)
+			switch s {
+			case "done":
+				fmt.Printf("\nJob %s completed!\n", jobID)
+				if bs, ok := status["board_stats"].(map[string]interface{}); ok {
+					fmt.Printf("Board: %.1f mm², Fill: %.1f%%, %v footprints\n",
+						bs["board_area_mm2"], bs["fill_pct"], bs["footprints"])
+				}
+				if stats, ok := status["stats"].(map[string]interface{}); ok {
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					enc.Encode(stats)
+				}
+				if dl, ok := status["diff_lines"].(float64); ok && dl > 0 {
+					fmt.Printf("Diff: %.0f lines\n", dl)
+				}
+				if url, ok := status["result_url"].(string); ok && url != "" {
+					fmt.Printf("Result: %s\n", url)
+				}
+				return nil
+
+			case "failed":
+				errMsg, _ := status["error"].(string)
+				return fmt.Errorf("job failed: %s", errMsg)
+
+			case "pending", "processing":
+				continue
+
+			default:
+				continue
+			}
+		}
+
+		return fmt.Errorf("job %s timed out after 5 minutes", jobID)
+	},
 }
 
 // --- Station 0a: ERC ---
@@ -834,6 +961,11 @@ func init() {
 	edaCtrlResize.Flags().String("target", "", "Target package size (e.g. 0805)")
 	edaCtrlResize.Flags().Bool("apply", false, "Apply changes to the local file")
 
+	// Job flags
+	edaCtrlJob.Flags().String("op", "", "Operation: validate, reassign, place, resize, ripup, remove-footprints, export")
+	edaCtrlJob.Flags().String("payload", "", "Operation payload JSON")
+	edaCtrlJob.Flags().Bool("no-wait", false, "Submit and exit without polling")
+
 	// Reassign flags
 	edaCtrlReassign.Flags().String("assignments", "", "JSON array of assignment objects (required)")
 	edaCtrlReassign.Flags().Bool("apply", false, "Apply changes to the local file")
@@ -862,6 +994,7 @@ func init() {
 	edaCtrl.AddCommand(edaCtrlPlace)
 	edaCtrl.AddCommand(edaCtrlResize)
 	edaCtrl.AddCommand(edaCtrlReassign)
+	edaCtrl.AddCommand(edaCtrlJob)
 	edaCtrl.AddCommand(edaCtrlValidate)
 	edaCtrl.AddCommand(edaCtrlExport)
 }
