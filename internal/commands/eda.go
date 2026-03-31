@@ -707,6 +707,56 @@ var edaRender = &cobra.Command{
 }
 
 // =============================================================================
+// Footprint Render — render a .kicad_mod as PNG/SVG via convert-service
+// =============================================================================
+
+var edaFootprintRender = &cobra.Command{
+	Use:   "footprint render <file.kicad_mod>",
+	Short: "Render a KiCad footprint as PNG or SVG",
+	Long:  `Upload a .kicad_mod file and render it via kicad-cli on the server. Returns a PNG or SVG image.`,
+	Args:  cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` eda footprint render SW_Jixing_2x4x3.5_180gf.kicad_mod -o footprint.png`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		fpFile := args[0]
+		if _, err := os.Stat(fpFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", fpFile)
+		}
+
+		format, _ := cmd.Flags().GetString("format")
+		layers, _ := cmd.Flags().GetString("layers")
+		scale, _ := cmd.Flags().GetInt("scale")
+		output, _ := cmd.Flags().GetString("output")
+
+		if output == "" {
+			base := strings.TrimSuffix(filepath.Base(fpFile), filepath.Ext(fpFile))
+			output = base + "." + format
+		}
+
+		fields := map[string]string{
+			"format": format,
+			"layers": layers,
+			"scale":  fmt.Sprintf("%d", scale),
+		}
+
+		var buf bytes.Buffer
+		if err := Client.EDAUpload(ctx, domain.Endpoint_FootprintRender, fpFile, fields, nil, &buf); err != nil {
+			return err
+		}
+
+		// The response is the raw image bytes (not JSON)
+		if err := os.WriteFile(output, buf.Bytes(), 0644); err != nil {
+			return fmt.Errorf("failed to write output: %w", err)
+		}
+
+		fmt.Printf("Rendered footprint: %s (%d bytes)\n", output, buf.Len())
+		return nil
+	},
+}
+
+// =============================================================================
 // Schematic Remove — remove a component from a schematic
 // =============================================================================
 
@@ -869,6 +919,13 @@ func init() {
 	EDA.AddCommand(edaRender)
 	EDA.AddCommand(edaSchRemove)
 	EDA.AddCommand(edaSchAnnotate)
+
+	// Footprint render flags
+	edaFootprintRender.Flags().StringP("output", "o", "", "Output image path (default: <basename>.png)")
+	edaFootprintRender.Flags().String("format", "png", "Output format: png or svg")
+	edaFootprintRender.Flags().String("layers", "F.Cu,F.SilkS,F.CrtYd,F.Fab,F.Mask", "Layers to render")
+	edaFootprintRender.Flags().Int("scale", 10, "Scale factor for PNG output")
+	EDA.AddCommand(edaFootprintRender)
 }
 
 // =============================================================================
