@@ -76,7 +76,7 @@ legacy key-based login instead.`,
 		Client.SetAPIKey(tokens.AccessToken)
 
 		fmt.Printf("\n✓ Logged in as %s\n", tokens.Email)
-		fmt.Println("OAuth tokens saved to system keychain")
+		fmt.Printf("Storage: %s\n", client.StorageBackend())
 		return nil
 	},
 	Example: domain.BinaryName + ` auth login
@@ -95,8 +95,8 @@ func handleAPIKeyLogin(ctx context.Context, apiKey string) error {
 
 	Client.SetAPIKey(apiKey)
 
-	fmt.Println("\n✓ API key saved to system keychain")
-	fmt.Println("You are now authenticated with Source Parts API")
+	fmt.Println("\n✓ API key saved")
+	fmt.Printf("Storage: %s\n", client.StorageBackend())
 	return nil
 }
 
@@ -112,7 +112,7 @@ var authLogout = &cobra.Command{
 			return err
 		}
 		Client.SetAPIKey("")
-		fmt.Println("Credentials removed from system keychain")
+		fmt.Println("Credentials removed")
 		fmt.Println("You are now logged out")
 		return nil
 	},
@@ -123,6 +123,15 @@ var authStatus = &cobra.Command{
 	Short: "Check authentication status",
 	Long:  `Show which credentials are stored and whether the client is authenticated.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		storage := client.StorageBackend()
+
+		// PARTS_TOKEN env var takes precedence
+		if os.Getenv("PARTS_TOKEN") != "" {
+			fmt.Println("Auth method: PARTS_TOKEN (environment variable)")
+			fmt.Printf("Storage:     %s\n", storage)
+			return nil
+		}
+
 		if client.HasOAuthTokens() {
 			tokens, err := client.LoadOAuthTokens()
 			if err != nil || tokens == nil {
@@ -138,13 +147,14 @@ var authStatus = &cobra.Command{
 					fmt.Printf("User:        %s\n", tokens.Email)
 				}
 				fmt.Printf("Expires in:  %s\n", remaining.Round(time.Second))
+				fmt.Printf("Storage:     %s\n", storage)
 			}
 			return nil
 		}
 
 		if client.HasAPIKey() {
 			fmt.Println("Auth method: API Key")
-			fmt.Println("Key stored in system keychain")
+			fmt.Printf("Storage:     %s\n", storage)
 			if Client.IsAuthenticated() {
 				fmt.Println("Client is configured and ready")
 			}
@@ -153,6 +163,7 @@ var authStatus = &cobra.Command{
 
 		fmt.Println("Not authenticated")
 		fmt.Printf("Run '%s auth login' to authenticate\n", domain.BinaryName)
+		fmt.Printf("Or set PARTS_TOKEN environment variable for CI/CD\n")
 		return nil
 	},
 }
