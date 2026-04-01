@@ -139,6 +139,8 @@ func main() {
 		commands.PostProduction,
 		// Update
 		commands.Update,
+		// Uninstall
+		commands.Uninstall,
 	)
 
 	// Resolve credentials. Priority:
