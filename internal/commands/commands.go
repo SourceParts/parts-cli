@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/SourceParts/parts-cli/internal/types"
@@ -752,14 +755,216 @@ var Report = &cobra.Command{
 // Local Commands
 // =============================================================================
 
+var (
+	initRevision string
+	initNoGit    bool
+	initKicad    bool
+)
+
 var Init = &cobra.Command{
-	Use:   "init",
+	Use:   "init [name]",
 	Short: "Initialize a new parts project",
+	Long: `Create a new hardware project with the standard Source Parts directory
+structure, configuration files, and optional KiCad project scaffolding.
+
+If [name] is omitted, the current directory name is used and the project
+is initialized in place. If [name] is provided, a new directory is created.
+
+Directory structure created:
+  .parts/config.yaml   Project configuration
+  PARTS.md             Project documentation
+  .gitignore           Git ignore rules
+  ECO/                 Engineering Change Orders
+  BOM/<rev>/           Bill of Materials
+  PCB/<rev>/           PCB design files
+  Datasheets/          Component datasheets
+  IQC/                 Incoming Quality Control
+  DFT/                 Design for Test
+  DRC/                 Design Rule Check reports
+  ERC/                 Electrical Rule Check reports
+  Reports/             Analysis and review reports`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		return Client.Init(ctx, os.Stdout)
+		return runInit(args, os.Stdout)
 	},
+	Example: domain.BinaryName + ` init
+` + domain.BinaryName + ` init my-board
+` + domain.BinaryName + ` init my-board --revision A --kicad`,
+}
+
+func init() {
+	Init.Flags().StringVar(&initRevision, "revision", "A", "Initial revision letter")
+	Init.Flags().BoolVar(&initNoGit, "no-git", false, "Skip git init")
+	Init.Flags().BoolVar(&initKicad, "kicad", false, "Create KiCad project files")
+}
+
+func runInit(args []string, w io.Writer) error {
+	var dir string
+	var name string
+	inPlace := len(args) == 0
+
+	if inPlace {
+		// Initialize in current directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get working directory: %w", err)
+		}
+		dir = cwd
+		name = filepath.Base(cwd)
+
+		// Check if already initialized
+		if _, err := os.Stat(filepath.Join(dir, ".parts")); err == nil {
+			return fmt.Errorf("already a parts project (.parts/ exists)")
+		}
+	} else {
+		name = args[0]
+		dir = name
+
+		// Check if directory already exists
+		if _, err := os.Stat(dir); err == nil {
+			return fmt.Errorf("directory already exists: %s", dir)
+		}
+	}
+
+	absPath, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving path: %w", err)
+	}
+
+	rev := initRevision
+
+	// Create directory tree
+	dirs := []string{
+		".parts",
+		"ECO",
+		filepath.Join("BOM", rev),
+		filepath.Join("PCB", rev),
+		"Datasheets",
+		"IQC",
+		"DFT",
+		"DRC",
+		"ERC",
+		"Reports",
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0755); err != nil {
+			return fmt.Errorf("creating %s: %w", d, err)
+		}
+	}
+
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+
+	// .parts/config.yaml
+	configContent := fmt.Sprintf(`version: "1.0"
+
+project:
+  name: %q
+  type: "pcb"
+  created_at: %q
+
+fabrication:
+  board_name: %q
+  prefix: %q
+`, name, timestamp, name, name)
+	if err := os.WriteFile(filepath.Join(dir, ".parts", "config.yaml"), []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	// PARTS.md
+	partsMD := fmt.Sprintf(`# PARTS.md
+
+This file provides guidance to PARTS CLI when working with this repository.
+
+## Project Overview
+
+This is a **PCB hardware design repository** for **%s**.
+
+## Repository Structure
+
+- **PCB/%s/** — KiCad schematic and PCB files
+- **BOM/%s/** — Bill of Materials
+- **ECO/** — Engineering Change Orders
+- **Datasheets/** — Component datasheets
+- **IQC/** — Incoming Quality Control
+- **DFT/** — Design for Test
+- **DRC/** — Design Rule Check reports
+- **ERC/** — Electrical Rule Check reports
+- **Reports/** — Analysis and review reports
+`, name, rev, rev)
+	if err := os.WriteFile(filepath.Join(dir, "PARTS.md"), []byte(partsMD), 0644); err != nil {
+		return fmt.Errorf("writing PARTS.md: %w", err)
+	}
+
+	// .gitignore
+	gitignore := `.parts/sync.json
+*.bak
+*.tmp
+*~
+`
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	if _, err := os.Stat(gitignorePath); os.IsNotExist(err) {
+		if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {
+			return fmt.Errorf("writing .gitignore: %w", err)
+		}
+	}
+
+	// KiCad project files (optional)
+	if initKicad {
+		kicadPro := fmt.Sprintf(`{
+  "meta": {
+    "filename": "%s.kicad_pro",
+    "version": 1
+  },
+  "schematic": {
+    "drawing": {},
+    "meta": {
+      "version": 1
+    }
+  }
+}
+`, name)
+		pcbDir := filepath.Join(dir, "PCB", rev)
+		if err := os.WriteFile(filepath.Join(pcbDir, name+".kicad_pro"), []byte(kicadPro), 0644); err != nil {
+			return fmt.Errorf("writing kicad_pro: %w", err)
+		}
+
+		kicadSch := fmt.Sprintf(`(kicad_sch
+  (version 20231120)
+  (generator "parts-cli")
+  (generator_version "%s")
+  (uuid "%s")
+  (paper "A4")
+)
+`, domain.Version, timestamp)
+		if err := os.WriteFile(filepath.Join(pcbDir, name+".kicad_sch"), []byte(kicadSch), 0644); err != nil {
+			return fmt.Errorf("writing kicad_sch: %w", err)
+		}
+	}
+
+	// Git init
+	if !initNoGit {
+		gitCmd := exec.Command("git", "init", dir)
+		if out, err := gitCmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(w, "Warning: git init failed: %s\n", strings.TrimSpace(string(out)))
+		}
+	}
+
+	// Summary
+	if inPlace {
+		fmt.Fprintf(w, "Initialized parts project in %s\n", absPath)
+	} else {
+		fmt.Fprintf(w, "Created parts project: %s\n", absPath)
+	}
+	fmt.Fprintf(w, "  Revision:  %s\n", rev)
+	fmt.Fprintf(w, "  Config:    .parts/config.yaml\n")
+	if initKicad {
+		fmt.Fprintf(w, "  KiCad:     PCB/%s/%s.kicad_pro\n", rev, name)
+	}
+	if !initNoGit {
+		fmt.Fprintf(w, "  Git:       initialized\n")
+	}
+
+	return nil
 }
 
 var Log = &cobra.Command{
