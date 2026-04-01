@@ -49,6 +49,13 @@ Documentation: https://source.parts/docs/cli`,
 }
 
 func main() {
+	// Apply any staged update before doing anything else.
+	// This replaces the on-disk binary so the current invocation still runs
+	// the old code but the next one will use the new version.
+	if v := update.ApplyStagedUpdate(); v != "" {
+		fmt.Fprintf(os.Stderr, "Updated to v%s (takes effect on next run)\n", v)
+	}
+
 	rootCmd.PersistentFlags().BoolVarP(&Verbose, "verbose", "v", false, "verbose output")
 
 	// Add all commands

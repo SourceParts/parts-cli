@@ -162,8 +162,7 @@ var updateApply = &cobra.Command{
 			return fmt.Errorf("failed to install update: %w", err)
 		}
 
-		fmt.Printf("✓ Successfully updated to %s\n", result.LatestVersion)
-		fmt.Println("Please restart the CLI for the changes to take effect")
+		fmt.Printf("✓ Update %s staged — takes effect on next run\n", result.LatestVersion)
 
 		// Send notification if enabled
 		if config.Notifications {
