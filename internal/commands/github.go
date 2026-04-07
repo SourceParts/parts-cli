@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Valid report types accepted by the report-notify endpoint
+// Valid report types accepted by the notify/report endpoint
 var validReportTypes = map[string]bool{
 	"ecn":               true,
 	"schematic_review":  true,
@@ -27,6 +27,12 @@ var validReportTypes = map[string]bool{
 	"dfm_review":        true,
 	"dvt_scan":          true,
 	"stackup_diff":      true,
+}
+
+// Valid SOP types accepted by the notify/sop endpoint
+var validSOPTypes = map[string]bool{
+	"assembly": true,
+	"testing":  true,
 }
 
 // Github is the parent command for GitHub Actions integration
@@ -90,6 +96,28 @@ For single commits, use --message and --sha flags or rely on env vars.`,
 	RunE: runGithubCommit,
 }
 
+// githubSOP sends an SOP notification with PDF generation
+var githubSOP = &cobra.Command{
+	Use:   "sop",
+	Short: "Send an SOP notification with PDF generation",
+	Long: `Send a Standard Operating Procedure notification to the Source Parts webhook.
+
+Reads a markdown file, extracts metadata, and sends it for PDF generation
+and email delivery. Currently supports assembly specifications.
+
+The API key is resolved in order:
+  1. --api-key flag
+  2. PARTS_GITHUB_API_KEY env var
+  3. GITHUB_API_KEY env var`,
+	Example: domain.BinaryName + ` github sop \
+  --type assembly \
+  --file Reports/EVT2_Assembly_Spec.md \
+  --project "nRF54H20 Main Board" \
+  --client "Zach Eisenhauer" \
+  --email "zacheisenhauer@gmail.com"`,
+	RunE: runGithubSOP,
+}
+
 func init() {
 	// Report flags
 	githubReport.Flags().StringP("type", "t", "", "Report type: ecn, schematic_review, dfm, dvt, dfm_review, dvt_scan, stackup_diff")
@@ -126,8 +154,29 @@ func init() {
 	_ = githubCommit.MarkFlagRequired("email")
 	_ = githubCommit.MarkFlagRequired("service")
 
+	// SOP flags
+	githubSOP.Flags().StringP("type", "t", "assembly", "SOP type: assembly, testing")
+	githubSOP.Flags().StringP("file", "f", "", "Path to markdown SOP file")
+	githubSOP.Flags().StringP("project", "p", "", "Project name")
+	githubSOP.Flags().StringP("client", "c", "", "Client full name")
+	githubSOP.Flags().StringP("email", "e", "", "Client email address")
+	githubSOP.Flags().String("cc", "", "CC email address")
+	githubSOP.Flags().String("bcc", "", "BCC email addresses (comma-separated)")
+	githubSOP.Flags().StringP("api-key", "k", "", "API key (overrides env var)")
+	githubSOP.Flags().String("thread-id", "", "Email thread identifier for conversation threading")
+	githubSOP.Flags().String("version", "", "File version (auto-extracted from filename if omitted)")
+	githubSOP.Flags().String("repository", "", "Repository name (default: GITHUB_REPOSITORY env or \"unknown\")")
+	githubSOP.Flags().String("branch", "", "Branch name (default: GITHUB_REF_NAME env or \"main\")")
+	githubSOP.Flags().StringP("summary", "s", "", "Engineer's notes / summary text")
+
+	_ = githubSOP.MarkFlagRequired("file")
+	_ = githubSOP.MarkFlagRequired("project")
+	_ = githubSOP.MarkFlagRequired("client")
+	_ = githubSOP.MarkFlagRequired("email")
+
 	Github.AddCommand(githubReport)
 	Github.AddCommand(githubCommit)
+	Github.AddCommand(githubSOP)
 }
 
 // resolveAPIKey resolves the GitHub API key from flag, then env vars
@@ -499,5 +548,143 @@ func runGithubCommit(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Commit notification sent successfully!")
 	_ = respBody
+	return nil
+}
+
+func extractSOPSectionCount(content string) int {
+	sectionRe := regexp.MustCompile(`(?m)^## \d+\.`)
+	return len(sectionRe.FindAllString(content, -1))
+}
+
+func runGithubSOP(cmd *cobra.Command, args []string) error {
+	apiKey, err := resolveAPIKey(cmd)
+	if err != nil {
+		return err
+	}
+
+	sopType, _ := cmd.Flags().GetString("type")
+	filePath, _ := cmd.Flags().GetString("file")
+	project, _ := cmd.Flags().GetString("project")
+	clientName, _ := cmd.Flags().GetString("client")
+	email, _ := cmd.Flags().GetString("email")
+	cc, _ := cmd.Flags().GetString("cc")
+	bcc, _ := cmd.Flags().GetString("bcc")
+	threadID, _ := cmd.Flags().GetString("thread-id")
+	version, _ := cmd.Flags().GetString("version")
+	repository, _ := cmd.Flags().GetString("repository")
+	branch, _ := cmd.Flags().GetString("branch")
+	summary, _ := cmd.Flags().GetString("summary")
+
+	// Validate SOP type
+	if !validSOPTypes[sopType] {
+		valid := make([]string, 0, len(validSOPTypes))
+		for k := range validSOPTypes {
+			valid = append(valid, k)
+		}
+		return fmt.Errorf("invalid SOP type %q. Valid types: %s", sopType, strings.Join(valid, ", "))
+	}
+
+	// Read markdown file
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read SOP file: %w", err)
+	}
+	if len(strings.TrimSpace(string(content))) == 0 {
+		return fmt.Errorf("SOP file is empty: %s", filePath)
+	}
+
+	// Resolve defaults
+	fileName := filepath.Base(filePath)
+	if version == "" {
+		version = extractVersion(fileName)
+	}
+	if repository == "" {
+		repository = envOrDefault("GITHUB_REPOSITORY", "unknown")
+	}
+	if branch == "" {
+		branch = envOrDefault("GITHUB_REF_NAME", "main")
+	}
+
+	pipelineSource := "manual"
+	if os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" {
+		pipelineSource = "github_actions"
+	}
+
+	sectionCount := extractSOPSectionCount(string(content))
+
+	payload := types.SOPNotifyRequest{
+		SOPType:         sopType,
+		Repository:      repository,
+		Branch:          branch,
+		CommitSha:       os.Getenv("GITHUB_SHA"),
+		PipelineSource:  pipelineSource,
+		PipelineID:      os.Getenv("GITHUB_RUN_ID"),
+		PipelineURL:     os.Getenv("GITHUB_SERVER_URL") + "/" + repository + "/actions/runs/" + os.Getenv("GITHUB_RUN_ID"),
+		Status:          "completed",
+		FileVersion:     version,
+		FilePath:        filePath,
+		FileName:        fileName,
+		ProjectName:     project,
+		ClientEmail:     email,
+		ClientCCEmail:   cc,
+		ClientBCCEmail:  bcc,
+		ClientName:      clientName,
+		ThreadID:        threadID,
+		SectionCount:    sectionCount,
+		Summary:         summary,
+		MarkdownContent: string(content),
+	}
+
+	// Display info
+	fmt.Printf("Sending %s SOP notification...\n", sopType)
+	fmt.Printf("  Project:    %s\n", project)
+	fmt.Printf("  Client:     %s <%s>\n", clientName, email)
+	if cc != "" {
+		fmt.Printf("  CC:         %s\n", cc)
+	}
+	if bcc != "" {
+		fmt.Printf("  BCC:        %s\n", bcc)
+	}
+	fmt.Printf("  File:       %s\n", fileName)
+	if version != "" {
+		fmt.Printf("  Version:    %s\n", version)
+	}
+	fmt.Printf("  Repository: %s\n", repository)
+	fmt.Printf("  Branch:     %s\n", branch)
+	if threadID != "" {
+		fmt.Printf("  Thread:     %s\n", threadID)
+	}
+	if sectionCount > 0 {
+		fmt.Printf("  Sections:   %d\n", sectionCount)
+	}
+	fmt.Printf("  Source:     %s\n", pipelineSource)
+	fmt.Println()
+
+	respBody, err := postWebhook(domain.Endpoint_SOPNotify, apiKey, payload)
+	if err != nil {
+		return fmt.Errorf("failed to send SOP notification: %w", err)
+	}
+
+	var resp types.SOPNotifyResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		fmt.Println("SOP notification sent successfully!")
+		return nil
+	}
+
+	if !resp.Success && resp.Error != "" {
+		return fmt.Errorf("server error: %s", resp.Error)
+	}
+
+	fmt.Println("SOP notification sent successfully!")
+	if resp.PDFGenerated {
+		fmt.Println("  PDF:        Generated")
+	}
+	if resp.EmailID != "" {
+		fmt.Printf("  Email ID:   %s\n", resp.EmailID)
+	}
+	if len(resp.Recipients) > 0 {
+		fmt.Printf("  Recipients: %s\n", strings.Join(resp.Recipients, ", "))
+	}
+
 	return nil
 }

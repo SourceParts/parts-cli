@@ -255,7 +255,10 @@ const Endpoint_CLIUpdate = V1Prefix + `/cli/update/latest`
 const WebhookBase = `https://source.parts`
 
 // Endpoint_ReportNotify sends report notifications with PDF generation
-const Endpoint_ReportNotify = WebhookBase + `/api/webhooks/report-notify`
+const Endpoint_ReportNotify = WebhookBase + `/api/webhooks/notify/report`
 
 // Endpoint_CommitNotify sends commit/push notifications
-const Endpoint_CommitNotify = WebhookBase + `/api/dfm-notify`
+const Endpoint_CommitNotify = WebhookBase + `/api/webhooks/notify/commit`
+
+// Endpoint_SOPNotify sends SOP notifications with PDF generation
+const Endpoint_SOPNotify = WebhookBase + `/api/webhooks/notify/sop`

@@ -1,6 +1,6 @@
 package types
 
-// ReportNotifyRequest is the payload sent to the report-notify webhook endpoint
+// ReportNotifyRequest is the payload sent to the notify/report webhook endpoint
 type ReportNotifyRequest struct {
 	ReportType      string `json:"report_type"`
 	Repository      string `json:"repository"`
@@ -22,7 +22,7 @@ type ReportNotifyRequest struct {
 	MarkdownContent string `json:"markdown_content"`
 }
 
-// ReportNotifyResponse is the response from the report-notify webhook endpoint
+// ReportNotifyResponse is the response from the notify/report webhook endpoint
 type ReportNotifyResponse struct {
 	Success         bool     `json:"success"`
 	Message         string   `json:"message"`
@@ -72,6 +72,41 @@ type CommitNotifySingleRequest struct {
 	ClientEmail   string `json:"client_email"`
 	ProjectName   string `json:"project_name"`
 	ServiceType   string `json:"service_type"`
+}
+
+// SOPNotifyRequest is the payload sent to the notify/sop webhook endpoint
+type SOPNotifyRequest struct {
+	SOPType         string `json:"sop_type"`
+	Repository      string `json:"repository"`
+	Branch          string `json:"branch"`
+	CommitSha       string `json:"commit_sha,omitempty"`
+	PipelineSource  string `json:"pipeline_source"`
+	PipelineID      string `json:"pipeline_id,omitempty"`
+	PipelineURL     string `json:"pipeline_url,omitempty"`
+	Status          string `json:"status"`
+	FileVersion     string `json:"file_version,omitempty"`
+	FilePath        string `json:"file_path,omitempty"`
+	FileName        string `json:"file_name,omitempty"`
+	ProjectName     string `json:"project_name"`
+	ClientEmail     string `json:"client_email"`
+	ClientCCEmail   string `json:"client_cc_email,omitempty"`
+	ClientBCCEmail  string `json:"client_bcc_email,omitempty"`
+	ClientName      string `json:"client_name"`
+	ThreadID        string `json:"thread_id,omitempty"`
+	SectionCount    int    `json:"section_count,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	MarkdownContent string `json:"markdown_content"`
+}
+
+// SOPNotifyResponse is the response from the notify/sop webhook endpoint
+type SOPNotifyResponse struct {
+	Success         bool     `json:"success"`
+	Message         string   `json:"message"`
+	EmailID         string   `json:"email_id,omitempty"`
+	NotificationID  string   `json:"notification_id,omitempty"`
+	Recipients      []string `json:"recipients,omitempty"`
+	PDFGenerated    bool     `json:"pdf_generated"`
+	Error           string   `json:"error,omitempty"`
 }
 
 // GitHubCommitJSON represents a commit object from GitHub Actions COMMITS_JSON
