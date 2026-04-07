@@ -50,7 +50,7 @@ async function sendNotification() {
     }
 
     const data = getCommitData();
-    const apiUrl = 'https://source.parts/api/notify/github';
+    const apiUrl = 'https://source.parts/api/webhooks/notify/github';
 
     // Display formatted notification info
     console.log(`${data.service_emoji} Sending ${data.service_name} commit notification...`);
