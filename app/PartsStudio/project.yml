@@ -1,0 +1,56 @@
+name: PartsStudio
+options:
+  bundleIdPrefix: parts.studio
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  groupSortPosition: top
+
+targets:
+  PartsStudio:
+    type: application
+    platform: macOS
+    sources:
+      - PartsStudio
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: parts.studio.PartsStudio
+        PRODUCT_NAME: Parts Studio
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.10"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
+        INFOPLIST_KEY_CFBundleDisplayName: "Parts Studio"
+        CODE_SIGN_ENTITLEMENTS: ""
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_APP_SANDBOX: NO
+
+  PartsStudio-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: PartsStudio
+        excludes:
+          - "FEL/**"
+          - "CGerbv/**"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: parts.studio.ios
+        PRODUCT_NAME: Parts Studio
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.10"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: "Parts Studio"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Parts Studio uses Bluetooth to communicate with PocketPC devices"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Parts Studio uses the microphone for voice commands"
+        INFOPLIST_KEY_NSCameraUsageDescription: "Parts Studio uses the camera for IQC inspections"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_ALLOWED: NO

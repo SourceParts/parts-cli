@@ -1,0 +1,404 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1175AE79CA25E43CA4B8FBEE /* Annotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 084C93EA7F9991A897D5CCEB /* Annotation.swift */; };
+		2D582315519545C8991EBE30 /* Conversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D55E0DE897A239B80510115 /* Conversation.swift */; };
+		384DC45E0983CABF66DD9A50 /* AnnotationStoreContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DEE750F4A19965183B664EC /* AnnotationStoreContainer.swift */; };
+		4AD930200CF3E1B48BDF1668 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C38B850FACCB9F174340AC6 /* AppState.swift */; };
+		50ADE7BFDE454F2366B07431 /* CacheService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4081844EB37242BFD129A112 /* CacheService.swift */; };
+		5DC5138CBB36499CF6400598 /* AnnotationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4192AAD2C938F6533191BA2C /* AnnotationStore.swift */; };
+		6E16281E0A906CE58C43FE3A /* ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B62AEB76191D0CC2110929E3 /* ConversationStore.swift */; };
+		7F77FECEA0CC1D5561080E40 /* CachedDatasheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F43A3215240FA5182E16E122 /* CachedDatasheet.swift */; };
+		C185FC65AA5DA24DB8CF00BA /* DatasheetSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B9A7B9D4AF4C34BA0E9A23 /* DatasheetSidebarView.swift */; };
+		D3CA494E92C4296D245DABEC /* PartsStudioApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D85337E5949BD63048E567 /* PartsStudioApp.swift */; };
+		D87284D2BEED3E869BCD5A75 /* ConversationPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5072057596896D47D5D0AEC9 /* ConversationPanelView.swift */; };
+		E21DB74F376F425B064C0524 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9F049E0897059B3420D828D /* ContentView.swift */; };
+		EC58735E37B28B014FF558F8 /* PDFViewerContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914BE90742953E580E958E3D /* PDFViewerContainer.swift */; };
+		EF0C1676BD13F70BBEFDB188 /* PDFViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E9F3F4807283D5019555F79 /* PDFViewerView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		084C93EA7F9991A897D5CCEB /* Annotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Annotation.swift; sourceTree = "<group>"; };
+		4081844EB37242BFD129A112 /* CacheService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheService.swift; sourceTree = "<group>"; };
+		4192AAD2C938F6533191BA2C /* AnnotationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationStore.swift; sourceTree = "<group>"; };
+		5072057596896D47D5D0AEC9 /* ConversationPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationPanelView.swift; sourceTree = "<group>"; };
+		5C38B850FACCB9F174340AC6 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		86D85337E5949BD63048E567 /* PartsStudioApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PartsStudioApp.swift; sourceTree = "<group>"; };
+		8D55E0DE897A239B80510115 /* Conversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conversation.swift; sourceTree = "<group>"; };
+		8DEE750F4A19965183B664EC /* AnnotationStoreContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationStoreContainer.swift; sourceTree = "<group>"; };
+		8E9F3F4807283D5019555F79 /* PDFViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFViewerView.swift; sourceTree = "<group>"; };
+		914BE90742953E580E958E3D /* PDFViewerContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFViewerContainer.swift; sourceTree = "<group>"; };
+		A8553C477EAD0C82A2F23E28 /* PartsStudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PartsStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A8B9A7B9D4AF4C34BA0E9A23 /* DatasheetSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatasheetSidebarView.swift; sourceTree = "<group>"; };
+		B62AEB76191D0CC2110929E3 /* ConversationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStore.swift; sourceTree = "<group>"; };
+		F43A3215240FA5182E16E122 /* CachedDatasheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachedDatasheet.swift; sourceTree = "<group>"; };
+		F9F049E0897059B3420D828D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		2246EA80FD4252F543B06864 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				084C93EA7F9991A897D5CCEB /* Annotation.swift */,
+				F43A3215240FA5182E16E122 /* CachedDatasheet.swift */,
+				8D55E0DE897A239B80510115 /* Conversation.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		3D75005B29AE1A18C30B13E6 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				FED62D16D62CDE4B082DE355 /* Conversations */,
+				8320A2B6902498D4479042C1 /* PDF */,
+				7743001FBC8B367193CF1858 /* Sidebar */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		3E19CEC036ED08A259EF000C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A8553C477EAD0C82A2F23E28 /* PartsStudio.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		471DB925447B82976FE29216 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				4192AAD2C938F6533191BA2C /* AnnotationStore.swift */,
+				8DEE750F4A19965183B664EC /* AnnotationStoreContainer.swift */,
+				4081844EB37242BFD129A112 /* CacheService.swift */,
+				B62AEB76191D0CC2110929E3 /* ConversationStore.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		7743001FBC8B367193CF1858 /* Sidebar */ = {
+			isa = PBXGroup;
+			children = (
+				A8B9A7B9D4AF4C34BA0E9A23 /* DatasheetSidebarView.swift */,
+			);
+			path = Sidebar;
+			sourceTree = "<group>";
+		};
+		8320A2B6902498D4479042C1 /* PDF */ = {
+			isa = PBXGroup;
+			children = (
+				914BE90742953E580E958E3D /* PDFViewerContainer.swift */,
+				8E9F3F4807283D5019555F79 /* PDFViewerView.swift */,
+			);
+			path = PDF;
+			sourceTree = "<group>";
+		};
+		8E8B72E99B955AABC807ECC3 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				5C38B850FACCB9F174340AC6 /* AppState.swift */,
+				F9F049E0897059B3420D828D /* ContentView.swift */,
+				86D85337E5949BD63048E567 /* PartsStudioApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		BAA68F855076B6B26CCD1B9D /* PartsStudio */ = {
+			isa = PBXGroup;
+			children = (
+				8E8B72E99B955AABC807ECC3 /* App */,
+				2246EA80FD4252F543B06864 /* Models */,
+				471DB925447B82976FE29216 /* Services */,
+				3D75005B29AE1A18C30B13E6 /* Views */,
+			);
+			path = PartsStudio;
+			sourceTree = "<group>";
+		};
+		C0134DD9DEC39E46A1AC07C8 = {
+			isa = PBXGroup;
+			children = (
+				BAA68F855076B6B26CCD1B9D /* PartsStudio */,
+				3E19CEC036ED08A259EF000C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FED62D16D62CDE4B082DE355 /* Conversations */ = {
+			isa = PBXGroup;
+			children = (
+				5072057596896D47D5D0AEC9 /* ConversationPanelView.swift */,
+			);
+			path = Conversations;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		9D208AA1DA9B9B99AAEFEBBB /* PartsStudio */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 65C4AA2D0E9965B576CC53A9 /* Build configuration list for PBXNativeTarget "PartsStudio" */;
+			buildPhases = (
+				3BC523B1E6EEFDC8AA47F007 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PartsStudio;
+			packageProductDependencies = (
+			);
+			productName = PartsStudio;
+			productReference = A8553C477EAD0C82A2F23E28 /* PartsStudio.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		D10468D0AE1BB6F936BC1214 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 9C6B3DBC3BB71C577023CFF6 /* Build configuration list for PBXProject "PartsStudio" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C0134DD9DEC39E46A1AC07C8;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 3E19CEC036ED08A259EF000C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				9D208AA1DA9B9B99AAEFEBBB /* PartsStudio */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3BC523B1E6EEFDC8AA47F007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1175AE79CA25E43CA4B8FBEE /* Annotation.swift in Sources */,
+				5DC5138CBB36499CF6400598 /* AnnotationStore.swift in Sources */,
+				384DC45E0983CABF66DD9A50 /* AnnotationStoreContainer.swift in Sources */,
+				4AD930200CF3E1B48BDF1668 /* AppState.swift in Sources */,
+				50ADE7BFDE454F2366B07431 /* CacheService.swift in Sources */,
+				7F77FECEA0CC1D5561080E40 /* CachedDatasheet.swift in Sources */,
+				E21DB74F376F425B064C0524 /* ContentView.swift in Sources */,
+				2D582315519545C8991EBE30 /* Conversation.swift in Sources */,
+				D87284D2BEED3E869BCD5A75 /* ConversationPanelView.swift in Sources */,
+				6E16281E0A906CE58C43FE3A /* ConversationStore.swift in Sources */,
+				C185FC65AA5DA24DB8CF00BA /* DatasheetSidebarView.swift in Sources */,
+				EC58735E37B28B014FF558F8 /* PDFViewerContainer.swift in Sources */,
+				EF0C1676BD13F70BBEFDB188 /* PDFViewerView.swift in Sources */,
+				D3CA494E92C4296D245DABEC /* PartsStudioApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		6CE325C111571BDBE9843910 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				INFOPLIST_KEY_CFBundleDisplayName = "Parts Studio";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = parts.studio.PartsStudio;
+				PRODUCT_NAME = "Parts Studio";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+		95806E987DC019FC860A9673 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "";
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				INFOPLIST_KEY_CFBundleDisplayName = "Parts Studio";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = parts.studio.PartsStudio;
+				PRODUCT_NAME = "Parts Studio";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		9D8412AFF4CFC66C6BA9D33F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A13C507096E2C13C023840FB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		65C4AA2D0E9965B576CC53A9 /* Build configuration list for PBXNativeTarget "PartsStudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6CE325C111571BDBE9843910 /* Debug */,
+				95806E987DC019FC860A9673 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9C6B3DBC3BB71C577023CFF6 /* Build configuration list for PBXProject "PartsStudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A13C507096E2C13C023840FB /* Debug */,
+				9D8412AFF4CFC66C6BA9D33F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = D10468D0AE1BB6F936BC1214 /* Project object */;
+}

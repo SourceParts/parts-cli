@@ -42,6 +42,12 @@ const Endpoint_Search = V1Prefix + `/parts/search`
 // Endpoint_Datasheet retrieves part datasheets
 const Endpoint_Datasheet = V1Prefix + `/parts/%s/datasheet`
 
+// Endpoint_DatasheetChunk uploads and chunks a datasheet PDF
+const Endpoint_DatasheetChunk = V1Prefix + `/datasheets/chunk`
+
+// Endpoint_DatasheetChunkStatus gets async chunking job status
+const Endpoint_DatasheetChunkStatus = V1Prefix + `/datasheets/chunk/%s/status`
+
 // Endpoint_Marking retrieves part marking information
 const Endpoint_Marking = V1Prefix + `/parts/%s/marking`
 
@@ -184,6 +190,13 @@ const Endpoint_Expense = V1Prefix + `/costs/expense`
 const Endpoint_Balance = V1Prefix + `/costs/balance`
 
 // =============================================================================
+// CREDITS
+// =============================================================================
+
+// Endpoint_CreditsBalance gets the current sourcing credit balance
+const Endpoint_CreditsBalance = V1Prefix + `/credits/balance`
+
+// =============================================================================
 // DOCUMENTATION
 // =============================================================================
 
@@ -240,6 +253,32 @@ const Endpoint_Test = V1Prefix + `/test`
 
 // Endpoint_Health checks API health
 const Endpoint_Health = V1Prefix + `/health`
+
+// =============================================================================
+// EDA (Main API — all EDA endpoints go through api.source.parts)
+// =============================================================================
+
+const ConvertAPI = `convert.source.parts` // legacy — kept for Altium import only
+
+// Endpoint_ERC runs Electrical Rules Check on a KiCad schematic
+const Endpoint_ERC = V1Prefix + `/eda/erc`
+
+// Endpoint_DRC runs Design Rules Check on a KiCad PCB
+const Endpoint_DRC = V1Prefix + `/eda/drc`
+
+// Endpoint_ImportAltium converts an Altium .SchDoc to KiCad .kicad_sch
+const Endpoint_ImportAltium = `https://` + ConvertAPI + `/api/eda/import/altium`
+
+// Schematic editing endpoints
+const Endpoint_SchematicPlace    = V1Prefix + `/eda/schematic/place`
+const Endpoint_SchematicWire     = V1Prefix + `/eda/schematic/wire`
+const Endpoint_SchematicAnnotate = V1Prefix + `/eda/schematic/annotate`
+const Endpoint_SchematicRemove   = V1Prefix + `/eda/schematic/remove`
+const Endpoint_SchematicLabel    = V1Prefix + `/eda/schematic/label`
+const Endpoint_SchematicDiff     = V1Prefix + `/eda/schematic/diff`
+const Endpoint_SchematicRender   = V1Prefix + `/eda/schematic/render`
+const Endpoint_RerouteSuggest    = V1Prefix + `/eda/reroute/suggest`
+const Endpoint_FootprintRender   = V1Prefix + `/eda/footprint/render`
 
 // =============================================================================
 // CLI UPDATE

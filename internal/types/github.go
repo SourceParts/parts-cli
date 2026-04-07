@@ -16,10 +16,22 @@ type ReportNotifyRequest struct {
 	ProjectName     string `json:"project_name"`
 	ClientEmail     string `json:"client_email"`
 	ClientCCEmail   string `json:"client_cc_email,omitempty"`
+	ClientBCCEmail  string `json:"client_bcc_email,omitempty"`
 	ClientName      string `json:"client_name"`
 	IssuesCount     int    `json:"issues_count,omitempty"`
 	Summary         string `json:"summary,omitempty"`
+	ThreadID        string `json:"thread_id,omitempty"`
 	MarkdownContent string `json:"markdown_content"`
+
+	// ECN frontmatter metadata (extracted client-side for email template)
+	ECNID          string `json:"ecn_id,omitempty"`
+	ECNTitle       string `json:"ecn_title,omitempty"`
+	ECNSeverity    string `json:"ecn_severity,omitempty"`
+	ECNStatus      string `json:"ecn_status,omitempty"`
+	ECNType        string `json:"ecn_type,omitempty"`
+	ECNDisposition string `json:"ecn_disposition,omitempty"`
+	ECNAuthor      string `json:"ecn_author,omitempty"`
+	ECNUpdatedDate string `json:"ecn_updated_date,omitempty"`
 }
 
 // ReportNotifyResponse is the response from the notify/report webhook endpoint
@@ -124,4 +136,22 @@ type GitHubCommitAuthor struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
 	Username string `json:"username"`
+}
+
+// ECNFrontmatter represents the YAML frontmatter of an ECN markdown file.
+type ECNFrontmatter struct {
+	ID              string
+	Title           string
+	Type            string
+	Category        string
+	Disposition     string
+	Severity        string
+	Status          string
+	Source          string
+	Affected        string
+	CrossReferences []string
+	CreatedDate     string
+	UpdatedDate     string
+	Author          string
+	ThreadID        string
 }

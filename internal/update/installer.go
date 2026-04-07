@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,32 +14,43 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/schollz/progressbar/v3"
 )
 
-// DownloadAndInstall downloads and installs a new version of the CLI
+const (
+	stagedDirName  = "staged"
+	stagedMetaFile = "staged.json"
+)
+
+// StagedUpdate describes a downloaded update waiting to be applied.
+type StagedUpdate struct {
+	Version   string    `json:"version"`
+	StagedAt  time.Time `json:"staged_at"`
+	BinaryPath string   `json:"binary_path"`
+}
+
+// stagingDir returns ~/.config/parts/staged/
+func stagingDir() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "parts", stagedDirName)
+}
+
+// DownloadAndInstall downloads a new version and stages it for the next run.
+// The staged binary is applied automatically on the next CLI invocation via
+// ApplyStagedUpdate(). This avoids overwriting the currently running binary.
 func DownloadAndInstall(ctx context.Context, asset *Asset, currentVersion string, client *http.Client) error {
-	// Get current executable path
-	exePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
+	stageDir := stagingDir()
+	if err := os.MkdirAll(stageDir, 0700); err != nil {
+		return fmt.Errorf("failed to create staging dir: %w", err)
 	}
 
-	// Resolve symlinks to get the real path
-	realPath, err := filepath.EvalSymlinks(exePath)
-	if err != nil {
-		realPath = exePath
-	}
-
-	// Get current file permissions
-	info, err := os.Stat(realPath)
-	if err != nil {
-		return fmt.Errorf("failed to stat executable: %w", err)
-	}
-	fileMode := info.Mode()
-
-	// Create temp file for download
+	// Create temp file for the archive download
 	tmpFile, err := os.CreateTemp("", "parts-update-*.tar.gz")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
@@ -60,38 +72,115 @@ func DownloadAndInstall(ctx context.Context, asset *Asset, currentVersion string
 		}
 	}
 
-	// Extract binary from archive
+	// Extract binary from archive into staging dir
 	binaryPath, err := extractBinary(tmpPath)
 	if err != nil {
 		return fmt.Errorf("failed to extract binary: %w", err)
 	}
-	defer os.Remove(binaryPath)
 
-	// Create versioned backup
-	backupPath := realPath + ".backup." + currentVersion
-	if err := copyFile(realPath, backupPath); err != nil {
-		return fmt.Errorf("failed to create backup: %w", err)
-	}
-	// DON'T defer os.Remove(backupPath) - keep it for rollback
-
-	// Copy new binary to final location
-	if err := copyFile(binaryPath, realPath); err != nil {
-		// Rollback: restore from backup
-		if restoreErr := copyFile(backupPath, realPath); restoreErr != nil {
-			return fmt.Errorf("failed to install update and rollback failed: %w (rollback error: %v)", err, restoreErr)
+	// Move extracted binary to staging dir
+	stagedBinary := filepath.Join(stageDir, "parts")
+	if err := os.Rename(binaryPath, stagedBinary); err != nil {
+		// Rename fails across filesystems — fall back to copy+delete
+		if err := copyFile(binaryPath, stagedBinary); err != nil {
+			os.Remove(binaryPath)
+			return fmt.Errorf("failed to stage binary: %w", err)
 		}
-		return fmt.Errorf("failed to install update (rolled back): %w", err)
+		os.Remove(binaryPath)
+	}
+	if err := os.Chmod(stagedBinary, 0755); err != nil {
+		return fmt.Errorf("failed to chmod staged binary: %w", err)
+	}
+
+	// Parse the version from the release tag
+	version := strings.TrimPrefix(asset.Name, "parts-cli_")
+	version = strings.Split(version, "_")[0] // e.g. "0.9.0" from "parts-cli_0.9.0_darwin_arm64.tar.gz"
+
+	// Write staging metadata
+	meta := StagedUpdate{
+		Version:    version,
+		StagedAt:   time.Now().UTC(),
+		BinaryPath: stagedBinary,
+	}
+	metaData, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode staging metadata: %w", err)
+	}
+	metaPath := filepath.Join(stageDir, stagedMetaFile)
+	if err := os.WriteFile(metaPath, metaData, 0600); err != nil {
+		return fmt.Errorf("failed to write staging metadata: %w", err)
+	}
+
+	return nil
+}
+
+// ApplyStagedUpdate checks for a staged update and applies it by replacing
+// the current binary. Call this at the very start of main(), before any
+// real work. Returns the new version string if an update was applied, or
+// empty string if there was nothing to apply.
+func ApplyStagedUpdate() string {
+	stageDir := stagingDir()
+	metaPath := filepath.Join(stageDir, stagedMetaFile)
+
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return "" // no staged update
+	}
+
+	var meta StagedUpdate
+	if err := json.Unmarshal(data, &meta); err != nil {
+		// Corrupted metadata — clean up
+		os.RemoveAll(stageDir)
+		return ""
+	}
+
+	// Verify staged binary exists
+	if _, err := os.Stat(meta.BinaryPath); err != nil {
+		os.RemoveAll(stageDir)
+		return ""
+	}
+
+	// Get current executable path
+	exePath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	realPath, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		realPath = exePath
+	}
+
+	// Get current permissions
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return ""
+	}
+	fileMode := info.Mode()
+
+	// Create backup of current binary
+	backupPath := realPath + ".backup.pre-" + meta.Version
+	if err := copyFile(realPath, backupPath); err != nil {
+		// Can't backup — abort
+		return ""
+	}
+
+	// Replace current binary with staged binary
+	if err := copyFile(meta.BinaryPath, realPath); err != nil {
+		// Failed — restore from backup
+		_ = copyFile(backupPath, realPath)
+		return ""
 	}
 
 	// Restore permissions
-	if err := os.Chmod(realPath, fileMode); err != nil {
-		return fmt.Errorf("failed to restore permissions: %w", err)
-	}
+	_ = os.Chmod(realPath, fileMode)
 
-	// After success, clean up old backups (keep last 3)
+	// Clean up staging dir
+	os.RemoveAll(stageDir)
+
+	// Clean up old backups (keep last 3)
 	cleanupOldBackups(realPath, 3)
 
-	return nil
+	return meta.Version
 }
 
 // downloadAsset downloads an asset to the provided writer

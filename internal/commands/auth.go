@@ -2,7 +2,10 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -73,7 +76,7 @@ legacy key-based login instead.`,
 		Client.SetAPIKey(tokens.AccessToken)
 
 		fmt.Printf("\n✓ Logged in as %s\n", tokens.Email)
-		fmt.Println("OAuth tokens saved to system keychain")
+		fmt.Printf("Storage: %s\n", client.StorageBackend())
 		return nil
 	},
 	Example: domain.BinaryName + ` auth login
@@ -92,8 +95,8 @@ func handleAPIKeyLogin(ctx context.Context, apiKey string) error {
 
 	Client.SetAPIKey(apiKey)
 
-	fmt.Println("\n✓ API key saved to system keychain")
-	fmt.Println("You are now authenticated with Source Parts API")
+	fmt.Println("\n✓ API key saved")
+	fmt.Printf("Storage: %s\n", client.StorageBackend())
 	return nil
 }
 
@@ -109,7 +112,7 @@ var authLogout = &cobra.Command{
 			return err
 		}
 		Client.SetAPIKey("")
-		fmt.Println("Credentials removed from system keychain")
+		fmt.Println("Credentials removed")
 		fmt.Println("You are now logged out")
 		return nil
 	},
@@ -120,6 +123,15 @@ var authStatus = &cobra.Command{
 	Short: "Check authentication status",
 	Long:  `Show which credentials are stored and whether the client is authenticated.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		storage := client.StorageBackend()
+
+		// PARTS_TOKEN env var takes precedence
+		if os.Getenv("PARTS_TOKEN") != "" {
+			fmt.Println("Auth method: PARTS_TOKEN (environment variable)")
+			fmt.Printf("Storage:     %s\n", storage)
+			return nil
+		}
+
 		if client.HasOAuthTokens() {
 			tokens, err := client.LoadOAuthTokens()
 			if err != nil || tokens == nil {
@@ -135,13 +147,14 @@ var authStatus = &cobra.Command{
 					fmt.Printf("User:        %s\n", tokens.Email)
 				}
 				fmt.Printf("Expires in:  %s\n", remaining.Round(time.Second))
+				fmt.Printf("Storage:     %s\n", storage)
 			}
 			return nil
 		}
 
 		if client.HasAPIKey() {
 			fmt.Println("Auth method: API Key")
-			fmt.Println("Key stored in system keychain")
+			fmt.Printf("Storage:     %s\n", storage)
 			if Client.IsAuthenticated() {
 				fmt.Println("Client is configured and ready")
 			}
@@ -150,6 +163,7 @@ var authStatus = &cobra.Command{
 
 		fmt.Println("Not authenticated")
 		fmt.Printf("Run '%s auth login' to authenticate\n", domain.BinaryName)
+		fmt.Printf("Or set PARTS_TOKEN environment variable for CI/CD\n")
 		return nil
 	},
 }
@@ -164,7 +178,7 @@ var authWhoami = &cobra.Command{
 			tokens, err := client.LoadOAuthTokens()
 			if err == nil && tokens != nil {
 				fmt.Printf("User:  %s\n", tokens.Email)
-				fmt.Printf("Sub:   %s\n", tokens.Sub)
+				fmt.Printf("Plan:  %s\n", fetchPlan(tokens.AccessToken))
 				return nil
 			}
 		}
@@ -192,4 +206,43 @@ func init() {
 	Auth.AddCommand(authWhoami)
 
 	authLogin.Flags().StringVar(&loginAPIKeyFlag, "api-key", "", "API key to use for authentication (skips browser login)")
+}
+
+// fetchPlan queries the credits API for the user's plan tier.
+// Returns "Trial", "Pro", etc. or "Contact Support" on failure.
+func fetchPlan(accessToken string) string {
+	req, err := http.NewRequest("GET", "https://"+domain.API+"/v1/credits/balance", nil)
+	if err != nil {
+		return "Contact Support"
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", domain.BinaryName+"/1.0")
+
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "Contact Support"
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != 200 {
+		return "Contact Support"
+	}
+
+	var result struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Tier string `json:"tier"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil || !result.Success {
+		return "Contact Support"
+	}
+
+	tier := result.Data.Tier
+	if tier == "" {
+		return "Contact Support"
+	}
+	return tier
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/SourceParts/parts-cli/internal/types"
@@ -202,18 +203,38 @@ func (c *Client) Auth(ctx context.Context, apiKey string, w io.Writer) error {
 // =============================================================================
 
 // Add adds a part to the database
-func (c *Client) Add(ctx context.Context, partNumber string, w io.Writer) error {
+func (c *Client) Add(ctx context.Context, partNumber string, opts types.AddOptions, w io.Writer) error {
 	url := *c.Endpoint_Add
 	c.Logger.Printf("Request URL: %s", url)
 
-	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, url, nil)
+	// Build JSON body
+	body := map[string]string{"part_number": partNumber}
+	if opts.Manufacturer != "" {
+		body["manufacturer"] = opts.Manufacturer
+	}
+	if opts.Description != "" {
+		body["description"] = opts.Description
+	}
+	if opts.Category != "" {
+		body["category"] = opts.Category
+	}
+	if opts.Package != "" {
+		body["package"] = opts.Package
+	}
+	if opts.Value != "" {
+		body["value"] = opts.Value
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("error encoding request body: %w", err)
+	}
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return err
 	}
-
-	values := req.URL.Query()
-	values.Add("p", partNumber)
-	req.URL.RawQuery = values.Encode()
+	req.Header.Set("Content-Type", "application/json")
 
 	c.Logger.Printf("Adding part: %s", partNumber)
 	res, err := c.Client.Do(req)
@@ -703,6 +724,136 @@ func (c *Client) ProjectECO(ctx context.Context, projectID string, data types.EC
 	return err
 }
 
+// RegisterDatasheetAlias uploads a PDF to the async chunking endpoint,
+// then polls for completion. The API returns 202 with a job_id.
+func (c *Client) RegisterDatasheetAlias(ctx context.Context, alias, contentHash, s3Key, filename, projectID string, w io.Writer) error {
+	filePath := s3Key // s3Key is reused as local file path here
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer f.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return fmt.Errorf("copy file: %w", err)
+	}
+
+	_ = writer.WriteField("sku", alias)
+	_ = writer.WriteField("chunk_pages", "5")
+	_ = writer.WriteField("include_toc", "true")
+	if projectID != "" {
+		_ = writer.WriteField("project_id", projectID)
+	}
+	writer.Close()
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodPost, domain.Endpoint_DatasheetChunk, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload failed: %w", err)
+	}
+	defer res.Body.Close()
+
+	// Handle both 200 (sync, legacy) and 202 (async) responses
+	if res.StatusCode == http.StatusOK {
+		fmt.Fprintf(w, "Registered alias %q — datasheet chunks cached on CDN\n", alias)
+		return nil
+	}
+
+	if res.StatusCode != http.StatusAccepted {
+		if err := c.handleHTTPResponse(res); err != nil {
+			return err
+		}
+	}
+
+	// Parse job_id from 202 response
+	var acceptedResp struct {
+		Data struct {
+			JobID string `json:"job_id"`
+		} `json:"data"`
+	}
+	respBody, _ := io.ReadAll(res.Body)
+	if err := json.Unmarshal(respBody, &acceptedResp); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+
+	jobID := acceptedResp.Data.JobID
+	if jobID == "" {
+		return fmt.Errorf("no job_id in response")
+	}
+
+	fmt.Fprintf(w, "Chunking started (job: %s) — polling for completion...\n", jobID)
+	return c.PollDatasheetChunkStatus(ctx, jobID, w)
+}
+
+// PollDatasheetChunkStatus polls the chunking job status until completion.
+func (c *Client) PollDatasheetChunkStatus(ctx context.Context, jobID string, w io.Writer) error {
+	pollInterval := 3 * time.Second
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for datasheet chunking to complete")
+		case <-ticker.C:
+			url := fmt.Sprintf(domain.Endpoint_DatasheetChunkStatus, jobID)
+			req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return err
+			}
+
+			res, err := c.Client.Do(req)
+			if err != nil {
+				continue // retry on transient error
+			}
+
+			respBody, _ := io.ReadAll(res.Body)
+			res.Body.Close()
+
+			var status struct {
+				Data struct {
+					Status     string `json:"status"`
+					Progress   int    `json:"progress"`
+					Message    string `json:"message"`
+					TotalPages int    `json:"total_pages"`
+					ChunkCount int    `json:"chunk_count"`
+					Method     string `json:"method"`
+					Error      string `json:"error"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(respBody, &status); err != nil {
+				continue
+			}
+
+			switch status.Data.Status {
+			case "completed":
+				fmt.Fprintf(w, "Chunking complete: %d pages, %d chunks (%s)\n",
+					status.Data.TotalPages, status.Data.ChunkCount, status.Data.Method)
+				return nil
+			case "failed":
+				return fmt.Errorf("chunking failed: %s", status.Data.Error)
+			default:
+				if c.Logger != nil {
+					c.Logger.Printf("  %s (%d%%)", status.Data.Message, status.Data.Progress)
+				}
+			}
+		}
+	}
+}
+
 // ProjectTransfer transfers project ownership to another user by email
 func (c *Client) ProjectTransfer(ctx context.Context, projectID, email string, w io.Writer) error {
 	url := fmt.Sprintf(domain.Endpoint_ProjectTransfer, projectID)
@@ -1186,7 +1337,9 @@ func (c *Client) Balance(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// Price estimates pricing for a part at a given quantity
+// Price estimates pricing for a part at a given quantity.
+// Falls back to search results when the cost estimate endpoint returns
+// all-zero / unavailable pricing.
 func (c *Client) Price(ctx context.Context, partNumber string, opts types.PriceOptions, w io.Writer) error {
 	url := domain.Endpoint_CostsEstimate
 	c.Logger.Printf("Request URL: %s", url)
@@ -1231,8 +1384,177 @@ func (c *Client) Price(ctx context.Context, partNumber string, opts types.PriceO
 		return err
 	}
 
-	_, err = io.Copy(w, res.Body)
+	// Buffer the response so we can inspect it before writing
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response: %w", err)
+	}
+
+	var priceResp types.PriceResponse
+	if err := json.Unmarshal(body, &priceResp); err != nil {
+		// Can't parse — write raw response through
+		_, writeErr := w.Write(body)
+		return writeErr
+	}
+
+	// If the cost estimate returned useful data, use it directly
+	if !priceResp.Data.AllUnavailable() {
+		_, err = w.Write(body)
+		return err
+	}
+
+	// Fallback: search for the part and use the search result price
+	c.Logger.Printf("Cost estimate unavailable for %s — falling back to search", partNumber)
+
+	unitPrice, stockQty, searchErr := c.searchPartPrice(ctx, partNumber)
+	if searchErr != nil {
+		c.Logger.Printf("Search fallback failed: %v", searchErr)
+		// Return the original (zero) response
+		_, err = w.Write(body)
+		return err
+	}
+
+	// Build enriched response from search data
+	total := unitPrice * float64(quantity)
+	enriched := types.PriceResponse{
+		Status: "success",
+		Data: types.PriceData{
+			Parts: []types.PricePartResult{
+				{
+					PartNumber: partNumber,
+					Quantity:   quantity,
+					UnitPrice:  unitPrice,
+					Total:      total,
+					Available:  stockQty > 0,
+				},
+			},
+			TotalEstimate: total,
+			Currency:      currency,
+		},
+	}
+
+	enrichedJSON, err := json.Marshal(enriched)
+	if err != nil {
+		_, writeErr := w.Write(body)
+		return writeErr
+	}
+
+	_, err = w.Write(enrichedJSON)
 	return err
+}
+
+// searchPartPrice queries the search endpoint for a part and returns
+// the unit price and stock quantity from the first result with pricing.
+func (c *Client) searchPartPrice(ctx context.Context, partNumber string) (float64, int, error) {
+	searchURL := *c.Endpoint_Search
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	values := req.URL.Query()
+	values.Add("q", partNumber)
+	values.Add("limit", "5")
+	req.URL.RawQuery = values.Encode()
+
+	c.Logger.Printf("Search fallback for pricing: %s", partNumber)
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("search request failed: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return 0, 0, err
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error reading search response: %w", err)
+	}
+
+	var searchResp types.SearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return 0, 0, fmt.Errorf("error parsing search response: %w", err)
+	}
+
+	for _, p := range searchResp.Data.Parts {
+		if p.Price != nil && *p.Price != "" {
+			price, parseErr := strconv.ParseFloat(*p.Price, 64)
+			if parseErr == nil && price > 0 {
+				return price, p.StockQuantity, nil
+			}
+		}
+	}
+
+	return 0, 0, fmt.Errorf("no priced results found for %s", partNumber)
+}
+
+// CreditsBalance fetches the current sourcing credit balance
+func (c *Client) CreditsBalance(ctx context.Context, jsonOutput bool, w io.Writer) error {
+	url := domain.Endpoint_CreditsBalance
+	c.Logger.Printf("Request URL: %s", url)
+
+	req, err := c.newAuthenticatedRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	c.Logger.Printf("Fetching credit balance")
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return fmt.Errorf("failed to fetch credit balance: %w", err)
+	}
+
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response: %w", err)
+	}
+
+	if jsonOutput {
+		_, err = w.Write(data)
+		if err == nil {
+			fmt.Fprintln(w)
+		}
+		return err
+	}
+
+	// Try to format the response nicely
+	var resp struct {
+		Status string `json:"status"`
+		Data   struct {
+			Balance  float64 `json:"balance"`
+			Currency string  `json:"currency"`
+			Plan     string  `json:"plan"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(data, &resp); err != nil {
+		// If we can't parse it, just output the raw response
+		_, err = w.Write(data)
+		if err == nil {
+			fmt.Fprintln(w)
+		}
+		return err
+	}
+
+	currency := resp.Data.Currency
+	if currency == "" {
+		currency = "USD"
+	}
+
+	fmt.Fprintf(w, "Credit Balance: %.2f %s\n", resp.Data.Balance, currency)
+	if resp.Data.Plan != "" {
+		fmt.Fprintf(w, "Plan: %s\n", resp.Data.Plan)
+	}
+
+	return nil
 }
 
 func (c *Client) COGs(ctx context.Context, partNumber string, w io.Writer) error {
@@ -1447,4 +1769,127 @@ func (c *Client) Release(ctx context.Context, input string, opts types.ReleaseOp
 func (c *Client) Test(ctx context.Context, input string, w io.Writer) error {
 	fmt.Fprintln(w, "Not implemented yet")
 	return nil
+}
+
+// =============================================================================
+// EDA — ERC, DRC, Altium Import (via convert.source.parts)
+// =============================================================================
+
+// edaUpload uploads a file (and optional secondary file) to a convert-service
+// endpoint and streams the response body to w.
+func (c *Client) EDAUpload(ctx context.Context, endpoint, filePath string, formFields map[string]string, extraFiles map[string]string, w io.Writer) error {
+	fileContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("error reading file: %w", err)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add primary file
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return fmt.Errorf("error creating form file: %w", err)
+	}
+	if _, err := part.Write(fileContent); err != nil {
+		return fmt.Errorf("error writing file to form: %w", err)
+	}
+
+	// Add optional extra files (e.g. rules_file)
+	for fieldName, path := range extraFiles {
+		if path == "" {
+			continue
+		}
+		extraContent, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("error reading %s: %w", fieldName, err)
+		}
+		extraPart, err := writer.CreateFormFile(fieldName, filepath.Base(path))
+		if err != nil {
+			return fmt.Errorf("error creating form file %s: %w", fieldName, err)
+		}
+		if _, err := extraPart.Write(extraContent); err != nil {
+			return fmt.Errorf("error writing %s to form: %w", fieldName, err)
+		}
+	}
+
+	// Add form fields
+	for key, value := range formFields {
+		if value != "" {
+			_ = writer.WriteField(key, value)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("error closing multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	c.Logger.Printf("Request URL: %s", endpoint)
+	c.Logger.Printf("Uploading: %s (%d bytes)", filepath.Base(filePath), len(fileContent))
+
+	res, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error executing request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if err := c.handleHTTPResponse(res); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(w, res.Body)
+	return err
+}
+
+// ERC runs Electrical Rules Check on a KiCad schematic.
+func (c *Client) ERC(ctx context.Context, fileName string, opts types.ERCOptions, w io.Writer) error {
+	fields := map[string]string{"severity": opts.Severity}
+	extras := map[string]string{"rules_file": opts.RulesFile}
+	return c.EDAUpload(ctx, domain.Endpoint_ERC, fileName, fields, extras, w)
+}
+
+// DRC runs Design Rules Check on a KiCad PCB.
+func (c *Client) DRC(ctx context.Context, fileName string, opts types.DRCOptions, w io.Writer) error {
+	fields := map[string]string{"severity": opts.Severity}
+	extras := map[string]string{"rules_file": opts.RulesFile}
+	return c.EDAUpload(ctx, domain.Endpoint_DRC, fileName, fields, extras, w)
+}
+
+// ImportAltium converts an Altium .SchDoc to KiCad .kicad_sch.
+// If outputPath is non-empty the converted file is saved there; otherwise the
+// response is streamed to w.
+func (c *Client) ImportAltium(ctx context.Context, fileName string, outputPath string, w io.Writer) error {
+	var buf bytes.Buffer
+	if err := c.EDAUpload(ctx, domain.Endpoint_ImportAltium, fileName, nil, nil, &buf); err != nil {
+		return err
+	}
+
+	if outputPath != "" {
+		if err := os.WriteFile(outputPath, buf.Bytes(), 0644); err != nil {
+			return fmt.Errorf("error writing output file: %w", err)
+		}
+		fmt.Fprintf(w, "Saved: %s\n", outputPath)
+		return nil
+	}
+
+	_, err := io.Copy(w, &buf)
+	return err
+}
+
+func (c *Client) ImportAltiumBytes(ctx context.Context, fileName string) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := c.EDAUpload(ctx, domain.Endpoint_ImportAltium, fileName, nil, nil, &buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

@@ -1,0 +1,2380 @@
+#if os(macOS)
+import Foundation
+import IOKit
+import IOKit.usb
+
+// MARK: - IOKit USB UUIDs (C macros not bridged to Swift)
+
+private let kIOUSBDeviceUserClientTypeID_: CFUUID =
+    CFUUIDGetConstantUUIDWithBytes(nil,
+        0x9d, 0xc7, 0xb7, 0x80, 0x9e, 0xc0, 0x11, 0xD4,
+        0xa5, 0x4f, 0x00, 0x0a, 0x27, 0x05, 0x28, 0x61)
+
+private let kIOCFPlugInInterfaceID_: CFUUID =
+    CFUUIDGetConstantUUIDWithBytes(nil,
+        0xC2, 0x44, 0xE8, 0x58, 0x10, 0x9C, 0x11, 0xD4,
+        0x91, 0xD4, 0x00, 0x50, 0xE4, 0xC6, 0x42, 0x6F)
+
+// IOUSBDeviceInterfaceID187 — needed for USBDeviceOpenSeize
+private let kIOUSBDeviceInterfaceID_: CFUUID =
+    CFUUIDGetConstantUUIDWithBytes(nil,
+        0x3C, 0x9E, 0xE1, 0xEB, 0x24, 0x02, 0x11, 0xB2,
+        0x8E, 0x7E, 0x00, 0x0A, 0x27, 0x80, 0x1E, 0x86)
+
+private let kIOUSBInterfaceUserClientTypeID_: CFUUID =
+    CFUUIDGetConstantUUIDWithBytes(nil,
+        0x2d, 0x97, 0x86, 0xc6, 0x9e, 0xf3, 0x11, 0xD4,
+        0xad, 0x51, 0x00, 0x0a, 0x27, 0x05, 0x28, 0x61)
+
+private let kIOUSBInterfaceInterfaceID_: CFUUID =
+    CFUUIDGetConstantUUIDWithBytes(nil,
+        0x73, 0xc9, 0x7a, 0xe8, 0x9e, 0xf3, 0x11, 0xD4,
+        0xb1, 0xd0, 0x00, 0x0a, 0x27, 0x05, 0x28, 0x61)
+
+// MARK: - FEL Protocol Constants
+
+private let AW_USB_VENDOR_ID: Int = 0x1F3A
+private let AW_USB_PRODUCT_ID: Int = 0xEFE8
+
+private let AW_USB_READ: UInt16 = 0x11
+private let AW_USB_WRITE: UInt16 = 0x12
+
+private let AW_FEL_VERSION: UInt32 = 0x001
+private let AW_FEL_1_WRITE: UInt32 = 0x101
+private let AW_FEL_1_EXEC: UInt32 = 0x102
+private let AW_FEL_1_READ: UInt32 = 0x103
+
+private let AW_USB_MAX_BULK_SEND = 512 * 1024
+
+private let DRAM_BASE: UInt32 = 0x40000000
+
+private let SPL_LEN_LIMIT: UInt32 = 0x8000
+
+private let LCODE_ARM_WORDS = 12
+private let LCODE_ARM_SIZE = LCODE_ARM_WORDS * 4
+private let LCODE_MAX_TOTAL = 0x100
+private let LCODE_MAX_WORDS = LCODE_MAX_TOTAL - LCODE_ARM_WORDS
+
+// MARK: - FEL Errors
+
+enum FELError: LocalizedError {
+    case deviceNotFound
+    case interfaceNotFound
+    case openFailed(kern_return_t)
+    case sendFailed(kern_return_t)
+    case recvFailed(kern_return_t)
+    case protocolError(String)
+    case invalidSPL(String)
+    case invalidUBoot(String)
+    case protectedAddress(String)
+    case timeout
+
+    var errorDescription: String? {
+        switch self {
+        case .deviceNotFound: return "FEL device not found"
+        case .interfaceNotFound: return "USB interface not found"
+        case .openFailed(let kr): return "Failed to open device: \(kr)"
+        case .sendFailed(let kr): return "USB send failed: \(kr)"
+        case .recvFailed(let kr): return "USB receive failed: \(kr)"
+        case .protocolError(let msg): return "FEL protocol error: \(msg)"
+        case .invalidSPL(let msg): return "Invalid SPL: \(msg)"
+        case .invalidUBoot(let msg): return "Invalid U-Boot: \(msg)"
+        case .protectedAddress(let msg): return "Protected address: \(msg)"
+        case .timeout: return "USB timeout"
+        }
+    }
+}
+
+// MARK: - FEL Service
+
+/// Native IOKit USB implementation of the Allwinner FEL protocol.
+/// Replaces sunxi-fel CLI and WebUSB dependencies with direct USB access.
+class FELService: ObservableObject {
+    @Published var connectionState: FELConnectionState = .disconnected
+    @Published var deviceInfo: FELDeviceInfo?
+    @Published var registeredDevice: RegisteredDevice?
+    @Published var log: [String] = []
+
+    /// Called when a device is identified by SID. Set by AppState to register in DeviceRegistry.
+    var onDeviceIdentified: ((String, String) -> RegisteredDevice?)? = nil
+
+    /// Called after boot completes — use to auto-switch to serial console.
+    var onBootComplete: (() -> Void)? = nil
+
+    /// True while a boot sequence is in progress — rejects other USB commands.
+    @Published var bootInProgress: Bool = false
+
+    /// Serial console state after boot
+    @Published var serialPort: String?
+    @Published var serialOutput: String = ""
+    @Published var serialActive: Bool = false
+    private var serialHandle: FileHandle?
+
+    /// True when DRAM init has corrupted USB PHY and device needs physical replug.
+    @Published var needsUSBReplug: Bool = false
+
+    /// True when heartbeat monitoring detected device loss (not a clean disconnect).
+    @Published var heartbeatLost: Bool = false
+
+    private var deviceInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOUSBDeviceInterface>>?
+    private var interfaceInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOUSBInterfaceInterface>>?
+    private var pipeIn: UInt8 = 0
+    private var pipeOut: UInt8 = 0
+    private let usbQueue = DispatchQueue(label: "parts.studio.fel.usb", qos: .userInitiated)
+
+    private var heartbeatTimer: Timer?
+    private var consecutiveErrors = 0
+    private let maxConsecutiveErrors = 3
+
+    private var notificationPort: IONotificationPortRef?
+    private var addedIterator: io_iterator_t = 0
+    private var removedIterator: io_iterator_t = 0
+    private var lastConnectAttempt: Date = .distantPast
+    private var connectCooldown: TimeInterval = 2.0
+
+    init() {
+        appendLog("Parts Studio FEL Console")
+        appendLog("Commands: help, status, info, read, watch, stop, scratch, sram, boot, flash, clear")
+        appendLog("")
+        appendLog("Waiting for device (VID 0x1F3A / PID 0xEFE8)...")
+        startDeviceWatcher()
+    }
+
+    deinit {
+        stopHeartbeat()
+        closeDevice()
+        stopDeviceWatcher()
+    }
+
+    // MARK: - Device Watching (IOKit Notifications)
+
+    private func startDeviceWatcher() {
+        notificationPort = IONotificationPortCreate(kIOMainPortDefault)
+        guard let port = notificationPort else { return }
+
+        let runLoopSource = IONotificationPortGetRunLoopSource(port).takeUnretainedValue()
+        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .defaultMode)
+
+        let matchingDict = IOServiceMatching(kIOUSBDeviceClassName) as NSMutableDictionary
+        matchingDict[kUSBVendorID] = AW_USB_VENDOR_ID
+        matchingDict[kUSBProductID] = AW_USB_PRODUCT_ID
+
+        // Watch for device arrival
+        let addDict = matchingDict.mutableCopy() as! NSMutableDictionary
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        IOServiceAddMatchingNotification(
+            port,
+            kIOFirstMatchNotification,
+            addDict,
+            { refcon, iterator in
+                guard let refcon = refcon else { return }
+                let service = Unmanaged<FELService>.fromOpaque(refcon).takeUnretainedValue()
+                service.handleDeviceAdded(iterator)
+            },
+            selfPtr,
+            &addedIterator
+        )
+        // Drain initial iterator
+        handleDeviceAdded(addedIterator)
+
+        // Watch for device removal
+        let removeDict = matchingDict.mutableCopy() as! NSMutableDictionary
+        IOServiceAddMatchingNotification(
+            port,
+            kIOTerminatedNotification,
+            removeDict,
+            { refcon, iterator in
+                guard let refcon = refcon else { return }
+                let service = Unmanaged<FELService>.fromOpaque(refcon).takeUnretainedValue()
+                service.handleDeviceRemoved(iterator)
+            },
+            selfPtr,
+            &removedIterator
+        )
+        // Drain initial iterator
+        drainIterator(removedIterator)
+    }
+
+    private func handleDeviceAdded(_ iterator: io_iterator_t) {
+        var found = false
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            found = true
+            IOObjectRelease(service)
+            service = IOIteratorNext(iterator)
+        }
+        guard found else { return }
+
+        // Cooldown: don't spam reconnect during device reset
+        let now = Date()
+        guard now.timeIntervalSince(lastConnectAttempt) >= connectCooldown else { return }
+        lastConnectAttempt = now
+
+        appendLog("FEL device detected (VID 0x1F3A)")
+        usbQueue.async { [weak self] in
+            self?.connectToDevice()
+        }
+    }
+
+    private func handleDeviceRemoved(_ iterator: io_iterator_t) {
+        drainIterator(iterator)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if self.connectionState == .connected {
+                self.appendLog("FEL device disconnected")
+                self.connectionState = .disconnected
+                self.deviceInfo = nil
+                self.resetPeripheralState()
+                self.stopHeartbeat()
+                self.closeDevice()
+            }
+        }
+    }
+
+    private func drainIterator(_ iterator: io_iterator_t) {
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            IOObjectRelease(service)
+            service = IOIteratorNext(iterator)
+        }
+    }
+
+    private func stopDeviceWatcher() {
+        if addedIterator != 0 { IOObjectRelease(addedIterator); addedIterator = 0 }
+        if removedIterator != 0 { IOObjectRelease(removedIterator); removedIterator = 0 }
+        if let port = notificationPort {
+            IONotificationPortDestroy(port)
+            notificationPort = nil
+        }
+    }
+
+    // MARK: - USB Transport (Private)
+
+    /// Connect to the FEL device, claim interface, identify pipes.
+    /// Retries getVersion up to 3 times with 2s delays for USB settling.
+    private func connectToDevice() {
+        DispatchQueue.main.async { self.connectionState = .connecting }
+
+        do {
+            try openUSBDevice()
+            try findAndOpenInterface()
+
+            // Read version — retry if USB is still settling after reset
+            var version: FELVersion?
+            for attempt in 1...3 {
+                do {
+                    version = try getVersionSync()
+                    break
+                } catch {
+                    if attempt < 3 {
+                        closeDevice()
+                        Thread.sleep(forTimeInterval: 2.0)
+                        try openUSBDevice()
+                        try findAndOpenInterface()
+                    } else {
+                        throw error
+                    }
+                }
+            }
+            guard let version = version else { throw FELError.deviceNotFound }
+            guard let socInfo = SoCInfoTable.lookup(socId: version.socId) else {
+                throw FELError.protocolError("Unknown SoC ID: 0x\(version.socIdHex)")
+            }
+
+            let info = FELDeviceInfo(version: version, socInfo: socInfo, sid: nil)
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.deviceInfo = info
+                self.connectionState = .connected
+                self.consecutiveErrors = 0
+                self.heartbeatLost = false
+                self.needsUSBReplug = false
+                self.resetPeripheralState()
+                self.appendLog("")
+                self.appendLog("Connected: \(socInfo.name) (0x\(version.socIdHex))")
+                self.startHeartbeat()
+            }
+
+            // Read SID in background
+            readSIDAsync(socInfo: socInfo)
+
+            // Read scratch on connect
+            readScratchAsync(socInfo: socInfo)
+
+        } catch {
+            closeDevice()
+            let errMsg = error.localizedDescription
+            DispatchQueue.main.async { [weak self] in
+                self?.connectionState = .disconnected
+                if errMsg.contains("send failed") || errMsg.contains("receive failed") || errMsg.contains("timed out") {
+                    self?.appendLog("Device detected but not responding — power cycle required")
+                } else {
+                    self?.appendLog("Connection failed: \(errMsg)")
+                }
+            }
+        }
+    }
+
+    private func openUSBDevice() throws {
+        // Skip if already open
+        if deviceInterface != nil { return }
+
+        // Retry up to 5 times with increasing delay for exclusive access
+        var lastError: Int32 = 0
+        for attempt in 1...5 {
+            do {
+                try openUSBDeviceOnce()
+                return  // success
+            } catch FELError.openFailed(let code) where code == -536870203 {
+                // kIOReturnExclusiveAccess — another driver claimed it temporarily
+                lastError = code
+                let delay = Double(attempt) * 0.5  // 0.5s, 1s, 1.5s, 2s, 2.5s
+                Thread.sleep(forTimeInterval: delay)
+            }
+        }
+        throw FELError.openFailed(lastError)
+    }
+
+    private func openUSBDeviceOnce() throws {
+        let matchingDict = IOServiceMatching(kIOUSBDeviceClassName) as NSMutableDictionary
+        matchingDict[kUSBVendorID] = AW_USB_VENDOR_ID
+        matchingDict[kUSBProductID] = AW_USB_PRODUCT_ID
+
+        var iterator: io_iterator_t = 0
+        let kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchingDict, &iterator)
+        guard kr == KERN_SUCCESS else { throw FELError.deviceNotFound }
+        defer { IOObjectRelease(iterator) }
+
+        let usbDevice = IOIteratorNext(iterator)
+        guard usbDevice != 0 else { throw FELError.deviceNotFound }
+        defer { IOObjectRelease(usbDevice) }
+
+        // Get plugin interface
+        var score: Int32 = 0
+        var plugInInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOCFPlugInInterface>?>?
+        let pluginResult = IOCreatePlugInInterfaceForService(
+            usbDevice,
+            kIOUSBDeviceUserClientTypeID_,
+            kIOCFPlugInInterfaceID_,
+            &plugInInterface,
+            &score
+        )
+        guard pluginResult == KERN_SUCCESS, let plugin = plugInInterface else {
+            throw FELError.openFailed(pluginResult)
+        }
+        defer { plugin.pointee?.pointee.Release(plugin) }
+
+        // Get device interface
+        var deviceInterfacePtr: UnsafeMutableRawPointer?
+        let queryResult = plugin.pointee?.pointee.QueryInterface(
+            plugin,
+            CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID_),
+            &deviceInterfacePtr
+        )
+        guard queryResult == S_OK, let rawPtr = deviceInterfacePtr else {
+            throw FELError.openFailed(Int32(queryResult ?? -1))
+        }
+
+        let devIf = rawPtr.assumingMemoryBound(
+            to: UnsafeMutablePointer<IOUSBDeviceInterface>.self
+        )
+
+        // Open the device — use Seize to take it from any kernel driver (DriverKit)
+        // that matched on VID 0x1F3A. Regular USBDeviceOpen fails with
+        // kIOReturnExclusiveAccess when a DEXT has claimed the device.
+        let openResult = devIf.pointee.pointee.USBDeviceOpenSeize(devIf)
+        guard openResult == KERN_SUCCESS else {
+            // Release the interface ref since we couldn't open
+            devIf.pointee.pointee.Release(devIf)
+            throw FELError.openFailed(openResult)
+        }
+
+        // Only set instance var after successful open
+        deviceInterface = devIf
+
+        // Configure
+        var configNum: UInt8 = 0
+        deviceInterface!.pointee.pointee.GetConfiguration(deviceInterface!, &configNum)
+        if configNum == 0 {
+            deviceInterface!.pointee.pointee.SetConfiguration(deviceInterface!, 1)
+        }
+    }
+
+    private func findAndOpenInterface() throws {
+        guard let dev = deviceInterface else { throw FELError.deviceNotFound }
+
+        var request = IOUSBFindInterfaceRequest(
+            bInterfaceClass: UInt16(kIOUSBFindInterfaceDontCare),
+            bInterfaceSubClass: UInt16(kIOUSBFindInterfaceDontCare),
+            bInterfaceProtocol: UInt16(kIOUSBFindInterfaceDontCare),
+            bAlternateSetting: UInt16(kIOUSBFindInterfaceDontCare)
+        )
+
+        var iterator: io_iterator_t = 0
+        let kr = dev.pointee.pointee.CreateInterfaceIterator(dev, &request, &iterator)
+        guard kr == KERN_SUCCESS else { throw FELError.interfaceNotFound }
+        defer { IOObjectRelease(iterator) }
+
+        let usbInterface = IOIteratorNext(iterator)
+        guard usbInterface != 0 else { throw FELError.interfaceNotFound }
+        defer { IOObjectRelease(usbInterface) }
+
+        // Get plugin
+        var score: Int32 = 0
+        var plugInInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOCFPlugInInterface>?>?
+        IOCreatePlugInInterfaceForService(
+            usbInterface,
+            kIOUSBInterfaceUserClientTypeID_,
+            kIOCFPlugInInterfaceID_,
+            &plugInInterface,
+            &score
+        )
+        guard let plugin = plugInInterface else { throw FELError.interfaceNotFound }
+        defer { plugin.pointee?.pointee.Release(plugin) }
+
+        var ifacePtr: UnsafeMutableRawPointer?
+        plugin.pointee?.pointee.QueryInterface(
+            plugin,
+            CFUUIDGetUUIDBytes(kIOUSBInterfaceInterfaceID_),
+            &ifacePtr
+        )
+        guard let rawPtr = ifacePtr else { throw FELError.interfaceNotFound }
+
+        interfaceInterface = rawPtr.assumingMemoryBound(
+            to: UnsafeMutablePointer<IOUSBInterfaceInterface>.self
+        )
+
+        // Open the interface
+        let openResult = interfaceInterface!.pointee.pointee.USBInterfaceOpen(interfaceInterface!)
+        guard openResult == KERN_SUCCESS else { throw FELError.openFailed(openResult) }
+
+        // Find bulk endpoints
+        var numEndpoints: UInt8 = 0
+        interfaceInterface!.pointee.pointee.GetNumEndpoints(interfaceInterface!, &numEndpoints)
+
+        for i in 1...numEndpoints {
+            var direction: UInt8 = 0
+            var number: UInt8 = 0
+            var transferType: UInt8 = 0
+            var maxPacketSize: UInt16 = 0
+            var interval: UInt8 = 0
+
+            interfaceInterface!.pointee.pointee.GetPipeProperties(
+                interfaceInterface!, i,
+                &direction, &number, &transferType, &maxPacketSize, &interval
+            )
+
+            // Bulk transfer type = 2
+            if transferType == 2 {
+                if direction == 1 { // IN
+                    pipeIn = i
+                } else { // OUT
+                    pipeOut = i
+                }
+            }
+        }
+
+        guard pipeIn != 0 && pipeOut != 0 else {
+            throw FELError.interfaceNotFound
+        }
+    }
+
+    /// Force USB device reset via IOKit. This makes macOS re-enumerate
+    /// the device, which is needed after A64 DRAM init corrupts USB PHY state.
+    private func resetUSBDevice() {
+        if let dev = deviceInterface {
+            appendLogSync("USB: Resetting device...")
+            // Close interface first
+            if let iface = interfaceInterface {
+                iface.pointee.pointee.USBInterfaceClose(iface)
+                iface.pointee.pointee.Release(iface)
+                interfaceInterface = nil
+            }
+            pipeIn = 0
+            pipeOut = 0
+
+            // Reset the device — this triggers macOS re-enumeration
+            dev.pointee.pointee.ResetDevice(dev)
+            dev.pointee.pointee.USBDeviceClose(dev)
+            dev.pointee.pointee.Release(dev)
+            deviceInterface = nil
+            appendLogSync("USB: Device reset complete")
+        }
+    }
+
+    private func closeDevice() {
+        if let iface = interfaceInterface {
+            iface.pointee.pointee.USBInterfaceClose(iface)
+            iface.pointee.pointee.Release(iface)
+            interfaceInterface = nil
+        }
+        if let dev = deviceInterface {
+            dev.pointee.pointee.USBDeviceClose(dev)
+            dev.pointee.pointee.Release(dev)
+            deviceInterface = nil
+        }
+        pipeIn = 0
+        pipeOut = 0
+    }
+
+    private var usbTimeoutMS: UInt32 = 10000 // 10 second USB timeout (adjustable for SPL)
+
+    /// Clear stalled pipe and retry. Returns true if stall was cleared.
+    private func clearPipeStall(pipe: UInt8) -> Bool {
+        guard let iface = interfaceInterface else { return false }
+        let kr = iface.pointee.pointee.ClearPipeStallBothEnds(iface, pipe)
+        return kr == KERN_SUCCESS
+    }
+
+    /// Send data to the OUT bulk endpoint. Auto-clears pipe stall on first failure.
+    private func bulkSend(_ data: Data) throws {
+        guard let iface = interfaceInterface else { throw FELError.deviceNotFound }
+
+        var offset = 0
+        while offset < data.count {
+            let chunkSize = min(AW_USB_MAX_BULK_SEND, data.count - offset)
+            let chunk = data[offset..<offset + chunkSize]
+            var kr = chunk.withUnsafeBytes { ptr in
+                iface.pointee.pointee.WritePipeTO(
+                    iface, pipeOut,
+                    UnsafeMutableRawPointer(mutating: ptr.baseAddress!),
+                    UInt32(chunkSize),
+                    usbTimeoutMS, usbTimeoutMS
+                )
+            }
+            // Auto-recover from pipe stall: clear and retry once
+            if kr == -536854447 { // kIOUSBPipeStalled
+                if clearPipeStall(pipe: pipeOut) {
+                    kr = chunk.withUnsafeBytes { ptr in
+                        iface.pointee.pointee.WritePipeTO(
+                            iface, pipeOut,
+                            UnsafeMutableRawPointer(mutating: ptr.baseAddress!),
+                            UInt32(chunkSize),
+                            usbTimeoutMS, usbTimeoutMS
+                        )
+                    }
+                }
+            }
+            guard kr == KERN_SUCCESS else { throw FELError.sendFailed(kr) }
+            offset += chunkSize
+        }
+    }
+
+    /// Receive data from the IN bulk endpoint (with timeout). Auto-clears pipe stall.
+    private func bulkRecv(_ length: Int) throws -> Data {
+        guard let iface = interfaceInterface else { throw FELError.deviceNotFound }
+
+        var buffer = Data(count: length)
+        var actualLength = UInt32(length)
+        var kr = buffer.withUnsafeMutableBytes { ptr in
+            iface.pointee.pointee.ReadPipeTO(
+                iface, pipeIn,
+                ptr.baseAddress!,
+                &actualLength,
+                usbTimeoutMS, usbTimeoutMS
+            )
+        }
+        // Auto-recover from pipe stall: clear and retry once
+        if kr == -536854447 { // kIOUSBPipeStalled
+            if clearPipeStall(pipe: pipeIn) {
+                actualLength = UInt32(length)
+                kr = buffer.withUnsafeMutableBytes { ptr in
+                    iface.pointee.pointee.ReadPipeTO(
+                        iface, pipeIn,
+                        ptr.baseAddress!,
+                        &actualLength,
+                        usbTimeoutMS, usbTimeoutMS
+                    )
+                }
+            }
+        }
+        guard kr == KERN_SUCCESS else { throw FELError.recvFailed(kr) }
+        return Data(buffer.prefix(Int(actualLength)))
+    }
+
+    // MARK: - Protocol Layer (Private)
+
+    /// Build and send the 32-byte AW USB request.
+    private func awSendUSBRequest(type: UInt16, length: UInt32) throws {
+        var data = Data(count: 32)
+        data.withUnsafeMutableBytes { ptr in
+            // Signature "AWUC" at offset 0, big-endian
+            ptr.storeBytes(of: UInt32(0x41575543).bigEndian, toByteOffset: 0, as: UInt32.self)
+            // Length at offset 8, little-endian
+            ptr.storeBytes(of: length.littleEndian, toByteOffset: 8, as: UInt32.self)
+            // Unknown byte 0x0C at offset 15
+            ptr[15] = 0x0C
+            // Request type at offset 16, little-endian
+            ptr.storeBytes(of: type.littleEndian, toByteOffset: 16, as: UInt16.self)
+            // Length again at offset 18, little-endian
+            ptr.storeBytes(of: length.littleEndian, toByteOffset: 18, as: UInt32.self)
+        }
+        try bulkSend(data)
+    }
+
+    /// Build and send a 16-byte FEL request.
+    private func awSendFELRequest(type: UInt32, address: UInt32, length: UInt32) throws {
+        var data = Data(count: 16)
+        data.withUnsafeMutableBytes { ptr in
+            ptr.storeBytes(of: type.littleEndian, toByteOffset: 0, as: UInt32.self)
+            ptr.storeBytes(of: address.littleEndian, toByteOffset: 4, as: UInt32.self)
+            ptr.storeBytes(of: length.littleEndian, toByteOffset: 8, as: UInt32.self)
+            // pad at offset 12 stays zero
+        }
+        try awUSBWrite(data: data, length: UInt32(data.count))
+    }
+
+    /// Read USB response (status/data).
+    private func awReadUSBResponse(length: Int) throws -> Data {
+        return try bulkRecv(length)
+    }
+
+    /// USB-level write: send request header, send data, read 13-byte status.
+    private func awUSBWrite(data: Data, length: UInt32) throws {
+        try awSendUSBRequest(type: AW_USB_WRITE, length: length)
+        try bulkSend(data)
+        _ = try awReadUSBResponse(length: 13)
+    }
+
+    /// USB-level read: send request header, read data, read 13-byte status.
+    private func awUSBRead(length: UInt32) throws -> Data {
+        try awSendUSBRequest(type: AW_USB_READ, length: length)
+        let response = try awReadUSBResponse(length: Int(length))
+        _ = try awReadUSBResponse(length: 13)
+        return response
+    }
+
+    /// Read FEL status (8 bytes).
+    private func awReadFELStatus() throws {
+        _ = try awUSBRead(length: 8)
+    }
+
+    /// FEL read: send FEL_READ request, read data via USB, read status.
+    private func awFELRead(offset: UInt32, length: UInt32) throws -> Data {
+        try awSendFELRequest(type: AW_FEL_1_READ, address: offset, length: length)
+        let response = try awUSBRead(length: length)
+        try awReadFELStatus()
+        return response
+    }
+
+    /// FEL write: send FEL_WRITE request, write data via USB, read status.
+    private func awFELWrite(data: Data, offset: UInt32) throws {
+        try awSendFELRequest(type: AW_FEL_1_WRITE, address: offset, length: UInt32(data.count))
+        try awUSBWrite(data: data, length: UInt32(data.count))
+        try awReadFELStatus()
+    }
+
+    /// FEL execute: send FEL_EXEC request, read status.
+    private func awFELExecute(offset: UInt32) throws {
+        try awSendFELRequest(type: AW_FEL_1_EXEC, address: offset, length: 0)
+        try awReadFELStatus()
+    }
+
+    // MARK: - Public API
+
+    /// Get FEL version (called on USB queue).
+    private func getVersionSync() throws -> FELVersion {
+        try awSendFELRequest(type: AW_FEL_VERSION, address: 0, length: 0)
+        let data = try awUSBRead(length: 32)
+        try awReadFELStatus()
+
+        guard let version = FELVersion(data: data) else {
+            throw FELError.protocolError("Invalid version response")
+        }
+        return version
+    }
+
+    /// Read SID asynchronously and update deviceInfo.
+    /// Falls back to SPI NAND die UID (OTP page 0) if SoC has no SID registers.
+    private func readSIDAsync(socInfo: SoCInfo) {
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            do {
+                var sid = try self.readSID(socInfo: socInfo)
+
+                // Fallback: read NAND die UID from OTP page 0 if no SoC SID
+                if sid == "unavailable" {
+                    do {
+                        let nandUID = try self.readNANDDieUIDSync(socInfo: socInfo)
+                        if nandUID != "unavailable" { sid = nandUID }
+                    } catch {
+                        DispatchQueue.main.async {
+                            self.appendLog("NAND UID read failed: \(error.localizedDescription)")
+                        }
+                    }
+                    // Also read ONFI parameter page for device info
+                    if let onfi = try? self.readNANDONFISync(socInfo: socInfo) {
+                        DispatchQueue.main.async {
+                            self.appendLog("NAND: \(onfi.manufacturer) \(onfi.model)")
+                        }
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    self.deviceInfo?.sid = sid
+                    self.appendLog("SID: \(sid)")
+
+                    // Auto-register in device registry (sync queued in background)
+                    if let reg = self.onDeviceIdentified?(sid, self.deviceInfo?.socInfo.name ?? "Unknown") {
+                        self.registeredDevice = reg
+                        let owner = reg.owner.isEmpty ? "" : " (\(reg.owner))"
+                        let boots = reg.bootCount > 1 ? "  boots: \(reg.bootCount)" : ""
+                        self.appendLog("Device: \(reg.name)\(owner)\(boots)")
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.appendLog("SID read failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Read scratch memory on connect and log a hex summary.
+    private func readScratchAsync(socInfo: SoCInfo) {
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let data = try self.awFELRead(offset: socInfo.scratchAddr, length: 256)
+                let preview = data.prefix(12).map { String(format: "%02x", $0) }.joined(separator: " ")
+                DispatchQueue.main.async {
+                    self.appendLog("Scratch @ 0x\(String(format: "%x", socInfo.scratchAddr)): \(preview) ...")
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.appendLog("Scratch read failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Read the 128-bit Serial ID from SID registers.
+    private func readSID(socInfo: SoCInfo) throws -> String {
+        guard socInfo.sidBase != 0 else { return "unavailable" }
+
+        var words: [UInt32]
+
+        if socInfo.sidFix {
+            // Use ARM thunk code to read SID registers
+            words = try readSIDViaThunk(socInfo: socInfo)
+        } else {
+            // Read SID directly from memory
+            let data = try awFELRead(
+                offset: socInfo.sidBase + socInfo.sidOffset,
+                length: 16
+            )
+            words = data.withUnsafeBytes { ptr in
+                (0..<4).map { ptr.load(fromByteOffset: $0 * 4, as: UInt32.self).littleEndian }
+            }
+        }
+
+        return words.map { String(format: "%08x", $0) }.joined(separator: ":")
+    }
+
+    /// Run a simple SPI transaction synchronously (must be called on usbQueue).
+    /// Pass socInfo explicitly to avoid race with main-thread deviceInfo updates.
+    private func spiTransferSync(tx: Data, rxLen: UInt32, socInfo: SoCInfo? = nil) throws -> Data {
+        guard let soc = socInfo ?? deviceInfo?.socInfo else { throw FELError.deviceNotFound }
+        let scratch = soc.scratchAddr
+        let txBuf = scratch + 0x200
+        let rxBuf = scratch + 0x300
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let thunkPath = "\(home)/Work/SourceParts/thunks/\(self.spiThunkDir())/spi_flash.bin"
+        guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
+            throw FELError.protocolError("Cannot load spi_flash.bin")
+        }
+        thunk.replaceSubrange(Self.spiParamTxLen..<Self.spiParamTxLen+4,
+            with: withUnsafeBytes(of: UInt32(tx.count).littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamRxLen..<Self.spiParamRxLen+4,
+            with: withUnsafeBytes(of: rxLen.littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamTxBuf..<Self.spiParamTxBuf+4,
+            with: withUnsafeBytes(of: txBuf.littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamRxBuf..<Self.spiParamRxBuf+4,
+            with: withUnsafeBytes(of: rxBuf.littleEndian) { Data($0) })
+
+        try awFELWrite(data: tx, offset: txBuf)
+        try awFELWrite(data: thunk, offset: scratch)
+        try awFELExecute(offset: scratch)
+        return rxLen > 0 ? try awFELRead(offset: rxBuf, length: rxLen) : Data()
+    }
+
+    /// Read NAND die unique ID from OTP page 0 synchronously (must be on usbQueue).
+    /// Enables OTP mode, reads page 0, disables OTP mode. Returns formatted UID string.
+    private func readNANDDieUIDSync(socInfo: SoCInfo? = nil) throws -> String {
+        // Read current SR2
+        let sr2Data = try spiTransferSync(tx: Data([0x0F, 0xB0]), rxLen: 1, socInfo: socInfo)
+        let sr2 = sr2Data.first ?? 0x18
+
+        // Enable OTP mode: Write Enable + set OTP-E bit in SR2
+        try _ = spiTransferSync(tx: Data([0x06]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x1F, 0xB0, sr2 | 0x40]), rxLen: 0, socInfo: socInfo)
+
+        // Page Data Read of OTP page 0
+        try _ = spiTransferSync(tx: Data([0x13, 0x00, 0x00, 0x00]), rxLen: 0, socInfo: socInfo)
+
+        // Poll status until not busy
+        for _ in 0..<100 {
+            let status = try spiTransferSync(tx: Data([0x0F, 0xC0]), rxLen: 1, socInfo: socInfo)
+            if (status.first ?? 1) & 0x01 == 0 { break }
+        }
+
+        // Read from cache (first 56 bytes of OTP page 0)
+        let otpData = try spiTransferSync(tx: Data([0x03, 0x00, 0x00, 0x00]), rxLen: 56, socInfo: socInfo)
+
+        // Disable OTP mode: restore SR2
+        try _ = spiTransferSync(tx: Data([0x06]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x1F, 0xB0, sr2]), rxLen: 0, socInfo: socInfo)
+
+        // Extract die UID: first 8 non-padding bytes
+        let uid = otpData.prefix(8)
+        guard !uid.allSatisfy({ $0 == 0x00 || $0 == 0xFF }) else {
+            return "unavailable"
+        }
+        return uid.map { String(format: "%02x", $0) }.joined(separator: ":")
+    }
+
+    /// Read and parse ONFI parameter page from OTP page 1 synchronously (must be on usbQueue).
+    /// Returns (manufacturer, model) tuple.
+    private func readNANDONFISync(socInfo: SoCInfo? = nil) throws -> (manufacturer: String, model: String)? {
+        let sr2Data = try spiTransferSync(tx: Data([0x0F, 0xB0]), rxLen: 1, socInfo: socInfo)
+        let sr2 = sr2Data.first ?? 0x18
+
+        try _ = spiTransferSync(tx: Data([0x06]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x1F, 0xB0, sr2 | 0x40]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x13, 0x00, 0x00, 0x01]), rxLen: 0, socInfo: socInfo)
+
+        for _ in 0..<100 {
+            let status = try spiTransferSync(tx: Data([0x0F, 0xC0]), rxLen: 1, socInfo: socInfo)
+            if (status.first ?? 1) & 0x01 == 0 { break }
+        }
+
+        let onfiData = try spiTransferSync(tx: Data([0x03, 0x00, 0x00, 0x00]), rxLen: 56, socInfo: socInfo)
+
+        try _ = spiTransferSync(tx: Data([0x06]), rxLen: 0, socInfo: socInfo)
+        try _ = spiTransferSync(tx: Data([0x1F, 0xB0, sr2]), rxLen: 0, socInfo: socInfo)
+
+        // Parse ONFI: "ONFI" at offset 0, manufacturer at offset 0x20 (12 bytes), model at offset 0x2C (12 bytes)
+        guard onfiData.count >= 0x38,
+              String(data: onfiData[0..<4], encoding: .ascii) == "ONFI" else {
+            return nil
+        }
+        let mfr = String(data: onfiData[0x20..<0x2C], encoding: .ascii)?.trimmingCharacters(in: .whitespaces) ?? ""
+        let model = String(data: onfiData[0x2C..<0x38], encoding: .ascii)?.trimmingCharacters(in: .whitespaces) ?? ""
+        return (mfr, model)
+    }
+
+    /// Read SID via ARM thunk (for SoCs that need the register-based workaround).
+    private func readSIDViaThunk(socInfo: SoCInfo) throws -> [UInt32] {
+        // ARM code that reads SID registers via the control register
+        var armCode = Data(count: 76)
+        let instructions: [(Int, UInt32)] = [
+            (0, 0xe59f0040),   // ldr   r0, [pc, #64]     ; load SID base
+            (4, 0xe3a01000),   // mov   r1, #0
+            (8, 0xe28f303c),   // add   r3, pc, #60       ; result buffer
+            // sid_read_loop:
+            (12, 0xe1a02801),  // lsl   r2, r1, #16
+            (16, 0xe3822b2b),  // orr   r2, r2, #44032
+            (20, 0xe3822002),  // orr   r2, r2, #2
+            (24, 0xe5802040),  // str   r2, [r0, #64]
+            // sid_read_wait:
+            (28, 0xe5902040),  // ldr   r2, [r0, #64]
+            (32, 0xe3120002),  // tst   r2, #2
+            (36, 0x1afffffc),  // bne   sid_read_wait
+            (40, 0xe5902060),  // ldr   r2, [r0, #96]
+            (44, 0xe7832001),  // str   r2, [r3, r1]
+            (48, 0xe2811004),  // add   r1, r1, #4
+            (52, 0xe3510010),  // cmp   r1, #16
+            (56, 0x3afffff3),  // bcc   sid_read_loop
+            (60, 0xe3a02000),  // mov   r2, #0
+            (64, 0xe5802040),  // str   r2, [r0, #64]
+            (68, 0xe12fff1e),  // bx    lr
+        ]
+        armCode.withUnsafeMutableBytes { ptr in
+            for (offset, value) in instructions {
+                ptr.storeBytes(of: value.littleEndian, toByteOffset: offset, as: UInt32.self)
+            }
+            ptr.storeBytes(of: socInfo.sidBase.littleEndian, toByteOffset: 72, as: UInt32.self)
+        }
+
+        try awFELWrite(data: armCode, offset: socInfo.scratchAddr)
+        try awFELExecute(offset: socInfo.scratchAddr)
+        let result = try awFELRead(offset: socInfo.scratchAddr + 76, length: 16)
+
+        return result.withUnsafeBytes { ptr in
+            (0..<4).map { ptr.load(fromByteOffset: $0 * 4, as: UInt32.self).littleEndian }
+        }
+    }
+
+    /// Execute an ARM thunk atomically: write code to scratchAddr, execute, read back results.
+    /// All three operations happen on the USB queue without interleaving.
+    func runThunk(code: Data, readOffset: UInt32, readLength: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        let scratch = socInfo.scratchAddr
+        usbQueue.async { [weak self] in
+            do {
+                try self?.awFELWrite(data: code, offset: scratch)
+                try self?.awFELExecute(offset: scratch)
+                let result = try self?.awFELRead(offset: readOffset, length: readLength) ?? Data()
+                DispatchQueue.main.async { completion(.success(result)) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// Execute an ARM thunk that produces no output (write + execute only).
+    func runThunkNoRead(code: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        let scratch = socInfo.scratchAddr
+        usbQueue.async { [weak self] in
+            do {
+                try self?.awFELWrite(data: code, offset: scratch)
+                try self?.awFELExecute(offset: scratch)
+                DispatchQueue.main.async { completion(.success(())) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// Read memory at the given address. Runs on the USB queue.
+    func readMemory(address: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+
+        let validation = FELAddressValidator.validateRead(address: address, length: length, soc: socInfo)
+        if case .protected(let name) = validation {
+            completion(.failure(FELError.protectedAddress(name)))
+            return
+        }
+
+        usbQueue.async { [weak self] in
+            do {
+                let data = try self?.awFELRead(offset: address, length: length)
+                DispatchQueue.main.async { completion(.success(data ?? Data())) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// Write data to memory at the given address. Runs on the USB queue.
+    func writeMemory(address: UInt32, data: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+
+        let validation = FELAddressValidator.validateWrite(address: address, length: UInt32(data.count), soc: socInfo)
+        if case .protected(let name) = validation {
+            completion(.failure(FELError.protectedAddress(name)))
+            return
+        }
+
+        usbQueue.async { [weak self] in
+            do {
+                try self?.awFELWrite(data: data, offset: address)
+                DispatchQueue.main.async { completion(.success(())) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// Execute code at the given address. Runs on the USB queue.
+    func executeAt(address: UInt32, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        usbQueue.async { [weak self] in
+            do {
+                try self?.awFELExecute(offset: address)
+                DispatchQueue.main.async { completion(.success(())) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    // MARK: - SPI Flash
+
+    /// Resolve thunk directory based on connected SoC family.
+    private func spiThunkDir() -> String {
+        let name = deviceInfo?.socInfo.name ?? ""
+        switch name {
+        case "F1C200s":
+            return "suniv/spi"
+        default:
+            // A64, H3, H5, V3s, R40, A83T, H6 — all sun50i/sun8i SPI controller
+            return "sun50i/spi"
+        }
+    }
+
+    /// Thunk parameter offsets (from spi_flash.bin, see `nm spi_flash.o`).
+    private static let spiParamTxLen: Int  = 0x11C
+    private static let spiParamRxLen: Int  = 0x120
+    private static let spiParamTxBuf: Int  = 0x124
+    private static let spiParamRxBuf: Int  = 0x128
+
+    /// Run one SPI flash transaction via the ARM thunk.
+    /// `txData` is the SPI command+address bytes, `rxLen` is how many data bytes to read back.
+    /// Returns the RX data bytes (excluding the TX echo).
+    func spiFlashTransfer(txData: Data, rxLen: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        guard UInt32(txData.count) + rxLen <= 64 else {
+            completion(.failure(FELError.protocolError("SPI transfer too large (max 64 bytes total)")))
+            return
+        }
+
+        let scratch = socInfo.scratchAddr
+        let txBuf = scratch + 0x200   // TX data at scratch+0x200
+        let rxBuf = scratch + 0x300   // RX data at scratch+0x300
+
+        // Load thunk binary
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let thunkPath = "\(home)/Work/SourceParts/thunks/\(self.spiThunkDir())/spi_flash.bin"
+        guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
+            completion(.failure(FELError.protocolError("Cannot load spi_flash.bin")))
+            return
+        }
+
+        // Patch parameters in literal pool
+        thunk.replaceSubrange(Self.spiParamTxLen..<Self.spiParamTxLen+4,
+            with: withUnsafeBytes(of: UInt32(txData.count).littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamRxLen..<Self.spiParamRxLen+4,
+            with: withUnsafeBytes(of: rxLen.littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamTxBuf..<Self.spiParamTxBuf+4,
+            with: withUnsafeBytes(of: txBuf.littleEndian) { Data($0) })
+        thunk.replaceSubrange(Self.spiParamRxBuf..<Self.spiParamRxBuf+4,
+            with: withUnsafeBytes(of: rxBuf.littleEndian) { Data($0) })
+
+        usbQueue.async { [weak self] in
+            do {
+                // 1. Write TX command data to scratch+0x200
+                try self?.awFELWrite(data: txData, offset: txBuf)
+                // 2. Write thunk code to scratch
+                try self?.awFELWrite(data: thunk, offset: scratch)
+                // 3. Execute thunk (inits SPI0, does transaction)
+                try self?.awFELExecute(offset: scratch)
+                // 4. Read back RX data from scratch+0x300
+                let result = try self?.awFELRead(offset: rxBuf, length: rxLen) ?? Data()
+                DispatchQueue.main.async { completion(.success(result)) }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// Read SPI flash JEDEC ID.
+    /// Tries NOR first (0x9F → 3 bytes), falls back to NAND (0x9F + dummy → 3 bytes).
+    func readSPIFlashID(completion: @escaping (Result<Data, Error>) -> Void) {
+        // NOR: 0x9F → 3 ID bytes directly
+        spiFlashTransfer(txData: Data([0x9F]), rxLen: 3) { [weak self] result in
+            switch result {
+            case .success(let data) where data.count >= 3 && data[0] != 0x00 && data[0] != 0xFF:
+                self?.detectedFlashType = "nor"
+                completion(.success(data))
+            default:
+                // NAND: 0x9F + dummy byte → 3 ID bytes
+                self?.spiFlashTransfer(txData: Data([0x9F, 0x00]), rxLen: 3) { result in
+                    if case .success = result {
+                        self?.detectedFlashType = "nand"
+                    }
+                    completion(result)
+                }
+            }
+        }
+    }
+
+    /// Detect if connected SPI flash is NOR or NAND based on JEDEC ID response.
+    /// NOR responds to 0x9F directly; NAND needs a dummy byte.
+    private var detectedFlashType: String? // "nor" or "nand", cached after first ID read
+
+    /// Read W25N01GV OTP page. Enables OTP mode, reads one page, disables OTP mode.
+    /// OTP pages 0-9: page 0 has unique die ID, pages 1-9 are user OTP.
+    func readNANDOTPPage(page: UInt8, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        guard page <= 9 else {
+            completion(.failure(FELError.protocolError("OTP pages 0-9 only")))
+            return
+        }
+
+        let scratch = socInfo.scratchAddr
+        let txBuf = scratch + 0x200
+        let rxBuf = scratch + 0x300
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let thunkPath = "\(home)/Work/SourceParts/thunks/\(self.spiThunkDir())/spi_flash.bin"
+        guard let thunkTemplate = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
+            completion(.failure(FELError.protocolError("Cannot load spi_flash.bin")))
+            return
+        }
+
+        // Helper to patch and run a simple SPI transaction
+        func runSPI(tx: Data, rxLen: UInt32, done: @escaping (Result<Data, Error>) -> Void) {
+            var thunk = thunkTemplate
+            thunk.replaceSubrange(Self.spiParamTxLen..<Self.spiParamTxLen+4,
+                with: withUnsafeBytes(of: UInt32(tx.count).littleEndian) { Data($0) })
+            thunk.replaceSubrange(Self.spiParamRxLen..<Self.spiParamRxLen+4,
+                with: withUnsafeBytes(of: rxLen.littleEndian) { Data($0) })
+            thunk.replaceSubrange(Self.spiParamTxBuf..<Self.spiParamTxBuf+4,
+                with: withUnsafeBytes(of: txBuf.littleEndian) { Data($0) })
+            thunk.replaceSubrange(Self.spiParamRxBuf..<Self.spiParamRxBuf+4,
+                with: withUnsafeBytes(of: rxBuf.littleEndian) { Data($0) })
+
+            usbQueue.async { [weak self] in
+                do {
+                    try self?.awFELWrite(data: tx, offset: txBuf)
+                    try self?.awFELWrite(data: thunk, offset: scratch)
+                    try self?.awFELExecute(offset: scratch)
+                    let result = rxLen > 0 ? (try self?.awFELRead(offset: rxBuf, length: rxLen) ?? Data()) : Data()
+                    DispatchQueue.main.async { done(.success(result)) }
+                } catch {
+                    DispatchQueue.main.async { done(.failure(error)) }
+                }
+            }
+        }
+
+        // Step 1: Read current SR2
+        runSPI(tx: Data([0x0F, 0xB0]), rxLen: 1) { res in
+            guard case .success(let sr2Data) = res, let sr2 = sr2Data.first else {
+                completion(res.map { _ in Data() })
+                return
+            }
+            let otpSR2 = sr2 | 0x40  // Set OTP-E (bit 6)
+
+            // Step 2: Write Enable
+            runSPI(tx: Data([0x06]), rxLen: 0) { res in
+                guard case .success = res else { completion(res); return }
+
+                // Step 3: Write SR2 with OTP-E enabled
+                runSPI(tx: Data([0x1F, 0xB0, otpSR2]), rxLen: 0) { res in
+                    guard case .success = res else { completion(res); return }
+
+                    // Step 4: Page Data Read of OTP page
+                    runSPI(tx: Data([0x13, 0x00, 0x00, page]), rxLen: 0) { res in
+                        guard case .success = res else { completion(res); return }
+
+                        // Step 5: Poll status until not busy
+                        func pollBusy() {
+                            runSPI(tx: Data([0x0F, 0xC0]), rxLen: 1) { res in
+                                guard case .success(let status) = res else { completion(res.map { _ in Data() }); return }
+                                if (status.first ?? 1) & 0x01 != 0 {
+                                    pollBusy()  // still busy
+                                    return
+                                }
+
+                                // Step 6: Read from Cache (first 64 bytes — FIFO limit)
+                                // For die ID, first 64 bytes of OTP page 0 is enough
+                                runSPI(tx: Data([0x03, 0x00, 0x00, 0x00]), rxLen: 56) { res in
+
+                                    // Step 7: Clear OTP-E (restore SR2)
+                                    runSPI(tx: Data([0x06]), rxLen: 0) { _ in
+                                        runSPI(tx: Data([0x1F, 0xB0, sr2]), rxLen: 0) { _ in
+                                            // Return the OTP data regardless of cleanup result
+                                            completion(res)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        pollBusy()
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - SPI NAND Batch Read
+
+    /// Batch thunk parameter offsets (from spi_nand_batch.bin).
+    private static let batchParamStartPage: Int = 0x224
+    private static let batchParamPageCount: Int = 0x228
+    private static let batchParamRxBuf: Int     = 0x22C
+    private static let batchPagesPerRun: UInt32 = 8
+    private static let nandPageSize: UInt32     = 2048
+
+    /// Read a batch of NAND pages synchronously (must be called on usbQueue).
+    /// Retries up to 3 times on USB errors.
+    private func readNANDBatchSync(startPage: UInt32, pageCount: UInt32,
+                                    scratch: UInt32, paramAddr: UInt32, rxBuf: UInt32) throws -> Data {
+        var params = Data(count: 8)
+        params.withUnsafeMutableBytes { ptr in
+            ptr.storeBytes(of: startPage.littleEndian, toByteOffset: 0, as: UInt32.self)
+            ptr.storeBytes(of: pageCount.littleEndian, toByteOffset: 4, as: UInt32.self)
+        }
+        let readLen = pageCount * Self.nandPageSize
+
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                if attempt > 0 {
+                    Thread.sleep(forTimeInterval: 0.2)
+                    _ = clearPipeStall(pipe: pipeOut)
+                    _ = clearPipeStall(pipe: pipeIn)
+                }
+                try awFELWrite(data: params, offset: paramAddr)
+                try awFELExecute(offset: scratch)
+                return try awFELRead(offset: rxBuf, length: readLen)
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError!
+    }
+
+    /// Read bytes from SPI flash (auto-detects NOR vs NAND).
+    func readSPIFlash(offset: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        if detectedFlashType == "nor" {
+            readSPINORFlash(offset: offset, length: length, completion: completion)
+            return
+        }
+        readSPINANDFlash(offset: offset, length: length, completion: completion)
+    }
+
+    /// Read bytes from SPI NOR flash using simple 0x03 READ command, chunked to 60 bytes.
+    private func readSPINORFlash(offset: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        let chunkSize: UInt32 = 60  // 64-byte FIFO - 4 cmd bytes
+        let scratch = socInfo.scratchAddr
+
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            var result = Data()
+            result.reserveCapacity(Int(length))
+            var remaining = length
+            var addr = offset
+            var lastLogTime = Date()
+            let startTime = Date()
+
+            do {
+                while remaining > 0 {
+                    let chunk = min(remaining, chunkSize)
+                    let cmd = Data([
+                        0x03,
+                        UInt8((addr >> 16) & 0xFF),
+                        UInt8((addr >> 8) & 0xFF),
+                        UInt8(addr & 0xFF)
+                    ])
+
+                    let data = try self.spiTransferSync(tx: cmd, rxLen: chunk, socInfo: socInfo)
+                    result.append(data)
+                    addr += chunk
+                    remaining -= chunk
+
+                    let now = Date()
+                    if now.timeIntervalSince(lastLogTime) >= 2.0 || remaining == 0 {
+                        let pct = Int(Double(result.count) / Double(length) * 100)
+                        let mb = String(format: "%.1f", Double(result.count) / 1048576.0)
+                        let elapsed = now.timeIntervalSince(startTime)
+                        let rate = elapsed > 0 ? Double(result.count) / elapsed / 1024.0 : 0
+                        DispatchQueue.main.async {
+                            self.appendLog("  flash: \(mb)MB (\(pct)%) — \(String(format: "%.0f", rate)) KB/s")
+                        }
+                        lastLogTime = now
+                    }
+                }
+                DispatchQueue.main.async { completion(.success(result)) }
+            } catch {
+                let read = result.count
+                DispatchQueue.main.async {
+                    self.appendLog("  flash: FAILED after \(read) bytes: \(error.localizedDescription)")
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    /// Read bytes from SPI NAND flash using batch thunk (8 pages per USB round-trip).
+    private func readSPINANDFlash(offset: UInt32, length: UInt32, completion: @escaping (Result<Data, Error>) -> Void) {
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        let scratch = socInfo.scratchAddr
+        let rxBuf: UInt32 = scratch + 0xC00
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let thunkPath = "\(home)/Work/SourceParts/thunks/\(self.spiThunkDir())/spi_nand_batch.bin"
+        guard var thunk = try? Data(contentsOf: URL(fileURLWithPath: thunkPath)) else {
+            completion(.failure(FELError.protocolError("Cannot load spi_nand_batch.bin")))
+            return
+        }
+        thunk.replaceSubrange(Self.batchParamRxBuf..<Self.batchParamRxBuf+4,
+            with: withUnsafeBytes(of: rxBuf.littleEndian) { Data($0) })
+
+        let paramAddr = scratch + UInt32(Self.batchParamStartPage)
+        let pageSize = Self.nandPageSize
+        let batchSize = Self.batchPagesPerRun
+
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            var result = Data()
+            result.reserveCapacity(Int(length))
+            var remaining = length
+            var byteOffset = offset
+            var lastLogTime = Date()
+            let startTime = Date()
+
+            do {
+                // Upload thunk once
+                try self.awFELWrite(data: thunk, offset: scratch)
+
+                while remaining > 0 {
+                    let startPage = byteOffset / pageSize
+                    let column = byteOffset % pageSize
+                    let bytesNeeded = remaining + column
+                    var pagesToRead = (bytesNeeded + pageSize - 1) / pageSize
+                    pagesToRead = min(pagesToRead, batchSize)
+
+                    let batchData = try self.readNANDBatchSync(
+                        startPage: startPage, pageCount: pagesToRead,
+                        scratch: scratch, paramAddr: paramAddr, rxBuf: rxBuf)
+
+                    let start = Int(column)
+                    let usable = min(Int(remaining), Int(pagesToRead * pageSize) - start)
+                    let end = start + usable
+                    if end <= batchData.count {
+                        result.append(batchData[start..<end])
+                    }
+                    byteOffset += UInt32(usable)
+                    remaining -= UInt32(usable)
+
+                    // Log progress every 2 seconds
+                    let now = Date()
+                    if now.timeIntervalSince(lastLogTime) >= 2.0 || remaining == 0 {
+                        let pct = Int(Double(result.count) / Double(length) * 100)
+                        let mb = String(format: "%.1f", Double(result.count) / 1048576.0)
+                        let elapsed = now.timeIntervalSince(startTime)
+                        let rate = elapsed > 0 ? Double(result.count) / elapsed / 1024.0 : 0
+                        DispatchQueue.main.async {
+                            self.appendLog("  flash: \(mb)MB (\(pct)%) — \(String(format: "%.0f", rate)) KB/s")
+                        }
+                        lastLogTime = now
+                    }
+                }
+                DispatchQueue.main.async { completion(.success(result)) }
+            } catch {
+                let read = result.count
+                let pages = read / Int(pageSize)
+                DispatchQueue.main.async {
+                    self.appendLog("  flash: FAILED after \(read) bytes (\(pages) pages): \(error.localizedDescription)")
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    /// Write and execute SPL. Validates eGON header and checksum.
+    func writeSPL(data splData: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !bootInProgress else {
+            completion(.failure(FELError.protocolError("Boot in progress")))
+            return
+        }
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+        DispatchQueue.main.async { self.bootInProgress = true }
+
+        usbQueue.async { [weak self] in
+            do {
+                try self?.writeSPLSync(data: splData, socInfo: socInfo)
+                DispatchQueue.main.async {
+                    self?.bootInProgress = false
+                    self?.appendLog("SPL loaded and executed successfully")
+                    completion(.success(()))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.bootInProgress = false
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    private func writeSPLSync(data splData: Data, socInfo: SoCInfo) throws {
+        guard splData.count >= 32 else {
+            throw FELError.invalidSPL("Too small")
+        }
+
+        // Verify eGON.BT0 signature at offset 4
+        let eGONSig = String(data: splData[4..<12], encoding: .ascii) ?? ""
+        guard eGONSig == "eGON.BT0" else {
+            throw FELError.invalidSPL("eGON header not found (got: \(eGONSig))")
+        }
+
+        // Verify checksum
+        let splCheckValue = splData.withUnsafeBytes { ptr in
+            ptr.load(fromByteOffset: 12, as: UInt32.self).littleEndian
+        }
+        let splLen = splData.withUnsafeBytes { ptr in
+            ptr.load(fromByteOffset: 16, as: UInt32.self).littleEndian
+        }
+
+        guard splLen <= splData.count && splLen % 4 == 0 else {
+            throw FELError.invalidSPL("Bad length in eGON header")
+        }
+
+        var checksum: UInt32 = 2 &* splCheckValue &- 0x5F0A6C39
+        splData.withUnsafeBytes { ptr in
+            for i in stride(from: 0, to: Int(splLen), by: 4) {
+                checksum = checksum &- ptr.load(fromByteOffset: i, as: UInt32.self).littleEndian
+            }
+        }
+        guard checksum == 0 else {
+            throw FELError.invalidSPL("Checksum failed")
+        }
+
+        appendLogSync("SPL verified: \(splLen) bytes, eGON.BT0")
+
+        // Enable L2 cache if needed
+        if socInfo.needsL2EN {
+            try enableL2Cache(socInfo: socInfo)
+        }
+
+        // Write SPL data, handling swap buffers
+        var len = Int(splLen)
+        var buf = 0
+        var curAddr = socInfo.splAddr > 0 ? socInfo.splAddr : socInfo.scratchAddr
+        let swapBuffers = socInfo.swapBuffers
+
+        for swap in swapBuffers {
+            if len > 0 && curAddr < swap.buf1 {
+                let tmp = min(Int(swap.buf1 - curAddr), len)
+                try awFELWrite(data: Data(splData[buf..<buf + tmp]), offset: curAddr)
+                curAddr += UInt32(tmp)
+                buf += tmp
+                len -= tmp
+            }
+            if len > 0 && curAddr == swap.buf1 {
+                let tmp = min(Int(swap.size), len)
+                try awFELWrite(data: Data(splData[buf..<buf + tmp]), offset: swap.buf2)
+                curAddr += UInt32(tmp)
+                buf += tmp
+                len -= tmp
+            }
+        }
+
+        // Write remaining SPL data
+        if len > 0 {
+            try awFELWrite(data: Data(splData[buf..<buf + len]), offset: curAddr)
+        }
+
+        // Build and write thunk code
+        let thunkCode = buildSPLThunk(socInfo: socInfo)
+        try awFELWrite(data: thunkCode, offset: socInfo.thunkAddr)
+
+        // Execute SPL. The BROM sends CSW+status before executing, so this
+        // returns instantly. DRAM init reconfigures PLL11 which corrupts the
+        // USB PHY state on the A64. We issue an IOKit ResetDevice() to force
+        // macOS to re-enumerate the bus without cutting VBUS power.
+        appendLogSync("SPL executing...")
+        try awFELExecute(offset: socInfo.thunkAddr)
+        appendLogSync("SPL acknowledged — DRAM init running")
+
+        // Wait for DRAM init to complete and USB PHY to settle
+        appendLogSync("Waiting 3s for DRAM init + PHY settle...")
+        Thread.sleep(forTimeInterval: 3.0)
+
+        // Reset USB bus (data lines only — VBUS stays powered)
+        resetUSBDevice()
+        appendLogSync("USB bus reset sent — waiting for re-enumeration...")
+
+        // Give macOS time to process the reset and re-enumerate
+        Thread.sleep(forTimeInterval: 2.0)
+
+        // Poll for device re-enumeration (30s timeout)
+        var reconnected = false
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.5)
+            do {
+                try openUSBDevice()
+                try findAndOpenInterface()
+
+                // Clear any stale pipe state from the PHY disruption
+                if let iface = interfaceInterface {
+                    if pipeIn != 0 {
+                        iface.pointee.pointee.ClearPipeStallBothEnds(iface, pipeIn)
+                    }
+                    if pipeOut != 0 {
+                        iface.pointee.pointee.ClearPipeStallBothEnds(iface, pipeOut)
+                    }
+                }
+
+                _ = try getVersionSync()
+                reconnected = true
+                appendLogSync("USB reconnected after reset — no replug needed!")
+                break
+            } catch {
+                closeDevice()
+            }
+        }
+
+        // Fallback: if reset didn't work, ask for manual replug
+        if !reconnected {
+            DispatchQueue.main.async { self.needsUSBReplug = true }
+            appendLogSync("USB reset failed — please replug USB cable (30s)")
+
+            let fallbackDeadline = Date().addingTimeInterval(30)
+            while Date() < fallbackDeadline {
+                Thread.sleep(forTimeInterval: 0.5)
+                do {
+                    try openUSBDevice()
+                    try findAndOpenInterface()
+                    _ = try getVersionSync()
+                    reconnected = true
+                    appendLogSync("USB reconnected after replug!")
+                    break
+                } catch {
+                    closeDevice()
+                }
+            }
+            DispatchQueue.main.async { self.needsUSBReplug = false }
+        }
+
+        guard reconnected else {
+            throw FELError.protocolError("USB reconnection failed — replug USB and run boot again")
+        }
+
+        // Verify DRAM initialized — eGON.FEL signature
+        let felSig = try awFELRead(offset: socInfo.splAddr + 4, length: 8)
+        let sigStr = String(data: felSig, encoding: .ascii) ?? ""
+        if sigStr == "eGON.FEL" {
+            appendLogSync("SPL returned to FEL — DRAM initialized")
+        } else {
+            appendLogSync("Warning: signature = \(sigStr)")
+        }
+    }
+
+    /// Build the FEL-to-SPL thunk code with swap buffer data appended.
+    private func buildSPLThunk(socInfo: SoCInfo) -> Data {
+        // The thunk is 264 bytes of ARM code + 4 bytes SPL addr + swap buffer entries + terminator
+        var thunk = Data(count: 264)
+
+        // ARM thunk instructions (from fel.js fel_to_spl_thunk)
+        let instructions: [(Int, UInt32)] = [
+            (0, 0xea000015),   // b  setup_stack
+            // stack_begin (NOPs for stack space)
+            (4, 0xe1a00000), (8, 0xe1a00000), (12, 0xe1a00000), (16, 0xe1a00000),
+            (20, 0xe1a00000), (24, 0xe1a00000), (28, 0xe1a00000), (32, 0xe1a00000),
+            // stack_end
+            (36, 0xe1a00000),
+            // swap_all_buffers
+            (40, 0xe28f40dc),  // add  r4, pc, #220
+            // swap_next_buffer
+            (44, 0xe4940004),  // ldr  r0, [r4], #4
+            (48, 0xe4941004),  // ldr  r1, [r4], #4
+            (52, 0xe4946004),  // ldr  r6, [r4], #4
+            (56, 0xe3560000),  // cmp  r6, #0
+            (60, 0x012fff1e),  // bxeq lr
+            // swap_next_word
+            (64, 0xe5902000),  // ldr  r2, [r0]
+            (68, 0xe5913000),  // ldr  r3, [r1]
+            (72, 0xe2566004),  // subs r6, r6, #4
+            (76, 0xe4812004),  // str  r2, [r1], #4
+            (80, 0xe4803004),  // str  r3, [r0], #4
+            (84, 0x1afffff9),  // bne  swap_next_word
+            (88, 0xeafffff3),  // b    swap_next_buffer
+            // setup_stack
+            (92, 0xe59f80a4),  // ldr  r8, [pc, #164]
+            (96, 0xe24f0044),  // sub  r0, pc, #68
+            (100, 0xe520d004), // str  sp, [r0, #-4]!
+            (104, 0xe1a0d000), // mov  sp, r0
+            (108, 0xe10f2000), // mrs  r2, CPSR
+            (112, 0xe92d4004), // push {r2, lr}
+            (116, 0xe38220c0), // orr  r2, r2, #192
+            (120, 0xe121f002), // msr  CPSR_c, r2
+            (124, 0xee112f10), // mrc  15, 0, r2, cr1, cr0, {0}
+            (128, 0xe3013004), // movw r3, #4100
+            (132, 0xe1120003), // tst  r2, r3
+            (136, 0x1a000012), // bne  cache_is_unsupported
+            (140, 0xebffffe5), // bl   swap_all_buffers
+            // verify_checksum
+            (144, 0xe3067c39), // movw r7, #27705
+            (148, 0xe3457f0a), // movt r7, #24330
+            (152, 0xe1a00008), // mov  r0, r8
+            (156, 0xe5905010), // ldr  r5, [r0, #16]
+            // check_next_word
+            (160, 0xe4902004), // ldr  r2, [r0], #4
+            (164, 0xe2555004), // subs r5, r5, #4
+            (168, 0xe0877002), // add  r7, r7, r2
+            (172, 0x1afffffb), // bne  check_next_word
+            (176, 0xe598200c), // ldr  r2, [r8, #12]
+            (180, 0xe0577082), // subs r7, r7, r2, lsl #1
+            (184, 0x1a00000a), // bne  checksum_is_bad
+            (188, 0xe304262e), // movw r2, #17966
+            (192, 0xe3442c45), // movt r2, #19525
+            (196, 0xe5882008), // str  r2, [r8, #8]
+            (200, 0xf57ff04f), // dsb  sy
+            (204, 0xf57ff06f), // isb  sy
+            (208, 0xe12fff38), // blx  r8
+            (212, 0xea000006), // b    return_to_fel
+            // cache_is_unsupported
+            (216, 0xe3032f2e), // movw r2, #16174
+            (220, 0xe3432f3f), // movt r2, #16191
+            (224, 0xe5882008), // str  r2, [r8, #8]
+            (228, 0xea000003), // b    return_to_fel_noswap
+            // checksum_is_bad
+            (232, 0xe304222e), // movw r2, #16942
+            (236, 0xe3442441), // movt r2, #17473
+            (240, 0xe5882008), // str  r2, [r8, #8]
+            // return_to_fel
+            (244, 0xebffffcb), // bl   swap_all_buffers
+            // return_to_fel_noswap
+            (248, 0xe8bd4004), // pop  {r2, lr}
+            (252, 0xe121f002), // msr  CPSR_c, r2
+            (256, 0xe59dd000), // ldr  sp, [sp]
+            (260, 0xe12fff1e), // bx   lr
+        ]
+
+        thunk.withUnsafeMutableBytes { ptr in
+            for (offset, value) in instructions {
+                ptr.storeBytes(of: value.littleEndian, toByteOffset: offset, as: UInt32.self)
+            }
+        }
+
+        // Append SPL address
+        let splAddr = socInfo.splAddr > 0 ? socInfo.splAddr : socInfo.scratchAddr
+        var splAddrData = Data(count: 4)
+        splAddrData.withUnsafeMutableBytes { ptr in
+            ptr.storeBytes(of: splAddr.littleEndian, toByteOffset: 0, as: UInt32.self)
+        }
+        thunk.append(splAddrData)
+
+        // Append swap buffer entries
+        for swap in socInfo.swapBuffers {
+            thunk.append(swap.data)
+        }
+
+        // Terminator (12 zero bytes)
+        thunk.append(Data(count: 12))
+
+        return thunk
+    }
+
+    /// Enable L2 cache (for A10/A13/A20).
+    private func enableL2Cache(socInfo: SoCInfo) throws {
+        var armCode = Data(count: 16)
+        let instructions: [(Int, UInt32)] = [
+            (0, 0xee112f30),   // mrc  15, 0, r2, cr1, cr0, {1}
+            (4, 0xe3822002),   // orr  r2, r2, #2
+            (8, 0xee012f30),   // mcr  15, 0, r2, cr1, cr0, {1}
+            (12, 0xe12fff1e),  // bx   lr
+        ]
+        armCode.withUnsafeMutableBytes { ptr in
+            for (offset, value) in instructions {
+                ptr.storeBytes(of: value.littleEndian, toByteOffset: offset, as: UInt32.self)
+            }
+        }
+        try awFELWrite(data: armCode, offset: socInfo.scratchAddr)
+        try awFELExecute(offset: socInfo.scratchAddr)
+    }
+
+    /// Write U-Boot image. Validates mkimage header and CRC32.
+    func writeUBoot(data ubootData: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        usbQueue.async { [weak self] in
+            do {
+                try self?.writeUBootSync(data: ubootData)
+                DispatchQueue.main.async {
+                    self?.appendLog("U-Boot image written successfully")
+                    completion(.success(()))
+                }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    private func writeUBootSync(data ubootData: Data) throws {
+        let headerSize = 64
+        guard ubootData.count > headerSize else {
+            throw FELError.invalidUBoot("Image too small")
+        }
+
+        // Check mkimage magic
+        let magic = ubootData.withUnsafeBytes { ptr in
+            ptr.load(fromByteOffset: 0, as: UInt32.self).bigEndian
+        }
+        guard magic == 0x27051956 else {
+            throw FELError.invalidUBoot("Bad magic number: 0x\(String(format: "%08x", magic))")
+        }
+
+        // Check ARM architecture
+        let arch = ubootData[29]
+        guard arch == 2 else {
+            throw FELError.invalidUBoot("Wrong architecture (expected ARM)")
+        }
+
+        // Check firmware type
+        let imageType = ubootData[30]
+        guard imageType == 5 else {
+            throw FELError.invalidUBoot("Expected firmware type, got \(imageType)")
+        }
+
+        // Verify header CRC
+        let storedHCRC = ubootData.withUnsafeBytes { ptr in
+            ptr.load(fromByteOffset: 4, as: UInt32.self).bigEndian
+        }
+        var headerForCRC = Data(ubootData.prefix(headerSize))
+        headerForCRC.withUnsafeMutableBytes { ptr in
+            ptr.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)
+        }
+        let computedHCRC = crc32(headerForCRC)
+        guard storedHCRC == computedHCRC else {
+            throw FELError.invalidUBoot("Header CRC mismatch")
+        }
+
+        let dataSize = ubootData.withUnsafeBytes { ptr in
+            ptr.load(fromByteOffset: 12, as: UInt32.self).bigEndian
+        }
+        let loadAddr = ubootData.withUnsafeBytes { ptr in
+            ptr.load(fromByteOffset: 16, as: UInt32.self).bigEndian
+        }
+
+        // Verify data CRC
+        let storedDCRC = ubootData.withUnsafeBytes { ptr in
+            ptr.load(fromByteOffset: 24, as: UInt32.self).bigEndian
+        }
+        let imageData = ubootData[headerSize..<headerSize + Int(dataSize)]
+        let computedDCRC = crc32(Data(imageData))
+        guard storedDCRC == computedDCRC else {
+            throw FELError.invalidUBoot("Data CRC mismatch")
+        }
+
+        appendLogSync("U-Boot: \(dataSize) bytes -> 0x\(String(format: "%08x", loadAddr))")
+
+        // Write the image data (skip header) to the load address
+        try awFELWrite(data: Data(imageData), offset: loadAddr)
+    }
+
+    /// Boot the device using RMR warm reset (for AArch64 SoCs like A64).
+    func startBoot(entryPoint: UInt32? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+
+        usbQueue.async { [weak self] in
+            do {
+                if socInfo.rvbarReg != 0 {
+                    try self?.rmrRequest(entryPoint: entryPoint ?? DRAM_BASE, socInfo: socInfo)
+                } else {
+                    // For 32-bit SoCs, just execute at the entry point
+                    try self?.awFELExecute(offset: entryPoint ?? DRAM_BASE)
+                }
+                DispatchQueue.main.async {
+                    self?.appendLog("Boot initiated")
+                    completion(.success(()))
+                }
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    /// RMR warm reset — writes entry point to RVBAR and triggers reset.
+    private func rmrRequest(entryPoint: UInt32, socInfo: SoCInfo) throws {
+        let rmrMode: UInt32 = (1 << 1) | 1 // RR + AA64
+
+        var armCode = Data(count: 60)
+        let instructions: [(Int, UInt32)] = [
+            (0, 0xe59f0028),   // ldr  r0, [rvbar_reg]
+            (4, 0xe59f1028),   // ldr  r1, [entry_point]
+            (8, 0xe5801000),   // str  r1, [r0]
+            (12, 0xf57ff04f),  // dsb  sy
+            (16, 0xf57ff06f),  // isb  sy
+            (20, 0xe59f101c),  // ldr  r1, [rmr_mode]
+            (24, 0xee1c0f50),  // mrc  15, 0, r0, cr12, cr0, {2}
+            (28, 0xe1800001),  // orr  r0, r0, r1
+            (32, 0xee0c0f50),  // mcr  15, 0, r0, cr12, cr0, {2}
+            (36, 0xf57ff06f),  // isb  sy
+            (40, 0xe320f003),  // wfi
+            (44, 0xeafffffd),  // b    wfi
+        ]
+        armCode.withUnsafeMutableBytes { ptr in
+            for (offset, value) in instructions {
+                ptr.storeBytes(of: value.littleEndian, toByteOffset: offset, as: UInt32.self)
+            }
+            ptr.storeBytes(of: socInfo.rvbarReg.littleEndian, toByteOffset: 48, as: UInt32.self)
+            ptr.storeBytes(of: entryPoint.littleEndian, toByteOffset: 52, as: UInt32.self)
+            ptr.storeBytes(of: rmrMode.littleEndian, toByteOffset: 56, as: UInt32.self)
+        }
+
+        appendLogSync("RMR: entry=0x\(String(format: "%08x", entryPoint)) rvbar=0x\(String(format: "%08x", socInfo.rvbarReg))")
+        try awFELWrite(data: armCode, offset: socInfo.scratchAddr)
+        try awFELExecute(offset: socInfo.scratchAddr)
+    }
+
+    /// Full boot sequence: load SPL, wait for DRAM, write U-Boot, start boot.
+    /// Boot using a combined u-boot-sunxi-with-spl.bin (SPL + U-Boot in one file).
+    /// If splData is the combined binary (>32KB), splits it automatically.
+    func bootPocketPC(splData: Data, ubootData: Data? = nil, bl31Data: Data? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let socInfo = deviceInfo?.socInfo else {
+            completion(.failure(FELError.deviceNotFound))
+            return
+        }
+
+        DispatchQueue.main.async {
+            self.bootInProgress = true
+            self.stopHeartbeat()
+        }
+
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            var bootUBootData: Data? = nil
+            do {
+                self.appendLogSync("=== FEL Boot Sequence ===")
+
+                // Split combined binary if needed (u-boot-sunxi-with-spl.bin)
+                let splLenLimit: Int = 0x8000 // 32KB
+                let actualSPL: Data
+                let actualUBoot: Data?
+                if splData.count > splLenLimit {
+                    actualSPL = Data(splData.prefix(splLenLimit))
+                    actualUBoot = Data(splData.suffix(from: splLenLimit))
+                    bootUBootData = actualUBoot
+                    self.appendLogSync("Combined binary: \(splData.count) bytes (SPL=\(splLenLimit), U-Boot=\(splData.count - splLenLimit))")
+                } else {
+                    actualSPL = splData
+                    actualUBoot = ubootData
+                    bootUBootData = actualUBoot
+                }
+
+                // Connect serial before boot so we capture all output
+                if !self.serialActive {
+                    DispatchQueue.main.async {
+                        if let port = self.findSerialPort() {
+                            self.connectSerial(port: port)
+                            self.appendLog("Serial attached for boot monitoring")
+                        }
+                    }
+                    Thread.sleep(forTimeInterval: 0.3)
+                }
+
+                // Pre-load: Write BL31 to SRAM BEFORE SPL (SRAM is always accessible).
+                // This way after replug we only need to write U-Boot to DRAM.
+                if let bl31 = bl31Data, bl31.count > 0 {
+                    self.appendLogSync("[1/4] Pre-loading ATF BL31 (\(bl31.count) bytes) to 0x44000 (SRAM)...")
+                    try self.writeRawToAddress(data: bl31, address: 0x44000)
+                    self.appendLogSync("[1/4] ATF BL31 pre-loaded")
+                }
+
+                // Step 2: Write and execute SPL → DRAM init → USB dies → replug
+                self.appendLogSync("[2/4] Loading SPL (\(actualSPL.count) bytes)...")
+                try self.writeSPLSync(data: actualSPL, socInfo: socInfo)
+                self.appendLogSync("[2/4] SPL executed — DRAM initialized")
+
+                // Step 3: Write U-Boot to DRAM (must complete in ~10s USB window)
+                if let ub = bootUBootData, ub.count > 0 {
+                    self.appendLogSync("[3/4] Writing U-Boot (\(ub.count) bytes) to 0x4a000000...")
+                    try self.writeRawToAddress(data: ub, address: 0x4a000000)
+                    self.appendLogSync("[3/4] U-Boot written")
+                } else {
+                    self.appendLogSync("[3/4] No U-Boot payload, skipping write")
+                }
+
+                // Restore normal timeout
+                self.usbTimeoutMS = 10000
+
+                // Step 4: Boot via RMR warm reset to ATF BL31
+                // RMR sets RVBAR to 0x44000 and triggers warm reset into AArch64.
+                // ATF initializes EL3, then jumps to U-Boot at 0x4a000000.
+                if socInfo.rvbarReg != 0 {
+                    self.appendLogSync("[4/4] RMR boot → 0x44000 (ATF BL31)...")
+                    try self.rmrRequest(entryPoint: 0x44000, socInfo: socInfo)
+                    self.appendLogSync("[4/4] RMR warm reset issued")
+                } else if bootUBootData != nil {
+                    self.appendLogSync("[4/4] Executing at 0x4a000000...")
+                    try self.awFELExecute(offset: 0x4a000000)
+                    self.appendLogSync("[4/4] U-Boot started")
+                }
+
+                // Auto-connect serial
+                if !self.serialActive {
+                    self.autoConnectSerial()
+                }
+
+                DispatchQueue.main.async {
+                    self.bootInProgress = false
+                    self.appendLog("=== Boot sequence complete ===")
+                    completion(.success(()))
+                }
+
+            } catch {
+                DispatchQueue.main.async {
+                    self.bootInProgress = false
+                    self.appendLog("Boot failed: \(error.localizedDescription)")
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    // MARK: - Serial Console (post-boot)
+
+    /// Find the WCH serial port.
+    func findSerialPort() -> String? {
+        let devEntries = (try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? []
+        return devEntries.first(where: { $0.hasPrefix("cu.usbserial") }).map { "/dev/\($0)" }
+    }
+
+    /// Connect to serial port for U-Boot / Linux console.
+    func connectSerial(port: String? = nil, baudRate: Int = 115200) {
+        disconnectSerial()
+
+        guard let port = port ?? findSerialPort() else {
+            appendLog("No serial port found")
+            return
+        }
+
+        // Configure baud rate
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/stty")
+        process.arguments = ["-f", port, String(baudRate)]
+        try? process.run()
+        process.waitUntilExit()
+
+        guard let fh = FileHandle(forReadingAtPath: port) else {
+            appendLog("Cannot open \(port) — port may be in use by another application (screen, minicom, etc.)")
+            appendLog("Try: lsof \(port)  to find the holding process")
+            return
+        }
+
+        serialHandle = fh
+        serialPort = port
+        serialActive = true
+        appendLog("Serial connected: \(port) @ \(baudRate)")
+
+        fh.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if !data.isEmpty, let text = String(data: data, encoding: .utf8) {
+                DispatchQueue.main.async {
+                    self?.serialOutput += text
+                    self?.appendLog(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                    // Keep bounded — notify when truncating
+                    if let self = self, self.serialOutput.count > 65536 {
+                        self.serialOutput = String(self.serialOutput.suffix(32768))
+                        self.appendLog("[Serial buffer truncated — oldest output discarded (64KB limit)]")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Send text to serial port.
+    func sendSerial(_ text: String) {
+        guard let port = serialPort,
+              let fh = FileHandle(forWritingAtPath: port),
+              let data = (text + "\r\n").data(using: .utf8) else { return }
+        fh.write(data)
+        fh.closeFile()
+    }
+
+    /// Disconnect serial.
+    func disconnectSerial() {
+        serialHandle?.readabilityHandler = nil
+        serialHandle?.closeFile()
+        serialHandle = nil
+        if serialActive {
+            serialActive = false
+            serialPort = nil
+            appendLog("Serial disconnected")
+        }
+    }
+
+    /// Auto-connect to serial after boot (called after boot completes).
+    private func autoConnectSerial() {
+        appendLogSync("Waiting for serial port (2s)...")
+        Thread.sleep(forTimeInterval: 2.0)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if let port = self.findSerialPort() {
+                self.connectSerial(port: port)
+                self.onBootComplete?()
+            } else {
+                self.appendLog("No serial port detected — connect manually")
+            }
+        }
+    }
+
+    /// Write raw binary data to an address in chunks with progress.
+    private func writeRawToAddress(data: Data, address: UInt32) throws {
+        let chunkSize = 65536 // 64KB — maximize throughput per FEL transaction
+        var offset = 0
+        let total = data.count
+
+        while offset < total {
+            let remaining = total - offset
+            let thisChunk = min(chunkSize, remaining)
+            let chunk = Data(data[offset..<offset + thisChunk])
+            let addr = address + UInt32(offset)
+            try awFELWrite(data: chunk, offset: addr)
+
+            offset += thisChunk
+            let pct = (offset * 100) / total
+            appendLogSync("  \(offset)/\(total) bytes (\(pct)%)")
+        }
+    }
+
+    // MARK: - Live Memory Watch
+
+    private var watchTimer: Timer?
+    @Published var watchAddress: UInt32 = 0
+    @Published var watchLength: UInt32 = 256
+    @Published var watchData: Data?
+    @Published var watchActive: Bool = false
+
+    func startWatch(address: UInt32, length: UInt32, interval: TimeInterval = 1.0) {
+        stopWatch()
+        watchAddress = address
+        watchLength = length
+        watchActive = true
+        appendLog("Watch started: 0x\(String(format: "%x", address)) (\(length) bytes, \(interval)s)")
+
+        // Immediate first read
+        pollWatch()
+
+        watchTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.pollWatch()
+        }
+    }
+
+    func stopWatch() {
+        watchTimer?.invalidate()
+        watchTimer = nil
+        if watchActive {
+            watchActive = false
+            appendLog("Watch stopped")
+        }
+    }
+
+    private func pollWatch() {
+        guard connectionState == .connected else {
+            stopWatch()
+            return
+        }
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            do {
+                let data = try self.awFELRead(offset: self.watchAddress, length: self.watchLength)
+                DispatchQueue.main.async {
+                    self.watchData = data
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.appendLog("Watch read failed: \(error.localizedDescription)")
+                    self.stopWatch()
+                }
+            }
+        }
+    }
+
+    // MARK: - PocketPC Device Gating
+
+    /// SID prefix for authorized PocketPC devices (GPS, LoRa, peripheral commands).
+    private static let pocketPCSIDPrefix = "92c0f6ba"
+
+    /// Check if the connected device is an authorized PocketPC.
+    var isPocketPC: Bool {
+        guard let sid = deviceInfo?.sid else { return false }
+        return sid.hasPrefix(Self.pocketPCSIDPrefix)
+    }
+
+    // MARK: - GPS Continuous Polling (UART2)
+
+    private var gpsTimer: Timer?
+    @Published var gpsActive: Bool = false
+    private var gpsRawMode: Bool = false
+    private var gpsNMEABuffer: String = ""
+    private var uart2Initialized: Bool = false
+    private var uart3Initialized: Bool = false
+
+    /// Reset all peripheral state when device connects/disconnects/reboots.
+    /// Hardware state (CCU, GPIO, UART registers) is lost on device reset.
+    private func resetPeripheralState() {
+        uart2Initialized = false
+        uart3Initialized = false
+        stopGPS()
+    }
+
+    func startGPS(raw: Bool = false) {
+        guard isPocketPC else {
+            appendLog("ERROR: GPS requires authorized PocketPC device")
+            return
+        }
+        stopGPS()
+        gpsRawMode = raw
+        gpsActive = true
+
+        if !uart2Initialized {
+            appendLog("Initializing UART2 (9600 baud)...")
+            initUART(uart: 2, baud: 9600) { [weak self] result in
+                guard let self = self else { return }
+                switch result {
+                case .success:
+                    self.uart2Initialized = true
+                    self.appendLog("UART2 ready — polling GPS...")
+                    self.pollGPS()
+                    self.gpsTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+                        self?.pollGPS()
+                    }
+                case .failure(let err):
+                    self.appendLog("UART2 init failed: \(err.localizedDescription)")
+                    self.gpsActive = false
+                }
+            }
+        } else {
+            appendLog("Polling GPS...")
+            pollGPS()
+            gpsTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+                self?.pollGPS()
+            }
+        }
+    }
+
+    func stopGPS() {
+        gpsTimer?.invalidate()
+        gpsTimer = nil
+        if gpsActive {
+            gpsActive = false
+            gpsNMEABuffer = ""
+            appendLog("GPS stopped")
+        }
+    }
+
+    private func pollGPS() {
+        guard connectionState == .connected, gpsActive else {
+            stopGPS()
+            return
+        }
+        // RX thunk idle timeout: ~200ms (500K loops at ~24MHz, ~5 cycles/loop)
+        // At 9600 baud, inter-byte gap is ~1ms; inter-burst gap is ~200ms.
+        // Captures full NMEA burst without clipping mid-sentence.
+        uartReceive(uart: 2, maxBytes: 512, timeoutLoops: 500_000) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let data):
+                guard !data.isEmpty else { return }
+                let text = String(data: data, encoding: .ascii) ?? ""
+                self.gpsNMEABuffer += text
+
+                // Process complete lines
+                while let range = self.gpsNMEABuffer.range(of: "\r\n") {
+                    let line = String(self.gpsNMEABuffer[self.gpsNMEABuffer.startIndex..<range.lowerBound])
+                    self.gpsNMEABuffer = String(self.gpsNMEABuffer[range.upperBound...])
+
+                    if self.gpsRawMode {
+                        self.appendLog(line)
+                    } else {
+                        self.processNMEA(line)
+                    }
+                }
+
+                // Prevent buffer from growing unbounded
+                if self.gpsNMEABuffer.count > 2048 {
+                    self.gpsNMEABuffer = ""
+                }
+
+            case .failure(let err):
+                self.appendLog("GPS read error: \(err.localizedDescription)")
+            }
+        }
+    }
+
+    private var lastGPSFix = GPSFix()
+
+    private func processNMEA(_ sentence: String) {
+        guard sentence.hasPrefix("$") else { return }
+
+        if sentence.hasPrefix("$GPRMC") || sentence.hasPrefix("$GNRMC") {
+            if let fix = GPSFix.parseRMC(sentence) {
+                lastGPSFix.latitude = fix.latitude ?? lastGPSFix.latitude
+                lastGPSFix.longitude = fix.longitude ?? lastGPSFix.longitude
+                lastGPSFix.speed = fix.speed ?? lastGPSFix.speed
+                lastGPSFix.course = fix.course ?? lastGPSFix.course
+                lastGPSFix.time = fix.time ?? lastGPSFix.time
+                lastGPSFix.date = fix.date ?? lastGPSFix.date
+                lastGPSFix.fix = fix.fix
+                appendLog(lastGPSFix.summary)
+            }
+        } else if sentence.hasPrefix("$GPGGA") || sentence.hasPrefix("$GNGGA") {
+            if let fix = GPSFix.parseGGA(sentence) {
+                lastGPSFix.altitude = fix.altitude ?? lastGPSFix.altitude
+                lastGPSFix.satellites = fix.satellites ?? lastGPSFix.satellites
+            }
+        }
+    }
+
+    // MARK: - RAK4200 UART3 Init Helper
+
+    func ensureUART3(completion: @escaping (Result<Void, Error>) -> Void) {
+        guard isPocketPC else {
+            completion(.failure(FELError.protocolError("LoRa requires authorized PocketPC device")))
+            return
+        }
+        if uart3Initialized {
+            completion(.success(()))
+            return
+        }
+        initUART(uart: 3, baud: 115200) { [weak self] result in
+            if case .success = result { self?.uart3Initialized = true }
+            completion(result)
+        }
+    }
+
+    /// Manually trigger a connection attempt.
+    func connect() {
+        usbQueue.async { [weak self] in
+            self?.connectToDevice()
+        }
+    }
+
+    /// Disconnect from the device.
+    func disconnect() {
+        stopHeartbeat()
+        closeDevice()
+        DispatchQueue.main.async { [weak self] in
+            self?.connectionState = .disconnected
+            self?.deviceInfo = nil
+            self?.appendLog("Disconnected")
+        }
+    }
+
+    // MARK: - Heartbeat
+
+    private func startHeartbeat() {
+        stopHeartbeat()
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.heartbeat()
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+    }
+
+    private func heartbeat() {
+        usbQueue.async { [weak self] in
+            guard let self = self else { return }
+            do {
+                _ = try self.getVersionSync()
+                DispatchQueue.main.async {
+                    self.consecutiveErrors = 0
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.consecutiveErrors += 1
+                    if self.consecutiveErrors == self.maxConsecutiveErrors {
+                        self.heartbeatLost = true
+                        self.connectionState = .disconnected
+                        self.deviceInfo = nil
+                        self.stopHeartbeat()
+                        self.closeDevice()
+                        self.appendLog("Device connection lost — heartbeat failed \(self.maxConsecutiveErrors) times. Check USB cable or power cycle device.")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - CRC32
+
+    private static let crc32Table: [UInt32] = {
+        (0..<256).map { i -> UInt32 in
+            var tmp = UInt32(i)
+            for _ in 0..<8 {
+                tmp = (tmp & 1 != 0) ? (0xEDB88320 ^ (tmp >> 1)) : (tmp >> 1)
+            }
+            return tmp
+        }
+    }()
+
+    private func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFFFFFF
+        for byte in data {
+            crc = Self.crc32Table[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8)
+        }
+        return crc ^ 0xFFFFFFFF
+    }
+
+    // MARK: - Logging
+
+    func appendLog(_ msg: String) {
+        let entry = "[\(Self.timestamp())] \(msg)"
+        if Thread.isMainThread {
+            log.append(entry)
+            if log.count > 500 { log = Array(log.suffix(500)) }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.log.append(entry)
+                if self.log.count > 500 {
+                    self.log = Array(self.log.suffix(500))
+                }
+            }
+        }
+    }
+
+    private func appendLogSync(_ msg: String) {
+        let entry = "[\(Self.timestamp())] \(msg)"
+        DispatchQueue.main.async { [weak self] in
+            self?.log.append(entry)
+        }
+    }
+
+    private static func timestamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f.string(from: Date())
+    }
+}
+#endif

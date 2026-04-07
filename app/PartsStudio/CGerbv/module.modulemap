@@ -1,0 +1,8 @@
+module CGerbv [system] {
+    header "shim.h"
+    link "gerbv"
+    link "cairo"
+    link "glib-2.0"
+    link "gobject-2.0"
+    export *
+}
