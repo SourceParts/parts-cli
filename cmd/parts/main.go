@@ -49,6 +49,13 @@ Documentation: https://source.parts/docs/cli`,
 }
 
 func main() {
+	// Apply any staged update before doing anything else.
+	// This replaces the on-disk binary so the current invocation still runs
+	// the old code but the next one will use the new version.
+	if v := update.ApplyStagedUpdate(); v != "" {
+		fmt.Fprintf(os.Stderr, "Updated to v%s (takes effect on next run)\n", v)
+	}
+
 	rootCmd.PersistentFlags().BoolVarP(&Verbose, "verbose", "v", false, "verbose output")
 
 	// Add all commands
@@ -66,11 +73,25 @@ func main() {
 		// Project operations
 		commands.Project,
 		// Manufacturing
-		commands.DFM,
+		commands.DFMPipeline,
 		commands.Fab,
+		// Quality
+		commands.OQC,
+		commands.Compliance,
+		// EDA
+		commands.EDA,
 		commands.AOI,
+		commands.Assembly,
+		commands.Logistics,
+		commands.Design,
 		commands.QC,
 		commands.Publish,
+		// Quality & Compliance
+		commands.Quality,
+		// Sales
+		commands.Sales,
+		// Supply Chain
+		commands.SupplyChain,
 		// QuarterMaster (smart query)
 		commands.Q,
 		commands.History,
@@ -89,6 +110,8 @@ func main() {
 		commands.COGs,
 		commands.Expense,
 		commands.Price,
+		// Credits
+		commands.Credits,
 		// Workflow
 		commands.Note,
 		commands.Todo,
@@ -111,63 +134,73 @@ func main() {
 		commands.Push,
 		commands.Tag,
 		commands.Release,
-		commands.Test,
+		commands.TestValidation,
+		// Post-Production
+		commands.PostProduction,
 		// Update
 		commands.Update,
+		// Uninstall
+		commands.Uninstall,
 	)
 
-	// Resolve credentials with timeout to avoid hanging on locked keyrings.
-	// OAuth tokens take priority over API keys.
+	// Resolve credentials. Priority:
+	//   1. PARTS_TOKEN env var (CI/CD, containers — skips keychain entirely)
+	//   2. OAuth tokens from keychain/file store
+	//   3. API key from keychain/file store
 	var activeKey string
 	log := logger.New(&Verbose)
 
-	type credResult struct {
-		key string
-		err error
-	}
-	ch := make(chan credResult, 1)
-	go func() {
-		// Try OAuth tokens first
-		if client.HasOAuthTokens() {
-			tokens, err := client.LoadOAuthTokens()
-			if err == nil && tokens != nil {
-				expired := time.Until(tokens.ExpiresAt) < 0
-				if time.Until(tokens.ExpiresAt) < 60*time.Second && tokens.RefreshToken != "" {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					refreshed, refreshErr := auth.Refresh(ctx, tokens.RefreshToken)
-					cancel()
-					if refreshErr == nil {
-						_ = client.SaveOAuthTokens(refreshed)
-						tokens = refreshed
-						expired = false
-					} else {
-						fmt.Fprintf(os.Stderr, "Warning: session expired and refresh failed. Run `parts auth login` to re-authenticate.\n")
+	if envToken := os.Getenv("PARTS_TOKEN"); envToken != "" {
+		activeKey = envToken
+	} else {
+		type credResult struct {
+			key string
+			err error
+		}
+		ch := make(chan credResult, 1)
+		go func() {
+			// Try OAuth tokens first
+			if client.HasOAuthTokens() {
+				tokens, err := client.LoadOAuthTokens()
+				if err == nil && tokens != nil {
+					expired := time.Until(tokens.ExpiresAt) < 0
+					if time.Until(tokens.ExpiresAt) < 60*time.Second && tokens.RefreshToken != "" {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						refreshed, refreshErr := auth.Refresh(ctx, tokens.RefreshToken)
+						cancel()
+						if refreshErr == nil {
+							_ = client.SaveOAuthTokens(refreshed)
+							tokens = refreshed
+							expired = false
+						} else {
+							fmt.Fprintf(os.Stderr, "Warning: session expired and refresh failed. Run `parts auth login` to re-authenticate.\n")
+						}
+					} else if expired {
+						fmt.Fprintf(os.Stderr, "Warning: session expired. Run `parts auth login` to re-authenticate.\n")
 					}
-				} else if expired {
-					fmt.Fprintf(os.Stderr, "Warning: session expired. Run `parts auth login` to re-authenticate.\n")
+					if !expired {
+						ch <- credResult{key: tokens.AccessToken}
+						return
+					}
+				} else if Verbose {
+					log.Printf("Warning: failed to load OAuth tokens: %v", err)
 				}
-				if !expired {
-					ch <- credResult{key: tokens.AccessToken}
-					return
-				}
-			} else if Verbose {
-				log.Printf("Warning: failed to load OAuth tokens: %v", err)
 			}
-		}
 
-		// Fall back to stored API key
-		apiKey, err := client.LoadAPIKey()
-		ch <- credResult{key: apiKey, err: err}
-	}()
+			// Fall back to stored API key
+			apiKey, err := client.LoadAPIKey()
+			ch <- credResult{key: apiKey, err: err}
+		}()
 
-	select {
-	case result := <-ch:
-		activeKey = result.key
-		if result.err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to load API key from keychain: %v\n", result.err)
+		select {
+		case result := <-ch:
+			activeKey = result.key
+			if result.err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to load credentials: %v\n", result.err)
+			}
+		case <-time.After(3 * time.Second):
+			fmt.Fprintf(os.Stderr, "Warning: credential store timed out — run `parts auth login` to re-authenticate\n")
 		}
-	case <-time.After(3 * time.Second):
-		fmt.Fprintf(os.Stderr, "Warning: keychain timed out — run `parts auth login` to re-authenticate\n")
 	}
 
 	commands.Client = &client.Client{

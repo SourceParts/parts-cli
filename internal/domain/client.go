@@ -16,7 +16,7 @@ type Client interface {
 	SetAPIKey(key string)
 
 	// Part operations
-	Add(ctx context.Context, partNumber string, w io.Writer) error
+	Add(ctx context.Context, partNumber string, opts types.AddOptions, w io.Writer) error
 	Search(ctx context.Context, query string, opts types.SearchOptions, w io.Writer) error
 	Datasheet(ctx context.Context, partNumber string, w io.Writer) error
 	Marking(ctx context.Context, partNumber string, w io.Writer) error
@@ -47,6 +47,13 @@ type Client interface {
 	Stackup(ctx context.Context, gerberZip string, opts types.StackupOptions, w io.Writer) error
 	StackupDiff(ctx context.Context, gerberA, gerberB string, opts types.StackupDiffOptions, w io.Writer) error
 
+	// EDA
+	ERC(ctx context.Context, fileName string, opts types.ERCOptions, w io.Writer) error
+	DRC(ctx context.Context, fileName string, opts types.DRCOptions, w io.Writer) error
+	ImportAltium(ctx context.Context, fileName string, outputPath string, w io.Writer) error
+	ImportAltiumBytes(ctx context.Context, fileName string) ([]byte, error)
+	EDAUpload(ctx context.Context, endpoint, filePath string, formFields map[string]string, extraFiles map[string]string, w io.Writer) error
+
 	// Inventory & Supply Chain
 	Inventory(ctx context.Context, partNumber string, w io.Writer) error
 	Cart(ctx context.Context, w io.Writer) error
@@ -62,6 +69,9 @@ type Client interface {
 	Expense(ctx context.Context, input string, w io.Writer) error
 	Price(ctx context.Context, partNumber string, opts types.PriceOptions, w io.Writer) error
 
+	// Credits
+	CreditsBalance(ctx context.Context, jsonOutput bool, w io.Writer) error
+
 	// Workflow
 	Note(ctx context.Context, note string, w io.Writer) error
 	Todo(ctx context.Context, todoItem string, w io.Writer) error
@@ -73,6 +83,15 @@ type Client interface {
 	QHistoryClear(ctx context.Context, w io.Writer) error
 	QSMD(ctx context.Context, code string, w io.Writer) error
 	QResistorColors(ctx context.Context, bands string, w io.Writer) error
+
+	// Datasheets
+	RegisterDatasheetAlias(ctx context.Context, alias, contentHash, s3Key, filename, projectID string, w io.Writer) error
+	PollDatasheetChunkStatus(ctx context.Context, jobID string, w io.Writer) error
+
+	// Raw HTTP helpers
+	RawGet(ctx context.Context, url string, w io.Writer) error
+	RawPatch(ctx context.Context, url string, jsonBody string, w io.Writer) error
+	RawPost(ctx context.Context, url string, jsonBody string, w io.Writer) error
 
 	// Local operations
 	Init(ctx context.Context, w io.Writer) error

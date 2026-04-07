@@ -287,8 +287,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica N
 .logo{width:64px;height:auto;margin:0 auto 1.5rem}
 h1{font-size:1.5rem;font-weight:600;color:#111827;margin-bottom:1rem}
 .message{color:#374151;font-size:1rem;line-height:1.6}
-.icon{width:2rem;height:2rem;border-radius:.5rem;display:inline-flex;align-items:center;
-  justify-content:center;font-size:1.25rem;margin-bottom:1rem}
+.icon{width:2rem;height:2rem;border-radius:.5rem;display:flex;align-items:center;
+  justify-content:center;font-size:1.25rem;margin:0 auto 1rem}
 .icon-success{background:rgba(16,185,129,.13);color:#10b981}
 .icon-error{background:rgba(239,68,68,.13);color:#ef4444}
 .info-box{background:#f0f9ff;border:1px solid #bae6fd;border-radius:.5rem;padding:1rem;

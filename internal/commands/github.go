@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SourceParts/parts-cli/internal/domain"
+	"github.com/SourceParts/parts-cli/internal/ghcli"
 	"github.com/SourceParts/parts-cli/internal/types"
 	"github.com/spf13/cobra"
 )
@@ -118,6 +119,26 @@ The API key is resolved in order:
 	RunE: runGithubSOP,
 }
 
+// githubIssue creates or updates a GitHub Issue from an ECN file
+var githubIssue = &cobra.Command{
+	Use:   "issue",
+	Short: "Create or update a GitHub Issue from an ECN file",
+	Long: `Create or update a GitHub Issue on the project repository from an ECN
+markdown file. Uses the local 'gh' CLI for authentication — no API keys needed.
+
+Reads YAML frontmatter from the ECN file to extract title, severity, status,
+type, and other metadata. Labels are auto-generated from the frontmatter.
+
+If --update is set and an issue with a matching ECN ID exists, it updates
+that issue instead of creating a duplicate.
+
+Requires: gh CLI installed and authenticated (gh auth login)`,
+	Example: domain.BinaryName + ` github issue --file ECO/ECN-046.md --repo owner/repo
+` + domain.BinaryName + ` github issue --file ECO/ECN-046.md --repo owner/repo --update
+` + domain.BinaryName + ` github issue --file ECO/ECN-046.md --repo owner/repo --dry-run`,
+	RunE: runGithubIssue,
+}
+
 func init() {
 	// Report flags
 	githubReport.Flags().StringP("type", "t", "", "Report type: ecn, schematic_review, dfm, dvt, dfm_review, dvt_scan, stackup_diff")
@@ -126,11 +147,13 @@ func init() {
 	githubReport.Flags().StringP("client", "c", "", "Client full name")
 	githubReport.Flags().StringP("email", "e", "", "Client email address")
 	githubReport.Flags().String("cc", "", "CC email address")
+	githubReport.Flags().String("bcc", "", "BCC email address")
 	githubReport.Flags().StringP("api-key", "k", "", "API key (overrides env var)")
 	githubReport.Flags().String("version", "", "File version (auto-extracted from filename if omitted)")
 	githubReport.Flags().String("repository", "", "Repository name (default: GITHUB_REPOSITORY env or \"unknown\")")
 	githubReport.Flags().String("branch", "", "Branch name (default: GITHUB_REF_NAME env or \"main\")")
 	githubReport.Flags().StringP("summary", "s", "", "Engineer's notes / summary text")
+	githubReport.Flags().String("thread-id", "", "Thread ID for email conversation threading")
 
 	_ = githubReport.MarkFlagRequired("type")
 	_ = githubReport.MarkFlagRequired("file")
@@ -174,9 +197,21 @@ func init() {
 	_ = githubSOP.MarkFlagRequired("client")
 	_ = githubSOP.MarkFlagRequired("email")
 
+	// Issue flags
+	githubIssue.Flags().StringP("file", "f", "", "Path to ECN markdown file")
+	githubIssue.Flags().StringP("repo", "r", "", "Target GitHub repository (owner/repo). Auto-detects from GITHUB_REPOSITORY or local gh repo.")
+	githubIssue.Flags().Bool("update", false, "Update existing issue if found by ECN ID")
+	githubIssue.Flags().Bool("dry-run", false, "Print what would be done without creating/updating")
+	githubIssue.Flags().String("milestone", "", "Assign to milestone (by name)")
+	githubIssue.Flags().StringSlice("extra-labels", nil, "Additional labels beyond auto-generated ones")
+	githubIssue.Flags().Bool("comment", false, "Add update as comment instead of replacing body")
+
+	_ = githubIssue.MarkFlagRequired("file")
+
 	Github.AddCommand(githubReport)
 	Github.AddCommand(githubCommit)
 	Github.AddCommand(githubSOP)
+	Github.AddCommand(githubIssue)
 }
 
 // resolveAPIKey resolves the GitHub API key from flag, then env vars
@@ -301,10 +336,12 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 	clientName, _ := cmd.Flags().GetString("client")
 	email, _ := cmd.Flags().GetString("email")
 	cc, _ := cmd.Flags().GetString("cc")
+	bcc, _ := cmd.Flags().GetString("bcc")
 	version, _ := cmd.Flags().GetString("version")
 	repository, _ := cmd.Flags().GetString("repository")
 	branch, _ := cmd.Flags().GetString("branch")
 	summary, _ := cmd.Flags().GetString("summary")
+	threadID, _ := cmd.Flags().GetString("thread-id")
 
 	// Validate report type
 	if !validReportTypes[reportType] {
@@ -323,6 +360,10 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return fmt.Errorf("report file is empty: %s", filePath)
 	}
+
+	// Try to extract ECN frontmatter for structured metadata
+	// Don't fail on parse error — frontmatter is optional for non-ECN reports
+	fm, _, _ := parseECNFrontmatter(string(content))
 
 	// Resolve defaults
 	fileName := filepath.Base(filePath)
@@ -358,10 +399,27 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 		ProjectName:     project,
 		ClientEmail:     email,
 		ClientCCEmail:   cc,
+		ClientBCCEmail:  bcc,
 		ClientName:      clientName,
 		IssuesCount:     issuesCount,
 		Summary:         summary,
+		ThreadID:        threadID,
 		MarkdownContent: string(content),
+	}
+
+	// Populate ECN frontmatter fields if parsed successfully
+	if fm != nil {
+		payload.ECNID = fm.ID
+		payload.ECNTitle = fm.Title
+		payload.ECNSeverity = fm.Severity
+		payload.ECNStatus = fm.Status
+		payload.ECNType = fm.Type
+		payload.ECNDisposition = fm.Disposition
+		payload.ECNAuthor = fm.Author
+		payload.ECNUpdatedDate = fm.UpdatedDate
+		if threadID == "" && fm.ThreadID != "" {
+			payload.ThreadID = fm.ThreadID
+		}
 	}
 
 	// Display info
@@ -370,6 +428,9 @@ func runGithubReport(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Client:     %s <%s>\n", clientName, email)
 	if cc != "" {
 		fmt.Printf("  CC:         %s\n", cc)
+	}
+	if bcc != "" {
+		fmt.Printf("  BCC:        %s\n", bcc)
 	}
 	fmt.Printf("  File:       %s\n", fileName)
 	if version != "" {
@@ -687,4 +748,235 @@ func runGithubSOP(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// --- GitHub Issue from ECN ---
+
+func runGithubIssue(cmd *cobra.Command, args []string) error {
+	if !ghcli.Available() {
+		return ghcli.ErrGHNotAvailable
+	}
+
+	authed, user, err := ghcli.Authenticated()
+	if err != nil {
+		return err
+	}
+	if !authed {
+		return ghcli.ErrGHNotAuthenticated
+	}
+
+	filePath, _ := cmd.Flags().GetString("file")
+	repo, _ := cmd.Flags().GetString("repo")
+	update, _ := cmd.Flags().GetBool("update")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	milestone, _ := cmd.Flags().GetString("milestone")
+	extraLabels, _ := cmd.Flags().GetStringSlice("extra-labels")
+	commentMode, _ := cmd.Flags().GetBool("comment")
+
+	// Auto-detect repo
+	if repo == "" {
+		repo = os.Getenv("GITHUB_REPOSITORY")
+	}
+	if repo == "" {
+		detected, err := ghcli.RepoFromLocal()
+		if err == nil && detected != "" {
+			repo = detected
+		}
+	}
+	if repo == "" {
+		return fmt.Errorf("--repo is required (could not auto-detect)")
+	}
+
+	// Read and parse ECN file
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read ECN file: %w", err)
+	}
+
+	fm, body, err := parseECNFrontmatter(string(content))
+	if err != nil {
+		return fmt.Errorf("failed to parse frontmatter: %w", err)
+	}
+
+	issueTitle := fmt.Sprintf("[%s] %s", fm.ID, fm.Title)
+	issueBody := buildIssueBody(fm, body, filePath)
+	labels := buildIssueLabels(fm, extraLabels)
+
+	fmt.Println("GitHub Issue from ECN")
+	fmt.Printf("  Authenticated: %s\n", user)
+	fmt.Printf("  Repository:    %s\n", repo)
+	fmt.Printf("  ECN:           %s\n", fm.ID)
+	fmt.Printf("  Title:         %s\n", issueTitle)
+	fmt.Printf("  Severity:      %s\n", fm.Severity)
+	fmt.Printf("  Status:        %s\n", fm.Status)
+	fmt.Printf("  Labels:        %s\n", strings.Join(labels, ", "))
+	if milestone != "" {
+		fmt.Printf("  Milestone:     %s\n", milestone)
+	}
+	fmt.Println()
+
+	if dryRun {
+		fmt.Println("[dry-run] Would create/update issue. No changes made.")
+		return nil
+	}
+
+	// Try to find and update existing issue
+	if update {
+		existingNum, existingURL, err := ghcli.FindIssueByTitle(repo, "["+fm.ID+"]", nil)
+		if err == nil && existingNum > 0 {
+			if commentMode {
+				err = ghcli.AddComment(repo, existingNum, issueBody)
+				if err != nil {
+					return fmt.Errorf("failed to add comment: %w", err)
+				}
+				fmt.Printf("Added comment to issue #%d: %s\n", existingNum, existingURL)
+			} else {
+				_, err = ghcli.UpdateIssue(repo, existingNum, issueBody, labels)
+				if err != nil {
+					return fmt.Errorf("failed to update issue: %w", err)
+				}
+				fmt.Printf("Updated issue #%d: %s\n", existingNum, existingURL)
+			}
+			return nil
+		}
+	}
+
+	// Create new issue
+	num, url, err := ghcli.CreateIssue(repo, issueTitle, issueBody, labels, milestone)
+	if err != nil {
+		return fmt.Errorf("failed to create issue: %w", err)
+	}
+	fmt.Printf("Created issue #%d: %s\n", num, url)
+	return nil
+}
+
+// parseECNFrontmatter extracts YAML frontmatter from an ECN markdown file.
+// Returns the parsed frontmatter, the body (after second ---), and any error.
+func parseECNFrontmatter(content string) (*types.ECNFrontmatter, string, error) {
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return nil, "", fmt.Errorf("no YAML frontmatter found (expected --- delimiters)")
+	}
+
+	fm := &types.ECNFrontmatter{}
+	for _, line := range strings.Split(parts[1], "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, ":") {
+			continue
+		}
+		idx := strings.Index(line, ":")
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		val = strings.Trim(val, "\"")
+
+		switch key {
+		case "id":
+			fm.ID = val
+		case "title":
+			fm.Title = val
+		case "type":
+			fm.Type = val
+		case "category":
+			fm.Category = val
+		case "disposition":
+			fm.Disposition = val
+		case "severity":
+			fm.Severity = val
+		case "status":
+			fm.Status = val
+		case "source":
+			fm.Source = val
+		case "affected":
+			fm.Affected = val
+		case "created_date":
+			fm.CreatedDate = val
+		case "updated_date":
+			fm.UpdatedDate = val
+		case "author":
+			fm.Author = val
+		case "thread_id":
+			fm.ThreadID = val
+		case "cross_references":
+			val = strings.Trim(val, "[]")
+			if val != "" {
+				for _, ref := range strings.Split(val, ",") {
+					fm.CrossReferences = append(fm.CrossReferences, strings.TrimSpace(ref))
+				}
+			}
+		}
+	}
+
+	if fm.ID == "" {
+		return nil, "", fmt.Errorf("frontmatter missing required 'id' field")
+	}
+
+	body := strings.TrimSpace(parts[2])
+	return fm, body, nil
+}
+
+// buildIssueBody constructs a GitHub Issue body from ECN metadata and content.
+func buildIssueBody(fm *types.ECNFrontmatter, body, filePath string) string {
+	var b strings.Builder
+
+	b.WriteString("## ECN Metadata\n\n")
+	b.WriteString("| Field | Value |\n|-------|-------|\n")
+	b.WriteString(fmt.Sprintf("| ID | %s |\n", fm.ID))
+	b.WriteString(fmt.Sprintf("| Severity | **%s** |\n", fm.Severity))
+	b.WriteString(fmt.Sprintf("| Status | %s |\n", fm.Status))
+	b.WriteString(fmt.Sprintf("| Type | %s |\n", fm.Type))
+	if fm.Category != "" {
+		b.WriteString(fmt.Sprintf("| Category | %s |\n", fm.Category))
+	}
+	b.WriteString(fmt.Sprintf("| Disposition | %s |\n", fm.Disposition))
+	if fm.Author != "" {
+		b.WriteString(fmt.Sprintf("| Author | %s |\n", fm.Author))
+	}
+	if fm.CreatedDate != "" {
+		b.WriteString(fmt.Sprintf("| Created | %s |\n", fm.CreatedDate))
+	}
+	if fm.UpdatedDate != "" {
+		b.WriteString(fmt.Sprintf("| Updated | %s |\n", fm.UpdatedDate))
+	}
+	if fm.Affected != "" {
+		b.WriteString(fmt.Sprintf("| Affected | %s |\n", fm.Affected))
+	}
+
+	if len(fm.CrossReferences) > 0 {
+		b.WriteString("\n## Cross References\n\n")
+		for _, ref := range fm.CrossReferences {
+			b.WriteString(fmt.Sprintf("- %s\n", ref))
+		}
+	}
+
+	b.WriteString("\n---\n\n")
+	b.WriteString(body)
+	b.WriteString("\n\n---\n")
+	b.WriteString(fmt.Sprintf("*Generated by `parts github issue` from `%s`*\n", filePath))
+
+	return b.String()
+}
+
+// buildIssueLabels generates GitHub Issue labels from ECN frontmatter.
+func buildIssueLabels(fm *types.ECNFrontmatter, extra []string) []string {
+	labels := []string{"ecn"}
+
+	if fm.Severity != "" {
+		labels = append(labels, "severity:"+normalize(fm.Severity))
+	}
+	if fm.Status != "" {
+		labels = append(labels, "status:"+normalize(fm.Status))
+	}
+	if fm.Type != "" {
+		labels = append(labels, "type:"+normalize(fm.Type))
+	}
+	if fm.Disposition != "" {
+		labels = append(labels, "disposition:"+normalize(fm.Disposition))
+	}
+
+	labels = append(labels, extra...)
+	return labels
+}
+
+func normalize(s string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", "-"))
 }
