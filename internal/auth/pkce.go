@@ -68,6 +68,7 @@ func Login(ctx context.Context, out io.Writer) (*OAuthTokens, error) {
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
 		"state":                 {state},
+		"prompt":                {"login"},
 	}
 	authURL := fmt.Sprintf("https://%s/authorize?%s", Auth0Domain, params.Encode())
 
@@ -272,6 +273,13 @@ func openBrowser(rawURL string) error {
 	case "windows":
 		return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL).Start()
 	default:
+		// Try google-chrome first (Firefox has issues with Auth0 Universal Login),
+		// then chromium-browser, then fall back to xdg-open.
+		for _, browser := range []string{"google-chrome", "chromium-browser", "xdg-open"} {
+			if path, err := exec.LookPath(browser); err == nil {
+				return exec.Command(path, rawURL).Start()
+			}
+		}
 		return exec.Command("xdg-open", rawURL).Start()
 	}
 }
