@@ -208,9 +208,17 @@ func init() {
 	authLogin.Flags().StringVar(&loginAPIKeyFlag, "api-key", "", "API key to use for authentication (skips browser login)")
 }
 
-// fetchPlan queries the credits API for the user's plan tier.
-// Returns "Trial", "Pro", etc. or "Contact Support" on failure.
+// fetchPlan queries the user profile and credits API to determine the user's plan.
+// Admin/owner users get "Admin". Regular users see their billing tier.
 func fetchPlan(accessToken string) string {
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+
+	// Check user role — admin users get "Admin" plan display
+	if role := fetchUserRole(httpClient, accessToken); role == "super_admin" || role == "owner" || role == "admin" {
+		return "Admin"
+	}
+
+	// For regular users, fetch billing tier from credits endpoint
 	req, err := http.NewRequest("GET", "https://"+domain.API+"/v1/credits/balance", nil)
 	if err != nil {
 		return "Contact Support"
@@ -218,7 +226,6 @@ func fetchPlan(accessToken string) string {
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", domain.BinaryName+"/1.0")
 
-	httpClient := &http.Client{Timeout: 5 * time.Second}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "Contact Support"
@@ -240,9 +247,34 @@ func fetchPlan(accessToken string) string {
 		return "Contact Support"
 	}
 
-	tier := result.Data.Tier
-	if tier == "" {
+	if result.Data.Tier == "" {
 		return "Contact Support"
 	}
-	return tier
+	return result.Data.Tier
+}
+
+func fetchUserRole(httpClient *http.Client, accessToken string) string {
+	req, err := http.NewRequest("GET", "https://"+domain.API+"/v1/users/me", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", domain.BinaryName+"/1.0")
+
+	resp, err := httpClient.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Data struct {
+			Role string `json:"role"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return ""
+	}
+	return result.Data.Role
 }
