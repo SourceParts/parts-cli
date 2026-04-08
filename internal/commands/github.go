@@ -28,6 +28,7 @@ var validReportTypes = map[string]bool{
 	"dfm_review":        true,
 	"dvt_scan":          true,
 	"stackup_diff":      true,
+	"rtm":               true,
 }
 
 // Valid SOP types accepted by the notify/sop endpoint
@@ -141,7 +142,7 @@ Requires: gh CLI installed and authenticated (gh auth login)`,
 
 func init() {
 	// Report flags
-	githubReport.Flags().StringP("type", "t", "", "Report type: ecn, schematic_review, dfm, dvt, dfm_review, dvt_scan, stackup_diff")
+	githubReport.Flags().StringP("type", "t", "", "Report type: ecn, schematic_review, dfm, dvt, dfm_review, dvt_scan, stackup_diff, rtm")
 	githubReport.Flags().StringP("file", "f", "", "Path to markdown report file")
 	githubReport.Flags().StringP("project", "p", "", "Project name")
 	githubReport.Flags().StringP("client", "c", "", "Client full name")
