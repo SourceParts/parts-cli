@@ -1,4 +1,4 @@
 package domain
 
-// Version is the current CLI version
-const Version = "0.10.0"
+// Version is the current CLI version, set at build time via ldflags
+var Version = "0.11.1"
