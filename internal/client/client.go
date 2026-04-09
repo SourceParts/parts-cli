@@ -1865,6 +1865,22 @@ func (c *Client) DRC(ctx context.Context, fileName string, opts types.DRCOptions
 	return c.EDAUpload(ctx, domain.Endpoint_DRC, fileName, fields, extras, w)
 }
 
+// SchNetlist exports a KiCad XML netlist from a schematic.
+func (c *Client) SchNetlist(ctx context.Context, fileName string, opts types.NetlistExportOptions, w io.Writer) error {
+	fields := map[string]string{"format": opts.Format}
+	return c.EDAUpload(ctx, domain.Endpoint_SchematicNetlist, fileName, fields, nil, w)
+}
+
+// PCBExport exports a PCB in the specified format via kicad-cli on the server.
+func (c *Client) PCBExport(ctx context.Context, fileName string, opts types.ExportOptions, w io.Writer) error {
+	return c.EDAUpload(ctx, domain.Endpoint_PCBExport+opts.Format, fileName, opts.FormFields, nil, w)
+}
+
+// SchExport exports a schematic in the specified format via kicad-cli on the server.
+func (c *Client) SchExport(ctx context.Context, fileName string, opts types.ExportOptions, w io.Writer) error {
+	return c.EDAUpload(ctx, domain.Endpoint_SchExport+opts.Format, fileName, opts.FormFields, nil, w)
+}
+
 // ImportAltium converts an Altium .SchDoc to KiCad .kicad_sch.
 // If outputPath is non-empty the converted file is saved there; otherwise the
 // response is streamed to w.

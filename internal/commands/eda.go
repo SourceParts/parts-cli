@@ -26,11 +26,13 @@ import (
 var EDA = &cobra.Command{
 	Use:   "eda",
 	Short: "EDA design checks and file conversion",
-	Long: `Run electrical and design rule checks, and convert between EDA formats.
+	Long: `Run electrical and design rule checks, export, and convert EDA files.
 
 Subcommands:
   erc       Run Electrical Rules Check on a KiCad schematic
   drc       Run Design Rules Check on a KiCad PCB
+  netlist   Export KiCad XML netlist from a schematic
+  export    Export PCB/schematic in various formats (STEP, IPC-2581, BOM, etc.)
   import    Convert foreign EDA files to KiCad format`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cmd.Help()
@@ -83,6 +85,286 @@ Returns a JSON report with violations grouped by severity.`,
 		printERCReport(buf.Bytes())
 		return nil
 	},
+}
+
+// =============================================================================
+// Netlist Export
+// =============================================================================
+
+var edaNetlist = &cobra.Command{
+	Use:   "netlist <file.kicad_sch>",
+	Short: "Export a KiCad XML netlist from a schematic",
+	Long: `Upload a .kicad_sch file and export a netlist via the server.
+Returns XML (raw KiCad netlist) or JSON (parsed nets and components).`,
+	Args:    cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` eda netlist board.kicad_sch --format json`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		schFile := args[0]
+		if _, err := os.Stat(schFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", schFile)
+		}
+		if !strings.HasSuffix(strings.ToLower(schFile), ".kicad_sch") {
+			return fmt.Errorf("expected .kicad_sch file, got: %s", filepath.Base(schFile))
+		}
+
+		format, _ := cmd.Flags().GetString("format")
+		output, _ := cmd.Flags().GetString("output")
+
+		opts := types.NetlistExportOptions{
+			Format: format,
+		}
+
+		var buf bytes.Buffer
+		if err := Client.SchNetlist(ctx, schFile, opts, &buf); err != nil {
+			return err
+		}
+
+		if output != "" {
+			if err := os.WriteFile(output, buf.Bytes(), 0644); err != nil {
+				return fmt.Errorf("failed to write output: %w", err)
+			}
+			fmt.Printf("Saved: %s\n", output)
+			return nil
+		}
+
+		os.Stdout.Write(buf.Bytes())
+		fmt.Println()
+		return nil
+	},
+}
+
+// =============================================================================
+// Export — kicad-cli format exports
+// =============================================================================
+
+var edaExport = &cobra.Command{
+	Use:   "export",
+	Short: "Export PCB or schematic in various formats",
+	Long: `Export PCB or schematic files via kicad-cli on the server.
+
+Subcommands:
+  pcb   Export a .kicad_pcb file (step, glb, vrml, ipc2581, dxf, pdf, pos, odb, gencad, brep, stl, ply, xao)
+  sch   Export a .kicad_sch file (bom, pdf, dxf, hpgl, ps)`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+	},
+}
+
+var edaExportPCB = &cobra.Command{
+	Use:   "pcb <file.kicad_pcb>",
+	Short: "Export a PCB file in the specified format",
+	Long: `Export a .kicad_pcb file via kicad-cli on the server.
+
+Supported formats:
+  step      STEP 3D model
+  glb       glTF Binary 3D model
+  vrml      VRML 3D model
+  ipc2581   IPC-2581B XML
+  dxf       DXF drawing
+  pdf       PDF document
+  pos       Pick-and-place position file
+  odb       ODB++ archive
+  gencad    GenCAD
+  brep      OpenCascade BREP
+  stl       STL 3D mesh
+  ply       PLY 3D mesh
+  xao       XAO (SALOME geometry)`,
+	Args:    cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` eda export pcb board.kicad_pcb --format step -o board.step`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		pcbFile := args[0]
+		if _, err := os.Stat(pcbFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", pcbFile)
+		}
+		if !strings.HasSuffix(strings.ToLower(pcbFile), ".kicad_pcb") {
+			return fmt.Errorf("expected .kicad_pcb file, got: %s", filepath.Base(pcbFile))
+		}
+
+		format, _ := cmd.Flags().GetString("format")
+		output, _ := cmd.Flags().GetString("output")
+
+		fields := make(map[string]string)
+		// Pass through format-specific flags as form fields
+		if v, _ := cmd.Flags().GetString("layers"); v != "" {
+			fields["layers"] = v
+		}
+		if v, _ := cmd.Flags().GetString("side"); v != "" {
+			fields["side"] = v
+		}
+		if v, _ := cmd.Flags().GetString("units"); v != "" {
+			fields["units"] = v
+		}
+		if v, _ := cmd.Flags().GetString("precision"); v != "" {
+			fields["precision"] = v
+		}
+		if v, _ := cmd.Flags().GetBool("board-only"); v {
+			fields["board_only"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("no-dnp"); v {
+			fields["no_dnp"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("include-tracks"); v {
+			fields["include_tracks"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("include-zones"); v {
+			fields["include_zones"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("compress"); v {
+			fields["compress"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("smd-only"); v {
+			fields["smd_only"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("exclude-dnp"); v {
+			fields["exclude_dnp"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("black-and-white"); v {
+			fields["black_and_white"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("mirror"); v {
+			fields["mirror"] = "true"
+		}
+
+		opts := types.ExportOptions{
+			Format:     format,
+			FormFields: fields,
+		}
+
+		var buf bytes.Buffer
+		if err := Client.PCBExport(ctx, pcbFile, opts, &buf); err != nil {
+			return err
+		}
+
+		return writeExportResult(buf.Bytes(), output, format)
+	},
+}
+
+var edaExportSch = &cobra.Command{
+	Use:   "sch <file.kicad_sch>",
+	Short: "Export a schematic file in the specified format",
+	Long: `Export a .kicad_sch file via kicad-cli on the server.
+
+Supported formats:
+  bom    Bill of Materials (CSV/TSV)
+  pdf    PDF document
+  dxf    DXF drawing
+  hpgl   HPGL plotter format
+  ps     PostScript`,
+	Args:    cobra.ExactArgs(1),
+	Example: domain.BinaryName + ` eda export sch main.kicad_sch --format bom -o bom.csv`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		schFile := args[0]
+		if _, err := os.Stat(schFile); os.IsNotExist(err) {
+			return fmt.Errorf("file not found: %s", schFile)
+		}
+		if !strings.HasSuffix(strings.ToLower(schFile), ".kicad_sch") {
+			return fmt.Errorf("expected .kicad_sch file, got: %s", filepath.Base(schFile))
+		}
+
+		format, _ := cmd.Flags().GetString("format")
+		output, _ := cmd.Flags().GetString("output")
+
+		fields := make(map[string]string)
+		if v, _ := cmd.Flags().GetString("pages"); v != "" {
+			fields["pages"] = v
+		}
+		if v, _ := cmd.Flags().GetString("fields"); v != "" {
+			fields["fields"] = v
+		}
+		if v, _ := cmd.Flags().GetString("group-by"); v != "" {
+			fields["group_by"] = v
+		}
+		if v, _ := cmd.Flags().GetString("sort-field"); v != "" {
+			fields["sort_field"] = v
+		}
+		if v, _ := cmd.Flags().GetString("format-preset"); v != "" {
+			fields["format_preset"] = v
+		}
+		if v, _ := cmd.Flags().GetBool("black-and-white"); v {
+			fields["black_and_white"] = "true"
+		}
+		if v, _ := cmd.Flags().GetBool("exclude-dnp"); v {
+			fields["exclude_dnp"] = "true"
+		}
+
+		opts := types.ExportOptions{
+			Format:     format,
+			FormFields: fields,
+		}
+
+		var buf bytes.Buffer
+		if err := Client.SchExport(ctx, schFile, opts, &buf); err != nil {
+			return err
+		}
+
+		return writeExportResult(buf.Bytes(), output, format)
+	},
+}
+
+// writeExportResult decodes the API response and saves or prints the export.
+func writeExportResult(data []byte, output, format string) error {
+	var result struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		Data   struct {
+			FileBase64 string `json:"file_base64"`
+			Content    string `json:"content"`
+			Filename   string `json:"filename"`
+			SizeBytes  int    `json:"size_bytes"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(data, &result); err != nil {
+		// Not JSON — might be raw content
+		if output != "" {
+			if err := os.WriteFile(output, data, 0644); err != nil {
+				return fmt.Errorf("failed to write output: %w", err)
+			}
+			fmt.Printf("Saved: %s (%d bytes)\n", output, len(data))
+			return nil
+		}
+		os.Stdout.Write(data)
+		return nil
+	}
+
+	if result.Error != "" {
+		return fmt.Errorf("export failed: %s", result.Error)
+	}
+
+	var fileData []byte
+	if result.Data.FileBase64 != "" {
+		decoded, err := base64.StdEncoding.DecodeString(result.Data.FileBase64)
+		if err != nil {
+			return fmt.Errorf("failed to decode response: %w", err)
+		}
+		fileData = decoded
+	} else if result.Data.Content != "" {
+		fileData = []byte(result.Data.Content)
+	} else {
+		return fmt.Errorf("empty response from server")
+	}
+
+	if output == "" {
+		output = result.Data.Filename
+	}
+	if output == "" {
+		output = "export." + format
+	}
+
+	if err := os.WriteFile(output, fileData, 0644); err != nil {
+		return fmt.Errorf("failed to write output: %w", err)
+	}
+	fmt.Printf("Saved: %s (%d bytes)\n", output, len(fileData))
+	return nil
 }
 
 // =============================================================================
@@ -903,8 +1185,45 @@ func init() {
 	// Sch-annotate flags
 	edaSchAnnotate.Flags().Bool("apply", false, "Apply changes to the file (default: show diff only)")
 
+	// Netlist flags
+	edaNetlist.Flags().String("format", "xml", "Output format: xml or json")
+	edaNetlist.Flags().StringP("output", "o", "", "Output file path (default: stdout)")
+
+	// Export PCB flags
+	edaExportPCB.Flags().String("format", "step", "Export format: step, glb, vrml, ipc2581, dxf, pdf, pos, odb, gencad, brep, stl, ply, xao")
+	edaExportPCB.Flags().StringP("output", "o", "", "Output file path")
+	edaExportPCB.Flags().String("layers", "", "Comma-separated layer names (dxf, pdf)")
+	edaExportPCB.Flags().String("side", "", "Side: front, back, both (pos)")
+	edaExportPCB.Flags().String("units", "", "Units: mm, in, mil (dxf, pos, vrml)")
+	edaExportPCB.Flags().String("precision", "", "Precision 3-6 (ipc2581, odb)")
+	edaExportPCB.Flags().Bool("board-only", false, "Board only, no components (step, glb, stl, ply)")
+	edaExportPCB.Flags().Bool("no-dnp", false, "Exclude DNP components (step, glb, pos, gencad, stl, ply)")
+	edaExportPCB.Flags().Bool("include-tracks", false, "Include tracks in 3D export (step, glb, stl, ply)")
+	edaExportPCB.Flags().Bool("include-zones", false, "Include zones in 3D export (step, glb, stl, ply)")
+	edaExportPCB.Flags().Bool("compress", false, "Compress output (ipc2581)")
+	edaExportPCB.Flags().Bool("smd-only", false, "SMD components only (pos)")
+	edaExportPCB.Flags().Bool("exclude-dnp", false, "Exclude DNP from position file (pos)")
+	edaExportPCB.Flags().Bool("black-and-white", false, "Black and white output (pdf)")
+	edaExportPCB.Flags().Bool("mirror", false, "Mirror output (pdf)")
+
+	// Export Sch flags
+	edaExportSch.Flags().String("format", "pdf", "Export format: bom, pdf, dxf, hpgl, ps")
+	edaExportSch.Flags().StringP("output", "o", "", "Output file path")
+	edaExportSch.Flags().String("pages", "", "Page numbers (comma-separated)")
+	edaExportSch.Flags().String("fields", "", "BOM fields (comma-separated)")
+	edaExportSch.Flags().String("group-by", "", "BOM group-by fields (comma-separated)")
+	edaExportSch.Flags().String("sort-field", "", "BOM sort field")
+	edaExportSch.Flags().String("format-preset", "CSV", "BOM format: CSV or TSV")
+	edaExportSch.Flags().Bool("black-and-white", false, "Black and white output")
+	edaExportSch.Flags().Bool("exclude-dnp", false, "Exclude DNP components (bom)")
+
+	edaExport.AddCommand(edaExportPCB)
+	edaExport.AddCommand(edaExportSch)
+
 	EDA.AddCommand(edaERC)
 	EDA.AddCommand(edaDRC)
+	EDA.AddCommand(edaNetlist)
+	EDA.AddCommand(edaExport)
 	EDA.AddCommand(edaImport)
 	EDA.AddCommand(edaDXF)
 	EDA.AddCommand(edaCtrl)

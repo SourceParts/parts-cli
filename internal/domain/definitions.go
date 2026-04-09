@@ -279,6 +279,11 @@ const Endpoint_SchematicDiff     = V1Prefix + `/eda/schematic/diff`
 const Endpoint_SchematicRender   = V1Prefix + `/eda/schematic/render`
 const Endpoint_RerouteSuggest    = V1Prefix + `/eda/reroute/suggest`
 const Endpoint_FootprintRender   = V1Prefix + `/eda/footprint/render`
+const Endpoint_SchematicNetlist  = V1Prefix + `/eda/schematic/netlist`
+
+// Export endpoint patterns — append format name (e.g. "step", "ipc2581")
+const Endpoint_PCBExport = V1Prefix + `/eda/pcb/export/`
+const Endpoint_SchExport = V1Prefix + `/eda/sch/export/`
 
 // =============================================================================
 // CLI UPDATE
