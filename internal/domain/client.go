@@ -50,6 +50,9 @@ type Client interface {
 	// EDA
 	ERC(ctx context.Context, fileName string, opts types.ERCOptions, w io.Writer) error
 	DRC(ctx context.Context, fileName string, opts types.DRCOptions, w io.Writer) error
+	SchNetlist(ctx context.Context, fileName string, opts types.NetlistExportOptions, w io.Writer) error
+	PCBExport(ctx context.Context, fileName string, opts types.ExportOptions, w io.Writer) error
+	SchExport(ctx context.Context, fileName string, opts types.ExportOptions, w io.Writer) error
 	ImportAltium(ctx context.Context, fileName string, outputPath string, w io.Writer) error
 	ImportAltiumBytes(ctx context.Context, fileName string) ([]byte, error)
 	EDAUpload(ctx context.Context, endpoint, filePath string, formFields map[string]string, extraFiles map[string]string, w io.Writer) error
