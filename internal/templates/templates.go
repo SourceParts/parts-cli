@@ -52,7 +52,7 @@ func PCBTemplate() Template {
 			{Path: "IQC", Description: "Incoming Quality Control", GitKeep: true},
 			{Path: "DFT", Description: "Design for Test", GitKeep: true},
 			{Path: "SOP", Description: "Standard Operating Procedures", GitKeep: true},
-			{Path: "PRD", Description: "Product Requirements Documents", GitKeep: true},
+			{Path: "PRD", Description: "Product Requirements Documents", GitKeep: false},
 			{Path: "Mechanical", Description: "Mechanical design files", GitKeep: true},
 			{Path: "Mechanical/3D", Description: "3D models and STEP files", GitKeep: true},
 		},
@@ -62,6 +62,7 @@ func PCBTemplate() Template {
 			{Path: "LICENSE.md", TemplateName: "LICENSE.md.tmpl"},
 			{Path: ".gitignore", TemplateName: "gitignore.tmpl"},
 			{Path: ".parts/config.yaml", TemplateName: "config.yaml.tmpl"},
+			{Path: "PRD/PRD.md", TemplateName: "PRD.md.tmpl"},
 		},
 	}
 }
