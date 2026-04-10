@@ -1,0 +1,54 @@
+# {{.Name}}
+
+{{if .Description}}{{.Description}}{{else}}A DFM project managed by Source Parts.{{end}}
+
+## Project Information
+
+- **Type:** {{.Type}}
+{{- if .Author}}
+- **Author:** {{.Author}}
+{{- end}}
+{{- if .Organization}}
+- **Organization:** {{.Organization}}
+{{- end}}
+- **Created:** {{.CreatedAt.Format "2006-01-02"}}
+
+## Directory Structure
+
+| Directory | Purpose |
+|-----------|---------|
+| `BOM/{{.Revision}}/` | Bill of Materials files |
+| `Datasheets/` | Component datasheets |
+| `DRC/` | Design Rule Check reports |
+| `ERC/` | Electrical Rule Check reports |
+| `ECO/` | Engineering Change Orders |
+| `PCB/{{.Revision}}/` | PCB design files |
+| `Original_Files/` | Client submissions and source files |
+| `Reports/` | DFM analysis and review reports |
+| `IQC/` | Incoming Quality Control |
+| `DFT/` | Design for Test |
+| `SOP/` | Standard Operating Procedures |
+| `scripts/` | Automation and utility scripts |
+
+## Getting Started
+
+1. Place original design files in `Original_Files/`
+2. Run DFM analysis: `parts dfm`
+3. Review generated reports in `Reports/`
+
+## Source Parts CLI
+
+This project uses the Source Parts CLI for DFM operations.
+
+```bash
+# Check project status
+parts status
+
+# Run DFM analysis
+parts dfm
+
+# Generate reports
+parts report
+```
+
+For more information, visit [source.parts](https://source.parts)

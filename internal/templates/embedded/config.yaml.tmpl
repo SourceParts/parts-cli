@@ -1,0 +1,52 @@
+version: "1.0"
+
+project:
+  name: "{{.Name}}"
+  type: "{{.Type}}"
+  revision: "{{.Revision}}"
+{{- if .Description}}
+  description: "{{.Description}}"
+{{- end}}
+{{- if .Author}}
+  author: "{{.Author}}"
+{{- end}}
+{{- if .Organization}}
+  organization: "{{.Organization}}"
+{{- end}}
+{{- if .ClientName}}
+  client_name: "{{.ClientName}}"
+{{- end}}
+{{- if .ClientEmail}}
+  client_email: "{{.ClientEmail}}"
+{{- end}}
+  created_at: "{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}"
+
+fabrication:
+  board_name: "{{.Name}}"
+  prefix: "{{.Name}}"
+
+# BOM settings
+bom:
+  directory: "BOM"
+  formats:
+    - xlsx
+    - xls
+    - csv
+
+# DFM settings
+dfm:
+  enabled: true
+  rules:
+    pcb:
+      min_trace_width: "0.15mm"
+      min_spacing: "0.15mm"
+      min_drill: "0.3mm"
+    assembly:
+      min_component_spacing: "0.5mm"
+
+# Report settings
+reports:
+  directory: "Reports"
+  formats:
+    - markdown
+    - pdf
