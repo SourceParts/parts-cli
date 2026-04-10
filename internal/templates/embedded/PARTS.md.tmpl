@@ -1,0 +1,63 @@
+# Parts Project Configuration
+
+## Project Details
+
+- **Name:** {{.Name}}
+- **Type:** {{.Type}}
+{{- if .Description}}
+- **Description:** {{.Description}}
+{{- end}}
+{{- if .Author}}
+- **Author:** {{.Author}}
+{{- end}}
+{{- if .Organization}}
+- **Organization:** {{.Organization}}
+{{- end}}
+- **Created:** {{.CreatedAt.Format "2006-01-02"}}
+
+## Repository Structure
+
+- **BOM/{{.Revision}}/** — Bill of Materials files
+- **PCB/{{.Revision}}/** — PCB design files
+- **ECO/** — Engineering Change Orders
+- **Datasheets/** — Component datasheets
+- **IQC/** — Incoming Quality Control
+- **DFT/** — Design for Test
+- **DRC/** — Design Rule Check reports
+- **ERC/** — Electrical Rule Check reports
+- **Reports/** — Analysis and review reports
+- **SOP/** — Standard Operating Procedures
+- **Original_Files/** — Client submissions and source files
+
+## BOM Configuration
+
+Place Bill of Materials files in the `BOM/{{.Revision}}/` directory.
+
+Supported formats:
+- Excel (.xlsx, .xls)
+- CSV (.csv)
+
+## DFM Rules
+
+Configure DFM rules for this project:
+
+```yaml
+dfm:
+  pcb:
+    min_trace_width: 0.15mm
+    min_spacing: 0.15mm
+    min_drill: 0.3mm
+  assembly:
+    min_component_spacing: 0.5mm
+```
+
+## Reports
+
+Generated reports are stored in `Reports/`:
+- DFM analysis reports
+- BOM cost analysis
+- Manufacturing feasibility
+
+## Notes
+
+Add project-specific notes here.
