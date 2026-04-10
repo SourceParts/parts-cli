@@ -1,0 +1,136 @@
+# Product Requirements Document — {{.Name}}
+
+| Field | Value |
+|-------|-------|
+| **Project** | {{.Name}} |
+| **Revision** | {{.Revision}} |
+| **Date** | {{.CreatedAt.Format "2006-01-02"}} |
+{{- if .Author}}
+| **Author** | {{.Author}} |
+{{- end}}
+{{- if .Organization}}
+| **Organization** | {{.Organization}} |
+{{- end}}
+{{- if .ClientName}}
+| **Client** | {{.ClientName}} |
+{{- end}}
+| **Status** | Draft |
+
+---
+
+## 1. Overview
+
+Brief description of the product, its purpose, and the problem it solves.
+
+## 2. Objectives
+
+- [ ] Primary objective
+- [ ] Secondary objective
+
+## 3. Functional Requirements
+
+### 3.1 Electrical
+
+| ID | Requirement | Priority | Verification |
+|----|-------------|----------|--------------|
+| EL-001 | | Must | |
+| EL-002 | | Must | |
+
+### 3.2 Mechanical
+
+| ID | Requirement | Priority | Verification |
+|----|-------------|----------|--------------|
+| ME-001 | | Must | |
+| ME-002 | | Must | |
+
+### 3.3 Firmware / Software
+
+| ID | Requirement | Priority | Verification |
+|----|-------------|----------|--------------|
+| FW-001 | | Must | |
+| FW-002 | | Must | |
+
+## 4. Non-Functional Requirements
+
+### 4.1 Environmental
+
+| ID | Requirement | Priority | Verification |
+|----|-------------|----------|--------------|
+| ENV-001 | Operating temperature range: | Must | |
+| ENV-002 | Storage temperature range: | Must | |
+| ENV-003 | Humidity: | Should | |
+
+### 4.2 Regulatory / Compliance
+
+| ID | Requirement | Priority | Verification |
+|----|-------------|----------|--------------|
+| REG-001 | | Must | |
+
+### 4.3 Reliability
+
+| ID | Requirement | Priority | Verification |
+|----|-------------|----------|--------------|
+| REL-001 | | Should | |
+
+## 5. Physical Specifications
+
+| Parameter | Target | Tolerance |
+|-----------|--------|-----------|
+| PCB dimensions (L x W) | | |
+| Board thickness | | |
+| Layer count | | |
+| Weight | | |
+| Connector type(s) | | |
+
+## 6. Power Requirements
+
+| Parameter | Value |
+|-----------|-------|
+| Input voltage range | |
+| Max current draw | |
+| Typical current draw | |
+| Sleep current | |
+| Battery type (if applicable) | |
+
+## 7. Interfaces
+
+| Interface | Connector | Protocol | Notes |
+|-----------|-----------|----------|-------|
+| | | | |
+
+## 8. Bill of Materials Targets
+
+| Parameter | Target |
+|-----------|--------|
+| Target BOM cost (qty 1) | |
+| Target BOM cost (qty 1000) | |
+| Critical / long-lead components | |
+
+## 9. Test Requirements
+
+| Test | Method | Pass Criteria |
+|------|--------|---------------|
+| | | |
+
+## 10. Schedule
+
+| Milestone | Target Date | Status |
+|-----------|-------------|--------|
+| PRD sign-off | | |
+| Schematic review | | |
+| PCB layout review | | |
+| Prototype build (EVT) | | |
+| Design validation (DVT) | | |
+| Production release (PVT) | | |
+
+## 11. Risks and Mitigations
+
+| Risk | Impact | Likelihood | Mitigation |
+|------|--------|------------|------------|
+| | | | |
+
+## 12. Revision History
+
+| Rev | Date | Author | Changes |
+|-----|------|--------|---------|
+| {{.Revision}} | {{.CreatedAt.Format "2006-01-02"}} | {{if .Author}}{{.Author}}{{else}}TBD{{end}} | Initial draft |
