@@ -36,7 +36,6 @@ Subcommands:
   diff         Compare two gerber revisions with layer-by-layer diff PDF
   testpoints   Generate test point report from position file
   quote        Get fabrication or assembly quotation
-  machine      Machine SD card operations (load program files)
   release      Create a fabrication or assembly release package
 
 Examples:
@@ -512,8 +511,141 @@ When a BOM file is provided, signal names are extracted from the Value column.`,
 ` + domain.BinaryName + ` fab tp positions.csv --bom BOM/bom.csv
 ` + domain.BinaryName + ` fab testpoints positions.csv --rows 3 --cols 3 --gerbers production.zip`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Test points generation feature coming soon!")
-		fmt.Println("This will filter TP-prefix designators and generate a test point report.")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		positionFile := args[0]
+
+		if _, err := os.Stat(positionFile); os.IsNotExist(err) {
+			return fmt.Errorf("position file not found: %s", positionFile)
+		}
+		if testpointsOutline != "" {
+			if _, err := os.Stat(testpointsOutline); os.IsNotExist(err) {
+				return fmt.Errorf("outline file not found: %s", testpointsOutline)
+			}
+		}
+		if testpointsGerbers != "" {
+			if _, err := os.Stat(testpointsGerbers); os.IsNotExist(err) {
+				return fmt.Errorf("gerbers file not found: %s", testpointsGerbers)
+			}
+		}
+		if testpointsBom != "" {
+			if _, err := os.Stat(testpointsBom); os.IsNotExist(err) {
+				return fmt.Errorf("BOM file not found: %s", testpointsBom)
+			}
+		}
+
+		fmt.Printf("Generating test point report for: %s\n", filepath.Base(positionFile))
+		if testpointsRows > 1 || testpointsCols > 1 {
+			fmt.Printf("Panel configuration: %dx%d (%d positions)\n", testpointsRows, testpointsCols, testpointsRows*testpointsCols)
+		}
+
+		var requestBody bytes.Buffer
+		writer := multipart.NewWriter(&requestBody)
+
+		if err := addFileToMultipart(writer, "file", positionFile); err != nil {
+			return fmt.Errorf("failed to add position file: %w", err)
+		}
+		if testpointsOutline != "" {
+			if err := addFileToMultipart(writer, "outline", testpointsOutline); err != nil {
+				return fmt.Errorf("failed to add outline file: %w", err)
+			}
+		}
+		if testpointsGerbers != "" {
+			if err := addFileToMultipart(writer, "gerbers", testpointsGerbers); err != nil {
+				return fmt.Errorf("failed to add gerbers file: %w", err)
+			}
+		}
+		if testpointsBom != "" {
+			if err := addFileToMultipart(writer, "bom", testpointsBom); err != nil {
+				return fmt.Errorf("failed to add BOM file: %w", err)
+			}
+		}
+
+		if testpointsBoard != "" {
+			writer.WriteField("board_name", testpointsBoard)
+		}
+		if testpointsPrefix != "" {
+			writer.WriteField("prefix", testpointsPrefix)
+		}
+		if testpointsRows > 1 {
+			writer.WriteField("rows", fmt.Sprintf("%d", testpointsRows))
+		}
+		if testpointsCols > 1 {
+			writer.WriteField("cols", fmt.Sprintf("%d", testpointsCols))
+		}
+		if testpointsAssemble != "" {
+			writer.WriteField("assemble", testpointsAssemble)
+		}
+		if testpointsSide != "" {
+			writer.WriteField("side", testpointsSide)
+		}
+		if testpointsFormat != "" {
+			writer.WriteField("format", testpointsFormat)
+		}
+
+		writer.Close()
+
+		url := fmt.Sprintf("https://%s%s", domain.API, domain.Endpoint_ManufacturingTestpoints)
+		req, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+		if apiKey := Client.GetAPIKey(); apiKey != "" {
+			req.Header.Set("X-API-Key", apiKey)
+		}
+
+		fmt.Println("\nUploading files...")
+		uploadBar := progressbar.DefaultBytes(int64(requestBody.Len()), "Upload")
+		progressRdr := &progressReader{reader: &requestBody, bar: uploadBar}
+		req.Body = io.NopCloser(progressRdr)
+		req.ContentLength = int64(requestBody.Len())
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		}
+
+		fmt.Println("\n\nProcessing...")
+
+		responseSize := resp.ContentLength
+		if responseSize <= 0 {
+			responseSize = 10 * 1024 * 1024
+		}
+		downloadBar := progressbar.DefaultBytes(responseSize, "Download")
+
+		var responseBuffer bytes.Buffer
+		if _, err := io.Copy(io.MultiWriter(&responseBuffer, downloadBar), resp.Body); err != nil {
+			return fmt.Errorf("failed to download response: %w", err)
+		}
+		fmt.Println()
+
+		outputDir := testpointsOutput
+		if outputDir == "" {
+			outputDir = "."
+		}
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return fmt.Errorf("failed to create output directory: %w", err)
+		}
+
+		extracted, err := extractZipToDir(responseBuffer.Bytes(), outputDir)
+		if err != nil {
+			return fmt.Errorf("failed to extract output: %w", err)
+		}
+
+		fmt.Println("\n✓ Test point report saved:")
+		for _, name := range extracted {
+			fmt.Printf("  %s\n", filepath.Join(outputDir, name))
+		}
+
 		return nil
 	},
 }
@@ -548,41 +680,103 @@ including COGS (Cost of Goods Sold).`,
 ` + domain.BinaryName + ` fab quote gerbers.zip --assembly --bom bom.csv
 ` + domain.BinaryName + ` fab quote gerbers.zip --surface-finish ENIG --color black`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Quotation system coming soon!")
-		fmt.Printf("Would quote for: %s\n", args[0])
-		fmt.Printf("  Quantity: %d boards\n", quoteQuantity)
-		fmt.Printf("  Layers: %d\n", quoteLayers)
-		if quoteAssembly {
-			fmt.Println("  Assembly: Yes")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		gerberFile := args[0]
+
+		if _, err := os.Stat(gerberFile); os.IsNotExist(err) {
+			return fmt.Errorf("gerber file not found: %s", gerberFile)
 		}
-		return nil
-	},
-}
+		if quoteAssembly && quoteBom == "" {
+			return fmt.Errorf("--bom is required when --assembly is set")
+		}
+		if quoteBom != "" {
+			if _, err := os.Stat(quoteBom); os.IsNotExist(err) {
+				return fmt.Errorf("BOM file not found: %s", quoteBom)
+			}
+		}
 
-// =============================================================================
-// Machine SD Card Operations
-// =============================================================================
+		fmt.Printf("Requesting quote for: %s\n", filepath.Base(gerberFile))
+		fmt.Printf("  Quantity: %d boards, %d layers, %.1fmm\n", quoteQuantity, quoteLayers, quoteThickness)
+		if quoteAssembly {
+			fmt.Printf("  Assembly: yes (BOM: %s)\n", filepath.Base(quoteBom))
+		}
 
-var machineLoadFile string
+		var requestBody bytes.Buffer
+		writer := multipart.NewWriter(&requestBody)
 
-var fabMachine = &cobra.Command{
-	Use:   "machine",
-	Short: "Machine SD card operations",
-	Long:  "Manage machine program files on SD cards.\n\nSubcommands:\n  load    Copy machine program file to SD card",
-}
+		if err := addFileToMultipart(writer, "file", gerberFile); err != nil {
+			return fmt.Errorf("failed to add gerber file: %w", err)
+		}
+		if quoteBom != "" {
+			if err := addFileToMultipart(writer, "bom", quoteBom); err != nil {
+				return fmt.Errorf("failed to add BOM file: %w", err)
+			}
+		}
 
-var fabMachineLoad = &cobra.Command{
-	Use:   "load",
-	Short: "Copy machine program file to SD card",
-	Long: `Copy the generated machine program file to a mounted SD card.
+		writer.WriteField("quantity", fmt.Sprintf("%d", quoteQuantity))
+		writer.WriteField("layers", fmt.Sprintf("%d", quoteLayers))
+		writer.WriteField("thickness", fmt.Sprintf("%.2f", quoteThickness))
+		if quoteSurfaceFinish != "" {
+			writer.WriteField("surface_finish", quoteSurfaceFinish)
+		}
+		if quoteColor != "" {
+			writer.WriteField("color", quoteColor)
+		}
+		if quotePriority != "" {
+			writer.WriteField("priority", quotePriority)
+		}
+		if quoteAssembly {
+			writer.WriteField("assembly", "true")
+		}
 
-Auto-detects mounted removable media. The file is written with a short
-name derived from the board prefix.`,
-	Example: domain.BinaryName + ` fab machine load
-` + domain.BinaryName + ` fab machine load --file ./my_job.csv`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("Machine SD card operations coming soon!")
-		fmt.Println("This will copy the machine program file to a mounted SD card.")
+		writer.Close()
+
+		url := fmt.Sprintf("https://%s%s", domain.API, domain.Endpoint_ManufacturingFab)
+		req, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
+		if apiKey := Client.GetAPIKey(); apiKey != "" {
+			req.Header.Set("X-API-Key", apiKey)
+		}
+
+		fmt.Println("\nUploading...")
+		uploadBar := progressbar.DefaultBytes(int64(requestBody.Len()), "Upload")
+		progressRdr := &progressReader{reader: &requestBody, bar: uploadBar}
+		req.Body = io.NopCloser(progressRdr)
+		req.ContentLength = int64(requestBody.Len())
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		}
+
+		fmt.Println("\n")
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response: %w", err)
+		}
+
+		// Pretty-print JSON if possible, otherwise raw
+		var parsed interface{}
+		if json.Unmarshal(body, &parsed) == nil {
+			pretty, _ := json.MarshalIndent(parsed, "", "  ")
+			fmt.Println(string(pretty))
+		} else {
+			fmt.Println(string(body))
+		}
+
 		return nil
 	},
 }
@@ -937,6 +1131,61 @@ func displayPlacementResults(zipPath string) error {
 	return fmt.Errorf("metadata.json not found in output ZIP")
 }
 
+// extractZipToDir extracts a ZIP archive (given as raw bytes) into destDir.
+// Returns the list of filenames extracted. Rejects path traversal entries.
+func extractZipToDir(data []byte, destDir string) ([]string, error) {
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("invalid zip: %w", err)
+	}
+
+	var names []string
+	for _, f := range r.File {
+		name := f.Name
+
+		// Reject absolute paths and path traversal
+		if filepath.IsAbs(name) || strings.Contains(name, "..") {
+			return nil, fmt.Errorf("unsafe path in zip: %s", name)
+		}
+
+		destPath := filepath.Join(destDir, name)
+
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(destPath, 0755); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return nil, err
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return nil, err
+		}
+
+		out, err := os.Create(destPath)
+		if err != nil {
+			rc.Close()
+			return nil, err
+		}
+
+		if _, err := io.Copy(out, rc); err != nil {
+			out.Close()
+			rc.Close()
+			return nil, err
+		}
+		out.Close()
+		rc.Close()
+
+		names = append(names, name)
+	}
+
+	return names, nil
+}
+
 // =============================================================================
 // Initialization
 // =============================================================================
@@ -1005,18 +1254,11 @@ func init() {
 	fabRelease.Flags().BoolVar(&releaseAsm, "assembly", false, "Include assembly files in release package")
 	fabRelease.Flags().StringVarP(&releaseOutput, "output", "o", "", "Output directory for downloaded package")
 
-	// Machine load command flags
-	fabMachineLoad.Flags().StringVar(&machineLoadFile, "file", "", "Source machine program file")
-
-	// Add machine subcommands
-	fabMachine.AddCommand(fabMachineLoad)
-
 	// Add all subcommands to Fab
 	Fab.AddCommand(fabPlacement)
 	Fab.AddCommand(fabStackup)
 	Fab.AddCommand(fabStackupDiff)
 	Fab.AddCommand(fabTestpoints)
 	Fab.AddCommand(fabQuote)
-	Fab.AddCommand(fabMachine)
 	Fab.AddCommand(fabRelease)
 }
