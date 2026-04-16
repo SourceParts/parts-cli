@@ -129,6 +129,9 @@ const Endpoint_ManufacturingStackupDiff = V1Prefix + `/manufacturing/stackup/dif
 // Endpoint_ManufacturingPlacement generates placement visualization and panelized pick-and-place files
 const Endpoint_ManufacturingPlacement = V1Prefix + `/manufacturing/placement`
 
+// Endpoint_ManufacturingTestpoints generates a test point report from a position file
+const Endpoint_ManufacturingTestpoints = V1Prefix + `/manufacturing/testpoints`
+
 // Endpoint_ManufacturingStatus gets manufacturing job status
 const Endpoint_ManufacturingStatus = V1Prefix + `/manufacturing/%s/status`
 
