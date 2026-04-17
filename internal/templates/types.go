@@ -7,6 +7,7 @@ type ProjectType string
 
 const (
 	ProjectTypePCB ProjectType = "pcb"
+	ProjectTypeRFQ ProjectType = "rfq"
 )
 
 // ProjectMetadata contains project-specific information used during template generation

@@ -1,0 +1,101 @@
+# Request for Quotation — {{.Name}}
+
+| Field | Value |
+|-------|-------|
+| **Project** | {{.Name}} |
+| **RFQ Number** | {{.Name}}-RFQ-{{.Revision}}-001 |
+| **Date Issued** | {{.CreatedAt.Format "2006-01-02"}} |
+| **Due Date** | |
+{{- if .Author}}
+| **Prepared by** | {{.Author}} |
+{{- end}}
+{{- if .Organization}}
+| **Organization** | {{.Organization}} |
+{{- end}}
+| **Status** | Open |
+
+---
+
+## 1. Scope
+
+Brief description of what is being quoted, intended use, and relevant context.
+
+## 2. Items Required
+
+| Line | Description | Part Number | Qty | Unit | Notes |
+|------|-------------|-------------|-----|------|-------|
+| 1 | | | | | |
+| 2 | | | | | |
+| 3 | | | | | |
+
+See `BOM/{{.Revision}}/` for the full Bill of Materials.
+
+## 3. Technical Specifications
+
+| Parameter | Requirement |
+|-----------|-------------|
+| Standard | |
+| Material | |
+| Finish | |
+| Tolerance | |
+| Certifications | |
+
+See `Specs/` for detailed drawings and specifications.
+
+## 4. Quantities and Pricing
+
+| Quantity | Target Unit Price | Lead Time |
+|----------|-------------------|-----------|
+| 1 | | |
+| 10 | | |
+| 100 | | |
+| 1,000 | | |
+
+## 5. Delivery Requirements
+
+| Parameter | Requirement |
+|-----------|-------------|
+| Ship-to address | |
+| Required delivery date | |
+| Acceptable shipping methods | |
+| Packaging requirements | |
+| Country of origin required | |
+
+## 6. Quality Requirements
+
+- [ ] Certificate of Conformance required
+- [ ] First Article Inspection (FAI) required
+- [ ] Material certifications required
+- [ ] RoHS compliance required
+- [ ] Other:
+
+## 7. Terms and Conditions
+
+- Quote validity: 30 days
+- Payment terms: Net 30
+- Samples required before production order: Yes / No
+
+## 8. Supplier Response Required
+
+Please provide the following in your quote response:
+
+- Unit pricing at each quantity break
+- Lead time for standard and expedited delivery
+- Minimum order quantity (MOQ)
+- Manufacturer and country of origin
+- Any deviations from specification
+
+## 9. Contact
+
+{{- if .Author}}
+Prepared by: {{.Author}}
+{{- end}}
+{{- if .ClientEmail}}
+Contact: {{.ClientEmail}}
+{{- end}}
+
+## 10. Revision History
+
+| Rev | Date | Author | Changes |
+|-----|------|--------|---------|
+| {{.Revision}} | {{.CreatedAt.Format "2006-01-02"}} | {{if .Author}}{{.Author}}{{else}}TBD{{end}} | Initial issue |

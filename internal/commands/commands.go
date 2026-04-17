@@ -760,6 +760,7 @@ var (
 	initNoGit      bool
 	initKicad      bool
 	initClientName string
+	initTemplate   string
 )
 
 var Init = &cobra.Command{
@@ -771,7 +772,11 @@ structure, configuration files, and optional KiCad project scaffolding.
 If [name] is omitted, the current directory name is used and the project
 is initialized in place. If [name] is provided, a new directory is created.
 
-Directory structure created:
+Available templates:
+  pcb  - PCB design project (default)
+  rfq  - Request for Quotation project for sourcing and procurement
+
+PCB template directory structure:
   .parts/config.yaml   Project configuration
   PARTS.md             Project documentation
   LICENSE.md           License and copyright
@@ -785,13 +790,24 @@ Directory structure created:
   DRC/                 Design Rule Check reports
   ERC/                 Electrical Rule Check reports
   SOP/                 Standard Operating Procedures
-  Reports/             Analysis and review reports`,
+  Reports/             Analysis and review reports
+
+RFQ template directory structure:
+  .parts/config.yaml   Project configuration
+  BOM/<rev>/           Bill of Materials for quoting
+  Specs/               Technical specifications for suppliers
+  RFQ/RFQ.md           Request for Quotation document
+  Quotes/              Received supplier quotes
+  Original_Files/      Source files and drawings
+  Reports/             Quote comparison and analysis
+  Datasheets/          Component and material datasheets`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runInit(args, os.Stdout)
 	},
 	Example: domain.BinaryName + ` init
 ` + domain.BinaryName + ` init my-board
+` + domain.BinaryName + ` init my-rfq --template rfq
 ` + domain.BinaryName + ` init my-board --revision A --kicad`,
 }
 
@@ -800,6 +816,7 @@ func init() {
 	Init.Flags().BoolVar(&initNoGit, "no-git", false, "Skip git init")
 	Init.Flags().BoolVar(&initKicad, "kicad", false, "Create KiCad project files")
 	Init.Flags().StringVar(&initClientName, "client-name", "", "Client name for LICENSE.md copyright")
+	Init.Flags().StringVarP(&initTemplate, "template", "t", "pcb", "Project template (pcb, rfq)")
 }
 
 func runInit(args []string, w io.Writer) error {
@@ -838,10 +855,25 @@ func runInit(args []string, w io.Writer) error {
 	meta.KiCad = initKicad
 	meta.ClientName = initClientName
 
-	// Get the PCB template
-	tmpl, err := templates.GetTemplate("pcb")
+	// Set project type based on template
+	switch initTemplate {
+	case "rfq":
+		meta = meta.WithType(templates.ProjectTypeRFQ)
+	default:
+		meta = meta.WithType(templates.ProjectTypePCB)
+	}
+
+	// Get the requested template (fall back to pcb)
+	tmplName := initTemplate
+	if tmplName == "" {
+		tmplName = "pcb"
+	}
+	tmpl, err := templates.GetTemplate(tmplName)
 	if err != nil {
-		return fmt.Errorf("failed to get template: %w", err)
+		tmpl, err = templates.GetTemplate("pcb")
+		if err != nil {
+			return fmt.Errorf("failed to get template: %w", err)
+		}
 	}
 
 	// Generate project structure

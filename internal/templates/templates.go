@@ -12,6 +12,7 @@ var (
 
 func init() {
 	RegisterTemplate(PCBTemplate())
+	RegisterTemplate(RFQTemplate())
 }
 
 // RegisterTemplate adds a template to the registry
@@ -31,6 +32,33 @@ func GetTemplate(name string) (Template, error) {
 		return Template{}, fmt.Errorf("template not found: %s", name)
 	}
 	return t, nil
+}
+
+// RFQTemplate returns a Request for Quotation project template
+func RFQTemplate() Template {
+	return Template{
+		Name:        "rfq",
+		Type:        ProjectTypeRFQ,
+		Description: "Request for Quotation project for sourcing and procurement",
+		Directories: []DirectorySpec{
+			{Path: ".parts", Description: "Project configuration", GitKeep: false},
+			{Path: "BOM/{{.Revision}}", Description: "Bill of Materials for quoting", GitKeep: true},
+			{Path: "Specs", Description: "Technical specifications for suppliers", GitKeep: true},
+			{Path: "RFQ", Description: "RFQ documents and bid submissions", GitKeep: false},
+			{Path: "Quotes", Description: "Received supplier quotes", GitKeep: true},
+			{Path: "Original_Files", Description: "Source files and drawings", GitKeep: true},
+			{Path: "Reports", Description: "Quote comparison and analysis", GitKeep: true},
+			{Path: "Datasheets", Description: "Component and material datasheets", GitKeep: true},
+		},
+		Files: []FileSpec{
+			{Path: "README.md", TemplateName: "README.md.tmpl"},
+			{Path: "PARTS.md", TemplateName: "PARTS.md.tmpl"},
+			{Path: "LICENSE.md", TemplateName: "LICENSE.md.tmpl"},
+			{Path: ".gitignore", TemplateName: "gitignore.tmpl"},
+			{Path: ".parts/config.yaml", TemplateName: "config.yaml.tmpl"},
+			{Path: "RFQ/RFQ.md", TemplateName: "RFQ.md.tmpl"},
+		},
+	}
 }
 
 // PCBTemplate returns a PCB-focused project template
