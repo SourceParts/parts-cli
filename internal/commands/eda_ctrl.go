@@ -1000,7 +1000,7 @@ var edaCtrlExport = &cobra.Command{
 		outputPath := filepath.Join(outputDir, "gerbers.zip")
 
 		fmt.Printf("Exporting gerbers from %s...\n", filepath.Base(pcbPath))
-		err := uploadAndDownloadFile(nil, pcbPath, outputPath, "/v1/eda/export", nil)
+		err := uploadAndDownloadFile(cmd.Context(), pcbPath, outputPath, "/v1/eda/export", nil)
 		if err != nil {
 			return err
 		}
