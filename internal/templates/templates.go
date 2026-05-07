@@ -49,6 +49,7 @@ func RFQTemplate() Template {
 			{Path: "Original_Files", Description: "Source files and drawings", GitKeep: true},
 			{Path: "Reports", Description: "Quote comparison and analysis", GitKeep: true},
 			{Path: "Datasheets", Description: "Component and material datasheets", GitKeep: true},
+			{Path: "refs", Description: "Reference material (datasheets, app notes; NDA subdirs gitignored)", GitKeep: true},
 		},
 		Files: []FileSpec{
 			{Path: "README.md", TemplateName: "README.md.tmpl"},
@@ -71,6 +72,7 @@ func PCBTemplate() Template {
 			{Path: ".parts", Description: "Project configuration", GitKeep: false},
 			{Path: "BOM/{{.Revision}}", Description: "Bill of Materials", GitKeep: true},
 			{Path: "Datasheets", Description: "Component datasheets", GitKeep: true},
+			{Path: "refs", Description: "Reference material (datasheets, app notes; NDA subdirs gitignored)", GitKeep: true},
 			{Path: "DRC", Description: "Design Rule Check reports", GitKeep: true},
 			{Path: "ERC", Description: "Electrical Rule Check reports", GitKeep: true},
 			{Path: "ECO", Description: "Engineering Change Orders", GitKeep: true},

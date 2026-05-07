@@ -74,3 +74,13 @@ npm-debug.log*
 # Large binary files (uncomment if needed)
 # *.pdf
 # *.zip
+
+# NDA-protected reference material — confidential supplier datasheets,
+# customer-provided design notes, and anything else that can't leave
+# the local machine. Both refs/ and Datasheets/ are tracked; anything
+# inside an NDA/ subdir at any depth is not. Convention: drop the NDA
+# PDF in refs/<vendor>/NDA/<part>.pdf or Datasheets/NDA/<part>.pdf.
+refs/NDA/
+refs/**/NDA/
+Datasheets/NDA/
+Datasheets/**/NDA/
