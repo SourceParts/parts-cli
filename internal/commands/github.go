@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SourceParts/parts-cli/internal/auth"
 	"github.com/SourceParts/parts-cli/internal/domain"
 	"github.com/SourceParts/parts-cli/internal/ghcli"
 	"github.com/SourceParts/parts-cli/internal/types"
@@ -217,17 +218,20 @@ func init() {
 	Github.AddCommand(githubIssue)
 }
 
-// resolveAPIKey resolves the GitHub API key from flag, then env vars
+// resolveAPIKey resolves the GitHub API key from flag, then env vars.
+// The resolved value is passed through auth.CleanCredential so quoted /
+// newline-padded values copied straight from .env files still match the
+// server-side comparison byte-for-byte.
 func resolveAPIKey(cmd *cobra.Command) (string, error) {
 	key, _ := cmd.Flags().GetString("api-key")
 	if key != "" {
-		return key, nil
+		return auth.CleanCredential(key), nil
 	}
 	if key = os.Getenv("PARTS_GITHUB_API_KEY"); key != "" {
-		return key, nil
+		return auth.CleanCredential(key), nil
 	}
 	if key = os.Getenv("GITHUB_API_KEY"); key != "" {
-		return key, nil
+		return auth.CleanCredential(key), nil
 	}
 	return "", fmt.Errorf("no API key found. Set --api-key, PARTS_GITHUB_API_KEY, or GITHUB_API_KEY")
 }
