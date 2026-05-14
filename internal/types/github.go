@@ -59,31 +59,35 @@ type CommitInfo struct {
 
 // CommitNotifyMultiRequest is the payload for multi-commit notifications
 type CommitNotifyMultiRequest struct {
-	Commits     []CommitInfo `json:"commits"`
-	BeforeSHA   string       `json:"before_sha,omitempty"`
-	AfterSHA    string       `json:"after_sha,omitempty"`
-	Repository  string       `json:"repository"`
-	Branch      string       `json:"branch"`
-	ClientName  string       `json:"client_name"`
-	ClientEmail string       `json:"client_email"`
-	ProjectName string       `json:"project_name"`
-	ServiceType string       `json:"service_type"`
+	Commits        []CommitInfo `json:"commits"`
+	BeforeSHA      string       `json:"before_sha,omitempty"`
+	AfterSHA       string       `json:"after_sha,omitempty"`
+	Repository     string       `json:"repository"`
+	Branch         string       `json:"branch"`
+	ClientName     string       `json:"client_name"`
+	ClientEmail    string       `json:"client_email"`
+	ClientCCEmail  string       `json:"client_cc_email,omitempty"`
+	ClientBCCEmail string       `json:"client_bcc_email,omitempty"`
+	ProjectName    string       `json:"project_name"`
+	ServiceType    string       `json:"service_type"`
 }
 
 // CommitNotifySingleRequest is the payload for single-commit notifications
 type CommitNotifySingleRequest struct {
-	CommitMessage string `json:"commit_message"`
-	CommitSHA     string `json:"commit_sha"`
-	CommitURL     string `json:"commit_url,omitempty"`
-	AuthorName    string `json:"author_name"`
-	AuthorEmail   string `json:"author_email,omitempty"`
-	Repository    string `json:"repository"`
-	Branch        string `json:"branch"`
-	Timestamp     string `json:"timestamp"`
-	ClientName    string `json:"client_name"`
-	ClientEmail   string `json:"client_email"`
-	ProjectName   string `json:"project_name"`
-	ServiceType   string `json:"service_type"`
+	CommitMessage  string `json:"commit_message"`
+	CommitSHA      string `json:"commit_sha"`
+	CommitURL      string `json:"commit_url,omitempty"`
+	AuthorName     string `json:"author_name"`
+	AuthorEmail    string `json:"author_email,omitempty"`
+	Repository     string `json:"repository"`
+	Branch         string `json:"branch"`
+	Timestamp      string `json:"timestamp"`
+	ClientName     string `json:"client_name"`
+	ClientEmail    string `json:"client_email"`
+	ClientCCEmail  string `json:"client_cc_email,omitempty"`
+	ClientBCCEmail string `json:"client_bcc_email,omitempty"`
+	ProjectName    string `json:"project_name"`
+	ServiceType    string `json:"service_type"`
 }
 
 // SOPNotifyRequest is the payload sent to the notify/sop webhook endpoint

@@ -166,6 +166,8 @@ func init() {
 	githubCommit.Flags().StringP("project", "p", "", "Project name")
 	githubCommit.Flags().StringP("client", "c", "", "Client full name")
 	githubCommit.Flags().StringP("email", "e", "", "Client email address")
+	githubCommit.Flags().String("cc", "", "CC email address")
+	githubCommit.Flags().String("bcc", "", "BCC email addresses (comma-separated)")
 	githubCommit.Flags().StringP("service", "s", "", "Service type (e.g. dfm)")
 	githubCommit.Flags().StringP("api-key", "k", "", "API key (overrides env var)")
 	githubCommit.Flags().StringP("message", "m", "", "Single commit message (fallback if no COMMITS_JSON)")
@@ -487,6 +489,8 @@ func runGithubCommit(cmd *cobra.Command, args []string) error {
 	project, _ := cmd.Flags().GetString("project")
 	clientName, _ := cmd.Flags().GetString("client")
 	email, _ := cmd.Flags().GetString("email")
+	cc, _ := cmd.Flags().GetString("cc")
+	bcc, _ := cmd.Flags().GetString("bcc")
 	service, _ := cmd.Flags().GetString("service")
 
 	repository := envOrDefault("GITHUB_REPOSITORY", "unknown")
@@ -514,20 +518,28 @@ func runGithubCommit(cmd *cobra.Command, args []string) error {
 			}
 
 			payload := types.CommitNotifyMultiRequest{
-				Commits:     commits,
-				BeforeSHA:   os.Getenv("GITHUB_EVENT_BEFORE"),
-				AfterSHA:    os.Getenv("GITHUB_SHA"),
-				Repository:  repository,
-				Branch:      branch,
-				ClientName:  clientName,
-				ClientEmail: email,
-				ProjectName: project,
-				ServiceType: service,
+				Commits:        commits,
+				BeforeSHA:      os.Getenv("GITHUB_EVENT_BEFORE"),
+				AfterSHA:       os.Getenv("GITHUB_SHA"),
+				Repository:     repository,
+				Branch:         branch,
+				ClientName:     clientName,
+				ClientEmail:    email,
+				ClientCCEmail:  cc,
+				ClientBCCEmail: bcc,
+				ProjectName:    project,
+				ServiceType:    service,
 			}
 
 			fmt.Printf("Sending commit notification (%d commits)...\n", len(commits))
 			fmt.Printf("  Project:    %s\n", project)
 			fmt.Printf("  Client:     %s <%s>\n", clientName, email)
+			if cc != "" {
+				fmt.Printf("  CC:         %s\n", cc)
+			}
+			if bcc != "" {
+				fmt.Printf("  BCC:        %s\n", bcc)
+			}
 			fmt.Printf("  Service:    %s\n", service)
 			fmt.Printf("  Repository: %s\n", repository)
 			fmt.Printf("  Branch:     %s\n", branch)
@@ -575,22 +587,30 @@ func runGithubCommit(cmd *cobra.Command, args []string) error {
 	}
 
 	payload := types.CommitNotifySingleRequest{
-		CommitMessage: message,
-		CommitSHA:     sha,
-		CommitURL:     commitURL,
-		AuthorName:    author,
-		Repository:    repository,
-		Branch:        branch,
-		Timestamp:     time.Now().UTC().Format(time.RFC3339),
-		ClientName:    clientName,
-		ClientEmail:   email,
-		ProjectName:   project,
-		ServiceType:   service,
+		CommitMessage:  message,
+		CommitSHA:      sha,
+		CommitURL:      commitURL,
+		AuthorName:     author,
+		Repository:     repository,
+		Branch:         branch,
+		Timestamp:      time.Now().UTC().Format(time.RFC3339),
+		ClientName:     clientName,
+		ClientEmail:    email,
+		ClientCCEmail:  cc,
+		ClientBCCEmail: bcc,
+		ProjectName:    project,
+		ServiceType:    service,
 	}
 
 	fmt.Println("Sending commit notification...")
 	fmt.Printf("  Project:    %s\n", project)
 	fmt.Printf("  Client:     %s <%s>\n", clientName, email)
+	if cc != "" {
+		fmt.Printf("  CC:         %s\n", cc)
+	}
+	if bcc != "" {
+		fmt.Printf("  BCC:        %s\n", bcc)
+	}
 	fmt.Printf("  Service:    %s\n", service)
 	fmt.Printf("  Repository: %s\n", repository)
 	fmt.Printf("  Branch:     %s\n", branch)
