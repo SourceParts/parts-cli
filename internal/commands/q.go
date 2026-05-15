@@ -1,9 +1,9 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/SourceParts/parts-cli/internal/domain"
@@ -39,7 +39,13 @@ what you mean and routes to the right handler.`,
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		queryType, _ := cmd.Flags().GetString("type")
-		return Client.Q(ctx, args[0], queryType, os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.Q(ctx, args[0], queryType, &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "")
+		return nil
 	},
 }
 
@@ -55,7 +61,13 @@ var History = &cobra.Command{
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		limit, _ := cmd.Flags().GetInt("limit")
-		return Client.QHistory(ctx, limit, os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.QHistory(ctx, limit, &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "Search history")
+		return nil
 	},
 }
 
@@ -66,7 +78,13 @@ var historyClear = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		return Client.QHistoryClear(ctx, os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.QHistoryClear(ctx, &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "Search history cleared")
+		return nil
 	},
 }
 
@@ -88,7 +106,13 @@ Supports 3-digit, 4-digit, EIA-96, and R-notation formats:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		return Client.QSMD(ctx, args[0], os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.QSMD(ctx, args[0], &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "")
+		return nil
 	},
 }
 
@@ -109,16 +133,28 @@ Provide 3-6 space-separated color names. Common colors:
 		defer cancel()
 		// Join all args into a single bands string (supports both quoted and unquoted)
 		bands := strings.Join(args, " ")
-		return Client.QResistorColors(ctx, bands, os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.QResistorColors(ctx, bands, &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "")
+		return nil
 	},
 }
 
 func init() {
 	// Q command flags
 	Q.Flags().StringP("type", "t", "process", "Query type: process, search")
+	Q.Flags().Bool("json", false, "Output raw JSON")
+
+	SMD.Flags().Bool("json", false, "Output raw JSON")
+	Resistor.Flags().Bool("json", false, "Output raw JSON")
 
 	// History command flags and subcommands
 	History.Flags().IntP("limit", "n", 10, "Number of history entries to show")
+	History.Flags().Bool("json", false, "Output raw JSON")
+	historyClear.Flags().Bool("json", false, "Output raw JSON")
 	History.AddCommand(historyClear)
 
 	// Print a hint when using 'parts resistor' without args

@@ -44,7 +44,13 @@ var Add = &cobra.Command{
 			Package:      pkg,
 			Value:        value,
 		}
-		return Client.Add(ctx, args[0], opts, os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.Add(ctx, args[0], opts, &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "Added part")
+		return nil
 	},
 }
 
@@ -54,6 +60,7 @@ func init() {
 	Add.Flags().StringP("category", "c", "", "Part category")
 	Add.Flags().String("package", "", "Package/footprint (e.g., 0603, LQFP100)")
 	Add.Flags().String("value", "", "Component value (e.g., 10k, 100nF)")
+	Add.Flags().Bool("json", false, "Output raw JSON")
 }
 
 var Search = &cobra.Command{
@@ -112,7 +119,13 @@ var Marking = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		return Client.Marking(ctx, args[0], os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.Marking(ctx, args[0], &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "Marking")
+		return nil
 	},
 }
 
@@ -127,12 +140,20 @@ datasheet, pricing, and alternatives.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		return Client.Gather(ctx, args[0], os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.Gather(ctx, args[0], &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "")
+		return nil
 	},
 }
 
 func init() {
 	Gather.Flags().Bool("everything", false, "Include all available data (default behavior)")
+	Gather.Flags().Bool("json", false, "Output raw JSON")
+	Marking.Flags().Bool("json", false, "Output raw JSON")
 }
 
 // =============================================================================
@@ -160,17 +181,20 @@ var bomUpload = &cobra.Command{
 			ExtractLCSC: true,
 			DFMCheck:    dfmCheck,
 		}
+		jsonOutput, _ := cmd.Flags().GetBool("json")
 
-		if !dfmCheck {
-			return Client.BOMUpload(ctx, args[0], opts, os.Stdout)
-		}
-
-		// Upload BOM, poll for completion, then submit DFM
 		var uploadBuf bytes.Buffer
 		if err := Client.BOMUpload(ctx, args[0], opts, &uploadBuf); err != nil {
 			return err
 		}
-		fmt.Fprint(os.Stdout, uploadBuf.String())
+
+		if !dfmCheck {
+			Render(uploadBuf.Bytes(), jsonOutput, "BOM upload")
+			return nil
+		}
+
+		// Upload BOM, poll for completion, then submit DFM
+		Render(uploadBuf.Bytes(), jsonOutput, "BOM upload")
 
 		var uploadResp types.BOMUploadResponse
 		if err := json.Unmarshal(uploadBuf.Bytes(), &uploadResp); err != nil {
@@ -206,13 +230,21 @@ var bomStatus = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		return Client.BOMStatus(ctx, args[0], os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.BOMStatus(ctx, args[0], &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "BOM status")
+		return nil
 	},
 }
 
 func init() {
 	bomUpload.Flags().StringP("project", "p", "", "Project ID to associate BOM with")
 	bomUpload.Flags().Bool("dfm-check", false, "Run DFM analysis after BOM processing completes")
+	bomUpload.Flags().Bool("json", false, "Output raw JSON")
+	bomStatus.Flags().Bool("json", false, "Output raw JSON")
 	BOM.AddCommand(bomUpload)
 	BOM.AddCommand(bomStatus)
 }
@@ -236,7 +268,23 @@ var projectCreate = &cobra.Command{
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		description, _ := cmd.Flags().GetString("description")
-		return Client.ProjectCreate(ctx, args[0], description, os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+
+		var buf bytes.Buffer
+		if err := Client.ProjectCreate(ctx, args[0], description, &buf); err != nil {
+			return err
+		}
+		data, err := io.ReadAll(&buf)
+		if err != nil {
+			return fmt.Errorf("error reading response: %w", err)
+		}
+		if jsonOutput {
+			os.Stdout.Write(data)
+			fmt.Println()
+			return nil
+		}
+		printProjectCreateResultPublic(data)
+		return nil
 	},
 }
 
@@ -342,7 +390,13 @@ change objects.`,
 			ecoData.Changes = changes
 		}
 
-		return Client.ProjectECO(ctx, args[0], ecoData, os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.ProjectECO(ctx, args[0], ecoData, &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "ECO created")
+		return nil
 	},
 	Example: domain.BinaryName + ` project eco proj_abc123 --title "Update capacitors"
 ` + domain.BinaryName + ` project eco proj_abc123 --title "BOM revision" --changes changes.json`,
@@ -386,7 +440,13 @@ and you will lose access. You will be prompted for confirmation unless
 			}
 		}
 
-		return Client.ProjectTransfer(ctx, projectID, email, os.Stdout)
+		jsonOutput, _ := cmd.Flags().GetBool("json")
+		var buf bytes.Buffer
+		if err := Client.ProjectTransfer(ctx, projectID, email, &buf); err != nil {
+			return err
+		}
+		Render(buf.Bytes(), jsonOutput, "Transfer complete")
+		return nil
 	},
 	Example: domain.BinaryName + ` project transfer proj_abc123 --email user@example.com
 ` + domain.BinaryName + ` project transfer proj_abc123 --email user@example.com --yes`,
@@ -394,6 +454,7 @@ and you will lose access. You will be prompted for confirmation unless
 
 func init() {
 	projectCreate.Flags().StringP("description", "d", "", "Project description")
+	projectCreate.Flags().Bool("json", false, "Output raw JSON")
 	projectList.Flags().Int("limit", 20, "Maximum number of results")
 	projectList.Flags().Int("offset", 0, "Number of results to skip")
 	projectList.Flags().String("status", "", "Filter by status (active, archived)")
@@ -401,8 +462,10 @@ func init() {
 	projectECO.Flags().String("title", "", "ECO title (required)")
 	projectECO.Flags().String("description", "", "ECO description")
 	projectECO.Flags().String("changes", "", "Path to JSON file with changes array")
+	projectECO.Flags().Bool("json", false, "Output raw JSON")
 	projectECO.MarkFlagRequired("title")
 	projectTransfer.Flags().String("email", "", "Email of new owner (required)")
+	projectTransfer.Flags().Bool("json", false, "Output raw JSON")
 	projectTransfer.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 	projectTransfer.MarkFlagRequired("email")
 	Project.AddCommand(projectCreate)
@@ -1053,6 +1116,30 @@ func printSearchResultsPublic(data []byte) {
 		}
 		fmt.Printf("  %-28s %s\n", p.Name, p.Manufacturer)
 		fmt.Printf("    %s  %s  %s  Stock: %s\n\n", p.SKU, p.Category, price, fmtNumber(p.StockQuantity))
+	}
+}
+
+func printProjectCreateResultPublic(data []byte) {
+	var resp types.ProjectCreateResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		// Could not parse; surface the raw payload to stderr and stay silent
+		// on stdout so callers piping output don't get malformed text.
+		fmt.Fprintf(os.Stderr, "Warning: could not parse API response: %v\n%s\n", err, string(data))
+		return
+	}
+
+	if resp.Error != "" {
+		fmt.Fprintf(os.Stderr, "API error: %s\n", resp.Error)
+		return
+	}
+
+	if resp.Data.ID != "" {
+		fmt.Printf("Project created: %s (id: %s)\n", resp.Data.Name, resp.Data.ID)
+	} else {
+		fmt.Println("Project created")
+	}
+	if resp.Data.Message != "" {
+		fmt.Println(resp.Data.Message)
 	}
 }
 
