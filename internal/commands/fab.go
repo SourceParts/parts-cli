@@ -243,7 +243,6 @@ Panel positions are numbered 1-indexed, left-to-right, bottom-to-top:
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 
-		// Set API key if available
 		setAuthHeader(req)
 
 		// Send request with progress bar for upload
@@ -944,7 +943,6 @@ func uploadAndDownloadFile(ctx context.Context, inputPath, outputPath, endpoint 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 
-	// Set API key if available
 	setAuthHeader(req)
 
 	// Upload with progress bar
@@ -1024,7 +1022,6 @@ func uploadTwoFilesAndDownload(ctx context.Context, fileA, fileB, outputPath, en
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 
-	// Set API key if available
 	setAuthHeader(req)
 
 	// Upload with progress bar
