@@ -431,7 +431,7 @@ func qualityUploadPhotosAndGetJSON(photoPaths []string, fieldName string, endpoi
 	}
 	writer.Close()
 
-	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	url := resolveEndpoint(endpoint)
 	req, err := http.NewRequest("POST", url, &requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)

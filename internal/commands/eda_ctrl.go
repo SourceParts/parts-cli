@@ -70,7 +70,7 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 	}
 	writer.Close()
 
-	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	url := resolveEndpoint(endpoint)
 	req, err := http.NewRequest("POST", url, &requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -105,7 +105,7 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 
 // getJSON makes an authenticated GET request and returns JSON.
 func getJSON(endpoint string) (map[string]interface{}, error) {
-	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	url := resolveEndpoint(endpoint)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err

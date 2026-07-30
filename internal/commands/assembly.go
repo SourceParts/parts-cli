@@ -56,7 +56,7 @@ func assemblyUploadMultipleAndGetJSON(fileFields map[string]string, endpoint str
 	}
 	writer.Close()
 
-	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	url := resolveEndpoint(endpoint)
 	req, err := http.NewRequest("POST", url, &requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -119,7 +119,7 @@ func assemblyUploadPhotosAndGetJSON(photoPaths []string, referencePath string, e
 	}
 	writer.Close()
 
-	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	url := resolveEndpoint(endpoint)
 	req, err := http.NewRequest("POST", url, &requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)

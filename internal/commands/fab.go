@@ -234,7 +234,7 @@ Panel positions are numbered 1-indexed, left-to-right, bottom-to-top:
 		writer.Close()
 
 		// Create request
-		url := fmt.Sprintf("https://%s%s", domain.API, domain.Endpoint_ManufacturingPlacement)
+		url := domain.Endpoint_ManufacturingPlacement
 		req, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
@@ -583,7 +583,7 @@ When a BOM file is provided, signal names are extracted from the Value column.`,
 
 		writer.Close()
 
-		url := fmt.Sprintf("https://%s%s", domain.API, domain.Endpoint_ManufacturingTestpoints)
+		url := domain.Endpoint_ManufacturingTestpoints
 		req, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
@@ -728,7 +728,7 @@ including COGS (Cost of Goods Sold).`,
 
 		writer.Close()
 
-		url := fmt.Sprintf("https://%s%s", domain.API, domain.Endpoint_ManufacturingFab)
+		url := domain.Endpoint_ManufacturingFab
 		req, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
@@ -934,7 +934,7 @@ func uploadAndDownloadFile(ctx context.Context, inputPath, outputPath, endpoint 
 	writer.Close()
 
 	// Create request
-	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	url := resolveEndpoint(endpoint)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -1013,7 +1013,7 @@ func uploadTwoFilesAndDownload(ctx context.Context, fileA, fileB, outputPath, en
 	writer.Close()
 
 	// Create request
-	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	url := resolveEndpoint(endpoint)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)

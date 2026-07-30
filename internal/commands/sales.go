@@ -76,7 +76,7 @@ func postJSONAndGetJSON(endpoint string, payload map[string]interface{}) (map[st
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	url := fmt.Sprintf("https://%s%s", domain.API, endpoint)
+	url := resolveEndpoint(endpoint)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
