@@ -78,10 +78,7 @@ func uploadAndGetJSON(pcbPath, endpoint string, formFields map[string]string) (m
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if apiKey := Client.GetAPIKey(); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("X-API-Key", apiKey)
-	}
+	setAuthHeader(req)
 
 	// SHA256 hash for server-side caching
 	if hash := computeFileHash(pcbPath); hash != "" {
@@ -114,10 +111,7 @@ func getJSON(endpoint string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if apiKey := Client.GetAPIKey(); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("X-API-Key", apiKey)
-	}
+	setAuthHeader(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
