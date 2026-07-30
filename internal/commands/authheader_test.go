@@ -188,20 +188,23 @@ func TestNoHandRolledAuthHeaders(t *testing.T) {
 			return true
 		})
 
-		// 2. Every function that builds a request must authenticate it, and
-		// 3. only authheader.go and allowlisted functions may set Authorization
-		//    directly.
+		// 2. Every declaration that builds a request must authenticate it, and
+		// 3. only authheader.go and allowlisted declarations may set
+		//    Authorization directly.
+		//
+		// Both func declarations and package-level vars are scanned. The var
+		// case is essential, not incidental: most commands here are declared as
+		// `var xCmd = &cobra.Command{RunE: func(...){...}}`, so the request is
+		// built inside a function literal hanging off a GenDecl, which a
+		// FuncDecl-only walk would miss entirely.
 		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
+			name, node := declTarget(decl)
+			if node == nil {
 				continue
 			}
-			name := fn.Name.Name
 			key := base + ":" + name
 
-			// Walks the FuncDecl body including any nested FuncLit, so cobra
-			// RunE closures assigned inside the function are covered.
-			buildsRequest, callsSetAuth, setsAuthDirectly := scanRequestUsage(fn.Body)
+			buildsRequest, callsSetAuth, setsAuthDirectly := scanRequestUsage(node)
 
 			if reason, allowed := unauthenticatedRequestAllowlist[key]; allowed {
 				seenAllowlisted[key] = true
@@ -233,11 +236,39 @@ func TestNoHandRolledAuthHeaders(t *testing.T) {
 	}
 }
 
-// scanRequestUsage reports whether a function body constructs an http.Request,
-// whether it calls setAuthHeader, and whether it sets the Authorization header
-// itself. Nested function literals (cobra RunE closures) are included.
-func scanRequestUsage(body *ast.BlockStmt) (buildsRequest, callsSetAuth, setsAuthDirectly bool) {
-	ast.Inspect(body, func(n ast.Node) bool {
+// declTarget returns a name and the AST subtree to scan for a top-level
+// declaration, or a nil node if the declaration cannot contain a request.
+//
+// Function declarations scan their body. Package-level var declarations scan the
+// whole spec, which is how `var xCmd = &cobra.Command{RunE: func(...){...}}` —
+// the shape most commands in this package use — gets covered.
+func declTarget(decl ast.Decl) (string, ast.Node) {
+	switch d := decl.(type) {
+	case *ast.FuncDecl:
+		if d.Body == nil {
+			return "", nil
+		}
+		return d.Name.Name, d.Body
+	case *ast.GenDecl:
+		if d.Tok != token.VAR {
+			return "", nil
+		}
+		for _, spec := range d.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || len(vs.Names) == 0 || len(vs.Values) == 0 {
+				continue
+			}
+			return vs.Names[0].Name, vs
+		}
+	}
+	return "", nil
+}
+
+// scanRequestUsage reports whether a subtree constructs an http.Request, whether
+// it calls setAuthHeader, and whether it sets the Authorization header itself.
+// Nested function literals (cobra RunE closures) are included.
+func scanRequestUsage(node ast.Node) (buildsRequest, callsSetAuth, setsAuthDirectly bool) {
+	ast.Inspect(node, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
