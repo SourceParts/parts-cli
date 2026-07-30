@@ -67,9 +67,7 @@ Review all findings before proceeding with layout.`,
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -256,9 +254,7 @@ Review hot spots and recommendations before layout.`,
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

@@ -84,9 +84,7 @@ func postJSONAndGetJSON(endpoint string, payload map[string]interface{}) (map[st
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if apiKey := Client.GetAPIKey(); apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
-	}
+	setAuthHeader(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
