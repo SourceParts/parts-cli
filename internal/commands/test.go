@@ -51,7 +51,7 @@ Approve each step before proceeding to the next.
 Pipeline:
   1. rma process         — process RMA requests
   2. failure-analysis    — Pareto failure analysis + lot correlation
-  3. eco-feedback        — ECN suggestions from failure patterns`,
+  3. feedback            — ECN suggestions from failure patterns`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cmd.Help()
 	},
@@ -171,9 +171,9 @@ Verify firmware URL and device list before provisioning.`,
 
 		// Build device_ids as a JSON array
 		payload := map[string]interface{}{
-			"firmware_url":          firmware,
-			"device_ids":            deviceIDs,
-			"certificate_template":  certTemplate,
+			"firmware_url":         firmware,
+			"device_ids":           deviceIDs,
+			"certificate_template": certTemplate,
 		}
 
 		result, err := postJSONAndGetJSON("/v1/test/provision", payload)
@@ -344,7 +344,7 @@ Review disposition before confirming with customer.`,
 		result, err := postJSONAndGetJSON("/v1/post-production/rma/process", map[string]interface{}{
 			"order_id":            orderID,
 			"failure_description": failure,
-			"serial_number":      serial,
+			"serial_number":       serial,
 		})
 		if err != nil {
 			return err
@@ -491,7 +491,7 @@ Review Pareto chart and lot correlation before taking action.`,
 			}
 		}
 
-		fmt.Println("\nNext: parts post-production eco-feedback --analysis-id <id>")
+		fmt.Println("\nNext: parts post-production feedback --analysis-id <id>")
 		return nil
 	},
 }
@@ -499,8 +499,9 @@ Review Pareto chart and lot correlation before taking action.`,
 // --- Station 6: ECO Feedback ---
 
 var postProductionECOFeedback = &cobra.Command{
-	Use:   "eco-feedback",
-	Short: "Generate ECN suggestions from failure patterns",
+	Use:     "feedback",
+	Aliases: []string{"eco-feedback"},
+	Short:   "Generate ECN suggestions from failure patterns",
 	Long: `Submit failure analysis reference and get ECN suggestions.
 Suggests design/process changes based on failure patterns
 (e.g., paste aperture changes, AVL updates, ESD protection).
@@ -516,9 +517,9 @@ Review ECN suggestions before creating formal change requests.`,
 
 		fmt.Printf("Generating ECO feedback from analysis %s...\n", analysisID)
 
-		result, err := postJSONAndGetJSON("/v1/post-production/eco-feedback", map[string]interface{}{
+		result, err := postJSONAndGetJSON("/v1/post-production/eco/feedback", map[string]interface{}{
 			"failure_analysis_id": analysisID,
-			"failure_data":       map[string]interface{}{},
+			"failure_data":        map[string]interface{}{},
 		})
 		if err != nil {
 			return err

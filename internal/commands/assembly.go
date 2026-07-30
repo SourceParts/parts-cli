@@ -29,8 +29,8 @@ Approve each step before proceeding to the next.
 
 Pipeline:
   1. readiness      — pre-assembly readiness checklist
-  2. feeder-setup   — optimal feeder slot assignment
-  3. reflow-profile — reflow profile recommendation
+  2. feeder        — optimal feeder slot assignment
+  3. reflow        — reflow profile recommendation
   4. aoi            — automated optical inspection
   5. test           — functional test validation + yield`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -205,7 +205,7 @@ positions match BOM references. Returns pass/fail per item.`,
 		}
 
 		if overall == "pass" {
-			fmt.Println("\nNext: parts assembly feeder-setup --bom bom.csv --positions positions.csv --machine neoden")
+			fmt.Println("\nNext: parts assembly feeder --bom bom.csv --positions positions.csv --machine neoden")
 		} else {
 			fmt.Println("\nAddress failing items, then re-run: parts assembly readiness ...")
 		}
@@ -216,8 +216,9 @@ positions match BOM references. Returns pass/fail per item.`,
 // --- Station 2: Feeder Setup ---
 
 var assemblyFeederSetup = &cobra.Command{
-	Use:   "feeder-setup",
-	Short: "Generate optimal feeder slot assignment",
+	Use:     "feeder",
+	Aliases: []string{"feeder-setup"},
+	Short:   "Generate optimal feeder slot assignment",
 	Long: `Upload BOM and position CSV. Server groups components and assigns
 feeder slots to minimize changeover time.
 
@@ -238,7 +239,7 @@ Outputs a feeder map with slot assignments sorted by placement count.`,
 				"bom":       bomPath,
 				"positions": positionsPath,
 			},
-			"/v1/assembly/feeder-setup",
+			"/v1/assembly/feeder/setup",
 			map[string]string{"machine_type": machine},
 		)
 		if err != nil {
@@ -268,7 +269,7 @@ Outputs a feeder map with slot assignments sorted by placement count.`,
 			}
 		}
 
-		fmt.Println("\nNext: parts assembly reflow-profile --bom bom.csv")
+		fmt.Println("\nNext: parts assembly reflow --bom bom.csv")
 		return nil
 	},
 }
@@ -276,8 +277,9 @@ Outputs a feeder map with slot assignments sorted by placement count.`,
 // --- Station 3: Reflow Profile ---
 
 var assemblyReflowProfile = &cobra.Command{
-	Use:   "reflow-profile",
-	Short: "Analyze BOM thermal specs and recommend reflow profile",
+	Use:     "reflow",
+	Aliases: []string{"reflow-profile"},
+	Short:   "Analyze BOM thermal specs and recommend reflow profile",
 	Long: `Upload BOM CSV. Server analyzes MSL levels, peak reflow temps,
 and soak times across all components.
 
@@ -291,7 +293,7 @@ Returns a recommended reflow profile with thermal constraints.`,
 		}
 
 		fmt.Printf("Analyzing reflow profile for %s...\n", filepath.Base(bomPath))
-		result, err := uploadAndGetJSON(bomPath, "/v1/assembly/reflow-profile", nil)
+		result, err := uploadAndGetJSON(bomPath, "/v1/assembly/reflow/profile", nil)
 		if err != nil {
 			return err
 		}
@@ -429,7 +431,7 @@ Criteria JSON format: {"TestName": {"min": 3.2, "max": 3.4}, ...}`,
 
 		fmt.Printf("Validating test results from %s...\n", filepath.Base(resultsPath))
 		result, err := assemblyUploadMultipleAndGetJSON(
-			fileFields, "/v1/assembly/functional-test", formFields,
+			fileFields, "/v1/test/functional", formFields,
 		)
 		if err != nil {
 			return err

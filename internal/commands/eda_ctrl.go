@@ -151,7 +151,7 @@ Examples:
 		noWait, _ := cmd.Flags().GetBool("no-wait")
 
 		if operation == "" {
-			return fmt.Errorf("--op is required (validate, reassign, place, resize, ripup, remove-footprints, export)")
+			return fmt.Errorf("--op is required (validate, reassign, place, resize, ripup, remove, export)")
 		}
 		if payloadJSON == "" {
 			payloadJSON = "{}"
@@ -558,7 +558,7 @@ var edaCtrlRemoveFootprints = &cobra.Command{
 		refsJSON, _ := json.Marshal(refs)
 
 		fmt.Printf("Removing %d footprints...\n", len(refs))
-		result, err := uploadAndGetJSON(pcbPath, "/v1/eda/pcb/remove-footprints", map[string]string{
+		result, err := uploadAndGetJSON(pcbPath, "/v1/eda/pcb/remove", map[string]string{
 			"refs_json": string(refsJSON),
 		})
 		if err != nil {
@@ -1031,7 +1031,7 @@ func init() {
 	edaCtrlResize.Flags().Bool("apply", false, "Apply changes to the local file")
 
 	// Job flags
-	edaCtrlJob.Flags().String("op", "", "Operation: validate, reassign, place, resize, ripup, remove-footprints, export")
+	edaCtrlJob.Flags().String("op", "", "Operation: validate, reassign, place, resize, ripup, remove, export")
 	edaCtrlJob.Flags().String("payload", "", "Operation payload JSON")
 	edaCtrlJob.Flags().Bool("no-wait", false, "Submit and exit without polling")
 

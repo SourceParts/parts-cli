@@ -26,7 +26,7 @@ var Design = &cobra.Command{
 Each command performs one atomic analysis step and returns results for review.
 
 Pipeline:
-  1. schematic-review    — ERC-style schematic review
+  1. review              — ERC-style schematic review
   2. impedance           — controlled-impedance calculation
   3. thermal             — BOM-based thermal analysis`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -37,8 +37,9 @@ Pipeline:
 // --- Station 1: Schematic Review ---
 
 var designSchematicReview = &cobra.Command{
-	Use:   "schematic-review <file.kicad_sch>",
-	Short: "Review a KiCad schematic for common design issues",
+	Use:     "review <file.kicad_sch>",
+	Aliases: []string{"schematic-review"},
+	Short:   "Review a KiCad schematic for common design issues",
 	Long: `Upload a .kicad_sch file and check for:
   - Unconnected pins and missing no-connect flags
   - Missing decoupling capacitors (ICs without bypass caps)
@@ -60,7 +61,7 @@ Review all findings before proceeding with layout.`,
 		}
 		writer.Close()
 
-		url := fmt.Sprintf("https://%s/v1/design/schematic-review", domain.API)
+		url := fmt.Sprintf("https://%s/v1/design/review/schematic", domain.API)
 		req, err := http.NewRequest("POST", url, &requestBody)
 		if err != nil {
 			return err
@@ -310,7 +311,7 @@ Review hot spots and recommendations before layout.`,
 			}
 		}
 
-		fmt.Println("\nNext: parts design schematic-review <file.kicad_sch>")
+		fmt.Println("\nNext: parts design review <file.kicad_sch>")
 		return nil
 	},
 }
