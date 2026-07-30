@@ -81,9 +81,7 @@ If --tier is not specified, the API auto-recommends based on complexity.`,
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -180,9 +178,7 @@ Promo codes: LAUNCH99 ($99 basic), PARTNER199 ($199 comprehensive)`,
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -250,9 +246,7 @@ Status flow:
 			return err
 		}
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

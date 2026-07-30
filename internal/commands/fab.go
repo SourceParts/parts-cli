@@ -244,9 +244,7 @@ Panel positions are numbered 1-indexed, left-to-right, bottom-to-top:
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 
 		// Set API key if available
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		// Send request with progress bar for upload
 		fmt.Println("\nUploading files...")
@@ -593,9 +591,7 @@ When a BOM file is provided, signal names are extracted from the Value column.`,
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		fmt.Println("\nUploading files...")
 		uploadBar := progressbar.DefaultBytes(int64(requestBody.Len()), "Upload")
@@ -740,9 +736,7 @@ including COGS (Cost of Goods Sold).`,
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		fmt.Println("\nUploading...")
 		uploadBar := progressbar.DefaultBytes(int64(requestBody.Len()), "Upload")
@@ -951,9 +945,7 @@ func uploadAndDownloadFile(ctx context.Context, inputPath, outputPath, endpoint 
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 
 	// Set API key if available
-	if apiKey := Client.GetAPIKey(); apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
-	}
+	setAuthHeader(req)
 
 	// Upload with progress bar
 	fmt.Println("\nUploading...")
@@ -1033,9 +1025,7 @@ func uploadTwoFilesAndDownload(ctx context.Context, fileA, fileB, outputPath, en
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 
 	// Set API key if available
-	if apiKey := Client.GetAPIKey(); apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
-	}
+	setAuthHeader(req)
 
 	// Upload with progress bar
 	fmt.Println("\nUploading...")

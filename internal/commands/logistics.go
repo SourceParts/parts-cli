@@ -239,9 +239,7 @@ Review HS codes and declared values before submitting to customs.`,
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -341,9 +339,7 @@ Review the manifest before shipping. Verify short items.`,
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 		req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-		if apiKey := Client.GetAPIKey(); apiKey != "" {
-			req.Header.Set("X-API-Key", apiKey)
-		}
+		setAuthHeader(req)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
