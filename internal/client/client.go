@@ -34,6 +34,24 @@ type Client struct {
 	Endpoint_Marking   *string
 }
 
+// setAuthHeader applies the credential in c to req.
+//
+// Use this for requests whose Content-Type is already set — multipart uploads
+// and raw passthroughs — where newAuthenticatedRequest is unsuitable because it
+// forces application/json. Keeping both on one implementation means the scheme
+// is defined in exactly one place.
+//
+// c.APIKey holds either a raw API key or an OAuth access token, so both login
+// paths work without the caller knowing which is in play.
+func (c *Client) setAuthHeader(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+}
+
 // newAuthenticatedRequest creates an HTTP request with authentication headers.
 func (c *Client) newAuthenticatedRequest(method, url string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
@@ -45,9 +63,7 @@ func (c *Client) newAuthenticatedRequest(method, url string, body io.Reader) (*h
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
 
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	return req, nil
 }
@@ -426,9 +442,7 @@ func (c *Client) BOMUpload(ctx context.Context, fileName string, opts types.BOMU
 		return fmt.Errorf("error creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	res, err := c.Client.Do(req)
 	if err != nil {
@@ -1141,9 +1155,7 @@ func (c *Client) Stackup(ctx context.Context, gerberZip string, opts types.Stack
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	c.Logger.Printf("Generating stackup PDF for: %s", baseName)
 	res, err := c.Client.Do(req)
@@ -1212,9 +1224,7 @@ func (c *Client) StackupDiff(ctx context.Context, gerberA, gerberB string, opts 
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	c.Logger.Printf("Generating stackup diff: %s vs %s", filepath.Base(gerberA), filepath.Base(gerberB))
 	res, err := c.Client.Do(req)
@@ -1688,9 +1698,7 @@ func (c *Client) Release(ctx context.Context, input string, opts types.ReleaseOp
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	c.Logger.Printf("Uploading release package: %s", filepath.Base(input))
 	res, err := c.Client.Do(req)
@@ -1830,9 +1838,7 @@ func (c *Client) EDAUpload(ctx context.Context, endpoint, filePath string, formF
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	c.Logger.Printf("Request URL: %s", endpoint)
 	c.Logger.Printf("Uploading: %s (%d bytes)", filepath.Base(filePath), len(fileContent))

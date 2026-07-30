@@ -17,9 +17,7 @@ func (c *Client) RawGet(ctx context.Context, url string, w io.Writer) error {
 		return fmt.Errorf("error creating request: %w", err)
 	}
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	res, err := c.Client.Do(req)
 	if err != nil {
@@ -43,9 +41,7 @@ func (c *Client) RawPatch(ctx context.Context, url string, jsonBody string, w io
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	res, err := c.Client.Do(req)
 	if err != nil {
@@ -69,9 +65,7 @@ func (c *Client) RawPost(ctx context.Context, url string, jsonBody string, w io.
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "parts-cli/"+domain.Version)
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.setAuthHeader(req)
 
 	res, err := c.Client.Do(req)
 	if err != nil {
