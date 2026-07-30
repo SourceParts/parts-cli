@@ -754,7 +754,7 @@ including COGS (Cost of Goods Sold).`,
 			return fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
 		}
 
-		fmt.Println("\n")
+		fmt.Print("\n\n")
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
