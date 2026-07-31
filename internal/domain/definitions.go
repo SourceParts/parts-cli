@@ -289,6 +289,22 @@ const Endpoint_PCBExport = V1Prefix + `/eda/pcb/export/`
 const Endpoint_SchExport = V1Prefix + `/eda/sch/export/`
 
 // =============================================================================
+// CAD — parametric STEP/BREP edit and convert
+// =============================================================================
+//
+// All POST multipart. Every route except inspect answers with a raw binary body
+// and a Content-Disposition header, not the {status,data} envelope the eda
+// exports use.
+
+const Endpoint_CADInspect   = V1Prefix + `/cad/step/inspect`
+const Endpoint_CADConvert   = V1Prefix + `/cad/step/convert`
+const Endpoint_CADTransform = V1Prefix + `/cad/step/transform`
+const Endpoint_CADBoolean   = V1Prefix + `/cad/step/boolean`
+const Endpoint_CADFeature   = V1Prefix + `/cad/step/feature`
+const Endpoint_CADPattern   = V1Prefix + `/cad/step/pattern`
+const Endpoint_CADPipeline  = V1Prefix + `/cad/step/pipeline`
+
+// =============================================================================
 // CLI UPDATE
 // =============================================================================
 

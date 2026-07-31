@@ -286,6 +286,10 @@ Supported formats:
 		if v, _ := cmd.Flags().GetString("sort-field"); v != "" {
 			fields["sort_field"] = v
 		}
+		// Only sent when descending; the API defaults to ascending.
+		if v, _ := cmd.Flags().GetBool("sort-desc"); v {
+			fields["sort_asc"] = "false"
+		}
 		if v, _ := cmd.Flags().GetString("format-preset"); v != "" {
 			fields["format_preset"] = v
 		}
@@ -1213,6 +1217,7 @@ func init() {
 	edaExportSch.Flags().String("fields", "", "BOM fields (comma-separated)")
 	edaExportSch.Flags().String("group-by", "", "BOM group-by fields (comma-separated)")
 	edaExportSch.Flags().String("sort-field", "", "BOM sort field")
+	edaExportSch.Flags().Bool("sort-desc", false, "Sort BOM descending (bom)")
 	edaExportSch.Flags().String("format-preset", "CSV", "BOM format: CSV or TSV")
 	edaExportSch.Flags().Bool("black-and-white", false, "Black and white output")
 	edaExportSch.Flags().Bool("exclude-dnp", false, "Exclude DNP components (bom)")

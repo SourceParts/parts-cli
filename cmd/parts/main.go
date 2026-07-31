@@ -80,6 +80,7 @@ func main() {
 		commands.Compliance,
 		// EDA
 		commands.EDA,
+		commands.CAD,
 		commands.AOI,
 		commands.Assembly,
 		commands.Logistics,
